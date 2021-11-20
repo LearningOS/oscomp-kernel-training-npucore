@@ -7,7 +7,7 @@ DISASM_TMP := target/$(TARGET)/$(MODE)/asm
 FS_IMG := ../user/target/$(TARGET)/$(MODE)/fs.img
 U_FAT32_DIR := ../fat32-fuse
 ifeq ($(BOARD), k210)
-	U_FAT32 := /dev/sdb
+	U_FAT32 := /dev/sdc
 else 
 	U_FAT32 := ${U_FAT32_DIR}/fat32.img
 endif
@@ -80,7 +80,11 @@ fsimg-format:
 kernel:
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
-	@cargo build --release --features "board_$(BOARD)"
+ifeq ($(MODE),debug)
+	@cargo build --features "board_$(BOARD)"
+else
+	@cargo build --release  --features "board_$(BOARD)"
+endif
 	@rm src/linker.ld
 
 clean:
@@ -121,11 +125,11 @@ run-k210:
 
 
 monitor:
-	riscv64-unknown-elf-gdb -ex 'file target/riscv64gc-unknown-none-elf/release/os' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'
+	riscv64-unknown-elf-gdb -ex 'file target/riscv64gc-unknown-none-elf/$(MODE)/os' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'
 
 gdb:
 	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,\
-	file=target/riscv64gc-unknown-none-elf/release/os,addr=0x80200000 -drive \
+	file=target/riscv64gc-unknown-none-elf/$(MODE)/os,addr=0x80200000 -drive \
 	file=$(U_FAT32),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -smp threads=2 -S -s
 
