@@ -61,10 +61,15 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
         OpenFlags::RDONLY,
         crate::fs::DiskInodeType::File,
     ) {
+        let len = app_inode.get_size();
+        println!("[sys_exec] File size: {} bytes", len);
         let all_data = app_inode.read_all();
+        println!("[sys_exec] read_all() DONE.");
         let task = current_task().unwrap();
+
         let argc = args_vec.len();
         task.exec(all_data.as_slice(), args_vec);
+        println!("[sys_exec] exec() DONE.");
         // return argc because cx.x[10] will be covered with it later
         argc as isize
     } else {
