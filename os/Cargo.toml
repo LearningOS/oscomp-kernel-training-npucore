@@ -24,3 +24,14 @@ nb = "1"
 [features]
 board_qemu = []
 board_k210 = []
+
+[profile.dev]
+opt-level = 3
+debug = true
+debug-assertions = false
+overflow-checks = false
+lto = false
+panic = 'unwind'
+incremental = false
+codegen-units = 16
+rpath = false

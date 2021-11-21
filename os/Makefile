@@ -83,7 +83,7 @@ kernel:
 ifeq ($(MODE),debug)
 	@cargo build --features "board_$(BOARD)"
 else
-	@cargo build --release  --features "board_$(BOARD)"
+	@cargo build --release --features "board_$(BOARD)"
 endif
 	@rm src/linker.ld
 
@@ -125,7 +125,7 @@ run-k210:
 
 
 monitor:
-	riscv64-unknown-elf-gdb -ex 'file target/riscv64gc-unknown-none-elf/$(MODE)/os' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'
+	riscv64-unknown-elf-gdb -ex 'file target/riscv64gc-unknown-none-elf/debug/os' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'
 
 gdb:
 	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,\
