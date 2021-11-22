@@ -60,35 +60,54 @@ impl MemorySet {
         }
         return len as i32;
     }
-
-    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> i32 {
-        if len == 0 {
-            return 0;
-        }
-        if (prot & 0x7 == 0) || (prot & !0x7 != 0) || len > 0x1_000_000_000 {
-            return -1;
-        }
-        let mut chk = MapPermission::R | MapPermission::W | MapPermission::X;
-        let mut per: u8 = prot as u8;
-        per = chk.bits() & per;
-        chk = !chk;
-        if (prot & (chk.bits() as usize)) != 0 {
-            return -1;
-        }
-        if let Some(i) = MapPermission::from_bits(per) {
-            let m = MapArea::new(start.into(), (len + start).into(), MapType::Framed, i);
-            if let Ok(_) = self.push(m, None) {
-                unsafe {
-                    llvm_asm!("sfence.vma" :::: "volatile");
-                }
-                return ((((start + len) - 1 + PAGE_SIZE) / PAGE_SIZE - start / PAGE_SIZE)
-                    * PAGE_SIZE) as i32;
-            } else {
+    /// 建立从文件到内存的映射
+    pub fn mmap(
+        &mut self,
+        mut start: usize, // 开始地址
+        len: usize,       // 内存映射长度
+        prot: usize,      // 保护位标志
+        flags: usize,     // 映射方式
+        fd: usize,        // 被映射文件
+        offset: usize,    // 文件位移
+    ) -> i32 {
+        let m: MapArea;
+        //内存分配模块
+        match flags {
+            _ => {
                 return -1;
             }
-        } else {
-            return -1;
+            MAP_PRIVATE => {
+                if len == 0 {
+                    return 0;
+                }
+                if (prot & 0x7 == 0) || (prot & !0x7 != 0) || len > 0x1_000_000_000 {
+                    return -1;
+                }
+                let mut chk = MapPermission::R | MapPermission::W | MapPermission::X;
+                let mut per: u8 = prot as u8;
+                per = chk.bits() & per;
+                chk = !chk;
+                if (prot & (chk.bits() as usize)) != 0 {
+                    return -1;
+                }
+                if let Some(i) = MapPermission::from_bits(per) {
+                    m = MapArea::new(start.into(), (len + start).into(), MapType::Framed, i);
+                    if let Ok(_) = self.push(m, None) {
+                        unsafe {
+                            llvm_asm!("sfence.vma" :::: "volatile");
+                        }
+                    /*                        return ((((start + len) - 1 + PAGE_SIZE) / PAGE_SIZE - start / PAGE_SIZE)
+                     * PAGE_SIZE) as i32;*/
+                    //this was the size
+                    } else {
+                        return -1;
+                    }
+                } else {
+                    return -1;
+                }
+            }
         }
+        unsafe { crate::syscall::fs::sys_read(fd, start as *const u8, len) as i32 }
     }
 
     pub fn new_bare() -> Self {

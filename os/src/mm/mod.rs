@@ -3,6 +3,7 @@ mod frame_allocator;
 mod heap_allocator;
 mod memory_set;
 mod page_table;
+mod mm_const;
 
 use address::VPNRange;
 pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};

@@ -73,7 +73,7 @@ const SYSCALL_RENAMEAT2: usize = 276;
 const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
 const SYSCALL_CLEAR: usize = 502;
-mod fs;
+pub mod fs;
 mod mmap;
 mod process;
 
@@ -81,7 +81,7 @@ use fs::*;
 use mmap::*;
 use process::*;
 
-pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
+pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     match syscall_id {
         SYSCALL_DUP => sys_dup(args[0]),
         SYSCALL_OPEN => sys_open(args[0] as *const u8, args[1] as u32),

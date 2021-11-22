@@ -19,9 +19,17 @@ struct ProcessorInner {
 }
 
 impl Processor {
-    pub fn mmap(&self, start: usize, len: usize, prot: usize) -> i32 {
+    pub fn mmap(
+        &self,
+        start: usize,
+        len: usize,
+        prot: usize,
+        flags: usize,
+        fd: usize,
+        offset: usize,
+    ) -> i32 {
         if let Some(i) = self.take_current() {
-            i.mmap(start, len, prot)
+            i.mmap(start, len, prot, flags, fd, offset)
         } else {
             -1
         }
@@ -79,8 +87,8 @@ lazy_static! {
     pub static ref PROCESSOR: Processor = Processor::new();
 }
 
-pub fn mmap(start: usize, len: usize, prot: usize) -> i32 {
-    PROCESSOR.mmap(start, len, prot)
+pub fn mmap(start: usize, len: usize, prot: usize, flags: usize, fd: usize, offset: usize) -> i32 {
+    PROCESSOR.mmap(start, len, prot, flags, fd, offset)
 }
 
 pub fn munmap(start: usize, len: usize) -> i32 {

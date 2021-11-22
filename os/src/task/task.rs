@@ -31,8 +31,16 @@ pub struct TaskControlBlockInner {
 }
 
 impl TaskControlBlockInner {
-    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> i32 {
-        self.memory_set.mmap(start, len, prot)
+    pub fn mmap(
+        &mut self,
+        start: usize,
+        len: usize,
+        prot: usize,
+        flags: usize,
+        fd: usize,
+        offset: usize,
+    ) -> i32 {
+        self.memory_set.mmap(start, len, prot, flags, fd, offset)
     }
     pub fn munmap(&mut self, start: usize, len: usize) -> i32 {
         self.memory_set.munmap(start, len)
@@ -63,8 +71,16 @@ impl TaskControlBlockInner {
 }
 
 impl TaskControlBlock {
-    pub fn mmap(&self, start: usize, len: usize, prot: usize) -> i32 {
-        self.inner.lock().mmap(start, len, prot)
+    pub fn mmap(
+        &self,
+        start: usize,
+        len: usize,
+        prot: usize,
+        flags: usize,
+        fd: usize,
+        offset: usize,
+    ) -> i32 {
+        self.inner.lock().mmap(start, len, prot, flags, fd, offset)
     }
     pub fn munmap(&self, start: usize, len: usize) -> i32 {
         self.inner.lock().munmap(start, len)
@@ -147,14 +163,20 @@ impl TaskControlBlock {
         ////////////// *argv [] //////////////////////
         user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
         let argv_base = user_sp;
-        *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * (args.len())) as *mut usize) = 0;
+        *translated_refmut(
+            memory_set.token(),
+            (user_sp + core::mem::size_of::<usize>() * (args.len())) as *mut usize,
+        ) = 0;
         for i in 0..args.len() {
-            *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * i) as *mut usize) = argv[i] ;
+            *translated_refmut(
+                memory_set.token(),
+                (user_sp + core::mem::size_of::<usize>() * i) as *mut usize,
+            ) = argv[i];
         }
         ////////////// argc //////////////////////
         user_sp -= core::mem::size_of::<usize>();
         *translated_refmut(memory_set.token(), user_sp as *mut usize) = args.len();
-        
+
         // **** hold current PCB lock
         let mut inner = self.acquire_inner_lock();
         // substitute memory_set
