@@ -172,7 +172,7 @@ impl MemorySet {
     }
     /// Include sections in elf and trampoline and TrapContext and user stack,
     /// also returns user_sp and entry point.
-    pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize) {
+    pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize, usize) {
         let mut memory_set = Self::new_bare();
         // map trampoline
         memory_set.map_trampoline();
@@ -218,17 +218,16 @@ impl MemorySet {
                 println!("[elf] LOAD SEGMENT PUSHED. start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}", start_va.0, end_va.0, offset);
             }
         }
-        let max_top_va: VirtAddr = TRAP_CONTEXT.into();
+
         let mut user_stack_top: usize = TRAP_CONTEXT;
         user_stack_top -= PAGE_SIZE;
         let user_stack_bottom: usize = user_stack_top - USER_STACK_SIZE;
         
-        // // map user stack with U flags
-        // let max_end_va: VirtAddr = max_end_vpn.into();
-        // let mut user_stack_bottom: usize = max_end_va.into();
-        // // guard page
-        // user_stack_bottom += PAGE_SIZE;
-        // let user_stack_top = user_stack_bottom + USER_STACK_SIZE;
+        let max_end_va: VirtAddr = max_end_vpn.into();
+        let mut user_heap_bottom: usize = max_end_va.into();
+        // guard page
+        user_heap_bottom += PAGE_SIZE;
+
         memory_set.push(
             MapArea::new(
                 user_stack_bottom.into(),
@@ -253,6 +252,7 @@ impl MemorySet {
         (
             memory_set,
             user_stack_top,
+            user_heap_bottom,
             elf.header.pt2.entry_point() as usize,
         )
     }

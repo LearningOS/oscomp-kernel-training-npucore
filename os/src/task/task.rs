@@ -1,6 +1,6 @@
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT;
+use crate::config::{TRAP_CONTEXT, USER_HEAP_SIZE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::trap::{trap_handler, TrapContext};
@@ -28,6 +28,9 @@ pub struct TaskControlBlockInner {
     pub children: Vec<Arc<TaskControlBlock>>,
     pub exit_code: i32,
     pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
+    pub address: ProcAddress,
+    pub heap_bottom: usize,
+    pub heap_pt: usize,
 }
 
 impl TaskControlBlockInner {
@@ -62,7 +65,7 @@ impl TaskControlBlock {
     }
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let (memory_set, user_sp, user_heap, entry_point) = MemorySet::from_elf(elf_data);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -93,6 +96,9 @@ impl TaskControlBlock {
                     // 2 -> stderr
                     Some(Arc::new(Stdout)),
                 ],
+                address: ProcAddress::new(),
+                heap_bottom: user_heap,
+                heap_pt: user_heap,
             }),
         };
         // prepare TrapContext in user space
@@ -108,7 +114,7 @@ impl TaskControlBlock {
     }
     pub fn exec(&self, elf_data: &[u8], args: Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, mut user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let (memory_set, mut user_sp, user_heap, entry_point) = MemorySet::from_elf(elf_data);
         println!("[exec] load DONE. entry_point:{:X}", entry_point);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
@@ -199,6 +205,9 @@ impl TaskControlBlock {
                 children: Vec::new(),
                 exit_code: 0,
                 fd_table: new_fd_table,
+                address: ProcAddress::new(),
+                heap_bottom: parent_inner.heap_bottom,
+                heap_pt: parent_inner.heap_pt,
             }),
         });
         // add child
@@ -215,6 +224,27 @@ impl TaskControlBlock {
     pub fn getpid(&self) -> usize {
         self.pid.0
     }
+
+    pub fn sbrk(&self, increment: isize) -> usize {
+        let old_pt: usize = self.inner.lock().heap_pt;
+        let new_pt: usize = old_pt + increment as usize;
+        if increment > 0 {
+            let limit = self.inner.lock().heap_bottom + USER_HEAP_SIZE;
+            if new_pt > limit {
+                println!("[sbrk] over the upperbond! {} {} {} {}", limit, self.inner.lock().heap_pt, new_pt, self.pid.0);
+                return old_pt;
+            }
+            self.inner.lock().heap_pt = new_pt;
+        }
+        else {
+            if new_pt < self.inner.lock().heap_bottom {
+                println!("[sbrk] shrinked to the lowest boundary!");
+                return old_pt;
+            }
+            self.inner.lock().heap_pt = new_pt;
+        }
+        return new_pt;
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -222,4 +252,15 @@ pub enum TaskStatus {
     Ready,
     Running,
     Zombie,
+}
+
+pub struct ProcAddress {
+    pub set_child_tid: usize,
+    pub clear_child_tid: usize,
+}
+
+impl ProcAddress {
+    pub fn new() -> Self{
+        Self{set_child_tid: 0, clear_child_tid: 0}
+    }
 }

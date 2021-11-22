@@ -57,7 +57,7 @@ const SYSCALL_GETUID: usize = 174;
 const SYSCALL_GETEUID: usize = 175;
 const SYSCALL_GETGID: usize = 176;
 const SYSCALL_GETEGID: usize = 177;
-const SYSCALL_GETTID: usize = 177;
+const SYSCALL_GETTID: usize = 178;
 const SYSCALL_SBRK: usize = 213;
 const SYSCALL_BRK: usize = 214;
 const SYSCALL_MUNMAP: usize = 215;
@@ -94,6 +94,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
         SYSCALL_FORK => sys_fork(),
         SYSCALL_EXEC => sys_exec(args[0] as *const u8, args[1] as *const usize),
         SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32),
+        SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0] as usize),
+        SYSCALL_GETUID => sys_getuid(),
+        SYSCALL_GETEUID => sys_geteuid(),
+        SYSCALL_GETGID => sys_getgid(),
+        SYSCALL_GETEGID => sys_getegid(),
+        SYSCALL_GETTID => sys_gettid(),
+        SYSCALL_SBRK => sys_sbrk(args[0] as isize),
+        SYSCALL_BRK => sys_brk(args[0]),
         //SYSCALL_GET_TIME_OF_DAY =>
         _ => panic!("Unsupported syscall_id: {}", syscall_id),
     }

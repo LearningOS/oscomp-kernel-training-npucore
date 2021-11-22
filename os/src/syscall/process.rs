@@ -27,6 +27,46 @@ pub fn sys_getpid() -> isize {
     current_task().unwrap().pid.0 as isize
 }
 
+pub fn sys_getuid() -> isize {
+    0 // root user
+}
+
+pub fn sys_geteuid() -> isize {
+    0 // root user
+}
+
+pub fn sys_getgid() -> isize {
+    0 // root group
+}
+
+pub fn sys_getegid() -> isize {
+    0 // root group
+}
+
+// For user, tid is pid in kernel
+pub fn sys_gettid() -> isize {
+    current_task().unwrap().pid.0 as isize
+}
+
+pub fn sys_sbrk(increment: isize) -> isize {
+    current_task().unwrap().sbrk(increment) as isize
+}
+
+pub fn sys_brk(brk_addr: usize) -> isize{
+    let mut new_addr = 0;
+    if brk_addr == 0 {
+        new_addr = current_task().unwrap().sbrk(0);
+    }
+    else{
+        let former_addr = current_task().unwrap().sbrk(0);
+        let grow_size: isize = (brk_addr - former_addr) as isize;
+        new_addr = current_task().unwrap().sbrk(grow_size);
+    }
+    
+    println!("[sys_brk] brk_addr:{:X}; new_addr:{:X}", brk_addr, new_addr);
+    new_addr as isize
+}
+
 pub fn sys_fork() -> isize {
     let current_task = current_task().unwrap();
     let new_task = current_task.fork();
@@ -113,4 +153,9 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
         -2
     }
     // ---- release current PCB lock automatically
+}
+
+pub fn sys_set_tid_address(tidptr: usize) -> isize {
+    current_task().unwrap().acquire_inner_lock().address.clear_child_tid = tidptr;
+    sys_gettid()
 }
