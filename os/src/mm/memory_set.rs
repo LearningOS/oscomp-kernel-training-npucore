@@ -245,13 +245,6 @@ impl MemorySet {
                 let start_va: VirtAddr = (ph.virtual_addr() as usize).into();
                 let end_va: VirtAddr = ((ph.virtual_addr() + ph.mem_size()) as usize).into();
                 let offset = start_va.0 - start_va.floor().0 * PAGE_SIZE;
-
-                println!(
-                    "[elf] start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}",
-                    ph.virtual_addr() as usize,
-                    ph.virtual_addr() + ph.mem_size(),
-                    offset
-                );
                 let mut map_perm = MapPermission::U;
                 let ph_flags = ph.flags();
                 if ph_flags.is_read() {
@@ -283,21 +276,20 @@ impl MemorySet {
                         ),
                     );
                 }
-                println!("[elf] push OK.")
+                println!("[elf] LOAD SEGMENT PUSHED. start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}", start_va.0, end_va.0, offset);
             }
         }
-        // //map user heap
-        // let max_end_va: VirtAddr = max_end_vpn.into();
-        // let mut user_heap_bottom: usize = max_end_va.into();
-        // //guard page
-        // user_heap_bottom += PAGE_SIZE;
+        let max_top_va: VirtAddr = TRAP_CONTEXT.into();
+        let mut user_stack_top: usize = TRAP_CONTEXT;
+        user_stack_top -= PAGE_SIZE;
+        let user_stack_bottom: usize = user_stack_top - USER_STACK_SIZE;
 
-        // map user stack with U flags
-        let max_end_va: VirtAddr = max_end_vpn.into();
-        let mut user_stack_bottom: usize = max_end_va.into();
-        // guard page
-        user_stack_bottom += PAGE_SIZE;
-        let user_stack_top = user_stack_bottom + USER_STACK_SIZE;
+        // // map user stack with U flags
+        // let max_end_va: VirtAddr = max_end_vpn.into();
+        // let mut user_stack_bottom: usize = max_end_va.into();
+        // // guard page
+        // user_stack_bottom += PAGE_SIZE;
+        // let user_stack_top = user_stack_bottom + USER_STACK_SIZE;
         memory_set.push(
             MapArea::new(
                 user_stack_bottom.into(),
@@ -306,6 +298,10 @@ impl MemorySet {
                 MapPermission::R | MapPermission::W | MapPermission::U,
             ),
             None,
+        );
+        println!(
+            "[elf] USER STACK PUSHED. user_stack_top:{:X}; user_stack_bottom:{:X}",
+            user_stack_top, user_stack_bottom
         );
         // map TrapContext
         memory_set.push(
@@ -316,6 +312,10 @@ impl MemorySet {
                 MapPermission::R | MapPermission::W,
             ),
             None,
+        );
+        println!(
+            "[elf] TRAP CONTEXT PUSHED. start_va:{:X}; end_va:{:X}",
+            TRAP_CONTEXT, TRAMPOLINE
         );
         (
             memory_set,

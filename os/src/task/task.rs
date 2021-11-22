@@ -129,18 +129,11 @@ impl TaskControlBlock {
         // push arguments on user stack
         user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
         let argv_base = user_sp;
-        let mut argv: Vec<_> = (0..=args.len())
-            .map(|arg| {
-                translated_refmut(
-                    memory_set.token(),
-                    (argv_base + arg * core::mem::size_of::<usize>()) as *mut usize,
-                )
-            })
-            .collect();
-        *argv[args.len()] = 0;
+        let mut argv: Vec<_> = (0..=args.len()).collect();
+        argv[args.len()] = 0;
         for i in 0..args.len() {
             user_sp -= args[i].len() + 1;
-            *argv[i] = user_sp;
+            argv[i] = user_sp;
             let mut p = user_sp;
             for c in args[i].as_bytes() {
                 *translated_refmut(memory_set.token(), p as *mut u8) = *c;
@@ -151,6 +144,17 @@ impl TaskControlBlock {
         // make the user_sp aligned to 8B for k210 platform
         user_sp -= user_sp % core::mem::size_of::<usize>();
 
+        ////////////// *argv [] //////////////////////
+        user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
+        let argv_base = user_sp;
+        *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * (args.len())) as *mut usize) = 0;
+        for i in 0..args.len() {
+            *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * i) as *mut usize) = argv[i] ;
+        }
+        ////////////// argc //////////////////////
+        user_sp -= core::mem::size_of::<usize>();
+        *translated_refmut(memory_set.token(), user_sp as *mut usize) = args.len();
+        
         // **** hold current PCB lock
         let mut inner = self.acquire_inner_lock();
         // substitute memory_set
