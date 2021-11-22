@@ -129,9 +129,11 @@ monitor:
 
 gdb:
 	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,\
-	file=target/riscv64gc-unknown-none-elf/$(MODE)/os,addr=0x80200000 -drive \
+	file=target/riscv64gc-unknown-none-elf/debug/os,addr=0x80200000 -drive \
 	file=$(U_FAT32),if=none,format=raw,id=x0 \
 	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -smp threads=2 -S -s
+	
+	#file=target/riscv64gc-unknown-none-elf/$(MODE)/os,addr=0x80200000 -drive \
 
 runsimple:
 	@qemu-system-riscv64 \

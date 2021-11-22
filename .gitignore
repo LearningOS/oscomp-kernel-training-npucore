@@ -1,6 +1,6 @@
 .idea/*
 os/target/*
-os/.idea/*
+os/.vscode/*
 os/src/link_app.S
 os/Cargo.lock
 os/last-*
