@@ -74,6 +74,17 @@ impl PageTable {
             frames: Vec::new(),
         }
     }
+    pub fn is_mapped(&mut self, vpn: VirtPageNum) -> bool {
+        if let Some(i) = self.find_pte(vpn) {
+            if i.is_valid() {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
     fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
         let idxs = vpn.indexes();
         let mut ppn = self.root_ppn;

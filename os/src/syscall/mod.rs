@@ -74,9 +74,11 @@ const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
 const SYSCALL_CLEAR: usize = 502;
 mod fs;
+mod mmap;
 mod process;
 
 use fs::*;
+use mmap::*;
 use process::*;
 
 pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
@@ -94,6 +96,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 3]) -> isize {
         SYSCALL_FORK => sys_fork(),
         SYSCALL_EXEC => sys_exec(args[0] as *const u8, args[1] as *const usize),
         SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32),
+        SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         //SYSCALL_GET_TIME_OF_DAY =>
         _ => panic!("Unsupported syscall_id: {}", syscall_id),
     }

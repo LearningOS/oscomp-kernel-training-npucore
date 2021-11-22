@@ -3,6 +3,7 @@ use super::__switch;
 use super::{fetch_task, TaskStatus};
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
+use core::borrow::BorrowMut;
 use core::cell::RefCell;
 use lazy_static::*;
 
@@ -18,6 +19,20 @@ struct ProcessorInner {
 }
 
 impl Processor {
+    pub fn mmap(&self, start: usize, len: usize, prot: usize) -> i32 {
+        if let Some(i) = self.take_current() {
+            i.mmap(start, len, prot)
+        } else {
+            -1
+        }
+    }
+    pub fn munmap(&self, start: usize, len: usize) -> i32 {
+        if let Some(i) = self.current().take() {
+            i.munmap(start, len)
+        } else {
+            -1
+        }
+    }
     pub fn new() -> Self {
         Self {
             inner: RefCell::new(ProcessorInner {
@@ -30,6 +45,7 @@ impl Processor {
         let inner = self.inner.borrow();
         &inner.idle_task_cx_ptr as *const usize
     }
+
     pub fn run(&self) {
         loop {
             if let Some(task) = fetch_task() {
@@ -63,6 +79,13 @@ lazy_static! {
     pub static ref PROCESSOR: Processor = Processor::new();
 }
 
+pub fn mmap(start: usize, len: usize, prot: usize) -> i32 {
+    PROCESSOR.mmap(start, len, prot)
+}
+
+pub fn munmap(start: usize, len: usize) -> i32 {
+    PROCESSOR.munmap(start, len)
+}
 pub fn run_tasks() {
     PROCESSOR.run();
 }

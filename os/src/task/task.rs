@@ -31,6 +31,12 @@ pub struct TaskControlBlockInner {
 }
 
 impl TaskControlBlockInner {
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> i32 {
+        self.memory_set.mmap(start, len, prot)
+    }
+    pub fn munmap(&mut self, start: usize, len: usize) -> i32 {
+        self.memory_set.munmap(start, len)
+    }
     pub fn get_task_cx_ptr2(&self) -> *const usize {
         &self.task_cx_ptr as *const usize
     }
@@ -57,6 +63,12 @@ impl TaskControlBlockInner {
 }
 
 impl TaskControlBlock {
+    pub fn mmap(&self, start: usize, len: usize, prot: usize) -> i32 {
+        self.inner.lock().mmap(start, len, prot)
+    }
+    pub fn munmap(&self, start: usize, len: usize) -> i32 {
+        self.inner.lock().munmap(start, len)
+    }
     pub fn acquire_inner_lock(&self) -> MutexGuard<TaskControlBlockInner> {
         self.inner.lock()
     }
