@@ -1,5 +1,5 @@
 use crate::fs::{open, DiskInodeType, OpenFlags};
-use crate::mm::{translated_ref, translated_refmut, translated_str};
+use crate::mm::{translated_ref, translated_refmut, translated_str, UserBuffer, translated_byte_buffer};
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next,
@@ -8,6 +8,49 @@ use crate::timer::get_time_ms;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::mem::size_of;
+
+pub struct utsname{
+    sysname: [u8; 65],
+    nodename: [u8; 65],
+    release: [u8; 65],
+    version: [u8; 65],
+    machine: [u8; 65],
+    domainname: [u8; 65],
+}
+
+impl utsname{
+    pub fn new() -> Self{
+        Self{
+            sysname: utsname::str2u8("Linux"),
+            nodename: utsname::str2u8("debian"),
+            release: utsname::str2u8("5.10.0-7-riscv64"),
+            version: utsname::str2u8("#1 SMP Debian 5.10.40-1 (2021-05-28)"),
+            machine: utsname::str2u8("riscv64"),
+            domainname: utsname::str2u8(""),
+        }
+    }
+
+    fn str2u8(str: &str) -> [u8;65]{
+        let mut arr:[u8;65] = [0;65];
+        let str_bytes = str.as_bytes();
+        let len = str.len();
+        for i in 0..len{
+            arr[i] = str_bytes[i];
+        }
+        arr
+    }
+    
+    pub fn as_bytes(&self) -> &[u8] {
+        let size = core::mem::size_of::<Self>();
+        unsafe {
+            core::slice::from_raw_parts(
+                self as *const _ as usize as *const u8,
+                size,
+            )
+        }
+    }
+}
 
 pub fn sys_exit(exit_code: i32) -> ! {
     exit_current_and_run_next(exit_code);
@@ -21,6 +64,16 @@ pub fn sys_yield() -> isize {
 
 pub fn sys_get_time() -> isize {
     get_time_ms() as isize
+}
+
+pub fn sys_uname(buf: *mut u8) -> isize {
+    let token = current_user_token();
+    let mut buf_vec = translated_byte_buffer(token, buf, size_of::<utsname>());
+    let uname = utsname::new();
+    // 使用UserBuffer结构，以便于跨页读写
+    let mut userbuf = UserBuffer::new(buf_vec);
+    userbuf.write(uname.as_bytes());
+    0
 }
 
 pub fn sys_getpid() -> isize {
@@ -95,17 +148,19 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             args = args.add(1);
         }
     }
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
     if let Some(app_inode) = open(
-        "/",
+        inner.get_work_path().as_str(),
         path.as_str(),
         OpenFlags::RDONLY,
         crate::fs::DiskInodeType::File,
     ) {
+        drop(inner);
         let len = app_inode.get_size();
         println!("[sys_exec] File size: {} bytes", len);
         let all_data = app_inode.read_all();
         println!("[sys_exec] read_all() DONE.");
-        let task = current_task().unwrap();
 
         let argc = args_vec.len();
         task.exec(all_data.as_slice(), args_vec);

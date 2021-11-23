@@ -1,7 +1,7 @@
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::{TRAP_CONTEXT, USER_HEAP_SIZE};
-use crate::fs::{File, Stdin, Stdout};
+use crate::fs::{FileDescripter, Stdin, Stdout, FileClass};
 use crate::mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
@@ -18,6 +18,7 @@ pub struct TaskControlBlock {
     inner: Mutex<TaskControlBlockInner>,
 }
 
+pub type FdTable =  Vec<Option<FileDescripter>>;
 pub struct TaskControlBlockInner {
     pub trap_cx_ppn: PhysPageNum,
     pub base_size: usize,
@@ -27,10 +28,11 @@ pub struct TaskControlBlockInner {
     pub parent: Option<Weak<TaskControlBlock>>,
     pub children: Vec<Arc<TaskControlBlock>>,
     pub exit_code: i32,
-    pub fd_table: Vec<Option<Arc<dyn File + Send + Sync>>>,
+    pub fd_table: FdTable,
     pub address: ProcAddress,
     pub heap_bottom: usize,
     pub heap_pt: usize,
+    pub current_path: String,
 }
 
 impl TaskControlBlockInner {
@@ -56,6 +58,9 @@ impl TaskControlBlockInner {
             self.fd_table.push(None);
             self.fd_table.len() - 1
         }
+    }
+    pub fn get_work_path(&self)->String{
+        self.current_path.clone()
     }
 }
 
@@ -90,15 +95,25 @@ impl TaskControlBlock {
                 exit_code: 0,
                 fd_table: vec![
                     // 0 -> stdin
-                    Some(Arc::new(Stdin)),
+                    Some( FileDescripter::new(
+                        false,
+                        FileClass::Abstr(Arc::new(Stdin)) 
+                    )),
                     // 1 -> stdout
-                    Some(Arc::new(Stdout)),
+                    Some( FileDescripter::new(
+                        false,
+                        FileClass::Abstr(Arc::new(Stdout)) 
+                    )),
                     // 2 -> stderr
-                    Some(Arc::new(Stdout)),
+                    Some( FileDescripter::new(
+                        false,
+                        FileClass::Abstr(Arc::new(Stdout)) 
+                    )),
                 ],
                 address: ProcAddress::new(),
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
+                current_path: String::from("/"),
             }),
         };
         // prepare TrapContext in user space
@@ -184,7 +199,7 @@ impl TaskControlBlock {
         // push a goto_trap_return task_cx on the top of kernel stack
         let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
         // copy fd table
-        let mut new_fd_table: Vec<Option<Arc<dyn File + Send + Sync>>> = Vec::new();
+        let mut new_fd_table: FdTable = Vec::new();
         for fd in parent_inner.fd_table.iter() {
             if let Some(file) = fd {
                 new_fd_table.push(Some(file.clone()));
@@ -208,6 +223,7 @@ impl TaskControlBlock {
                 address: ProcAddress::new(),
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
+                current_path: parent_inner.current_path.clone(),
             }),
         });
         // add child
