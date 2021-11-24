@@ -1,3 +1,4 @@
+use crate::config::{MEMORY_END, PAGE_SIZE};
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{translated_ref, translated_refmut, translated_str, UserBuffer, translated_byte_buffer};
 use crate::task::{
@@ -156,19 +157,39 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
         OpenFlags::RDONLY,
         crate::fs::DiskInodeType::File,
     ) {
-        drop(inner);
-        let len = app_inode.get_size();
-        println!("[sys_exec] File size: {} bytes", len);
-        let all_data = app_inode.read_all();
-        println!("[sys_exec] read_all() DONE.");
+            drop(inner);
+            let len = app_inode.get_size();
+            let j: usize = len % PAGE_SIZE;
+            let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
+            let start: usize = MEMORY_END;
+            println!("[sys_exec] File size: {} bytes", len);
+            crate::mm::KERNEL_SPACE.lock().alloc(
+                start,
+                lrnd,
+                (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
+            );
 
-        let argc = args_vec.len();
-        task.exec(all_data.as_slice(), args_vec);
-        println!("[sys_exec] exec() DONE.");
-        // return argc because cx.x[10] will be covered with it later
-        //argc as isize
-        0
-    } else {
+            /*read into all data*/
+            unsafe {
+                let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
+                app_inode.read_into(&mut buf);
+            }
+            println!("[sys_exec] read_all() DONE.");
+            let task = current_task().unwrap();
+            let argc = args_vec.len();
+            unsafe {
+                let all_data = core::slice::from_raw_parts(start as *const u8, len);
+                task.exec(all_data, args_vec);
+            }
+            println!("[sys_exec] exec() DONE.");
+
+            //remember to UNMAP here!
+            crate::mm::KERNEL_SPACE.lock().munmap(start, lrnd);
+            // return argc because cx.x[10] will be covered with it later
+
+            argc as isize
+        }
+    else {
         -1
     }
 }

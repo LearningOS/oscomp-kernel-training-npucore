@@ -1,5 +1,6 @@
 use super::{finfo, Dirent, File, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN};
 use crate::color_text;
+use crate::config::PAGE_SIZE;
 use crate::mm::UserBuffer;
 use crate::monitor::SYSCALL_ENABLE;
 use crate::{drivers::BLOCK_DEVICE, println};
@@ -110,6 +111,18 @@ impl OSInode {
         v
     }
 
+    pub fn read_into(&self, buffer: &mut [u8]) {
+        unsafe {
+            let mut inner = self.inner.lock();
+            loop {
+                let len = inner.inode.read_at(inner.offset, buffer);
+                if len == 0 {
+                    break;
+                }
+                inner.offset += len;
+            }
+        }
+    }
     pub fn write_all(&self, str_vec: &Vec<u8>) -> usize {
         let mut inner = self.inner.lock();
         let mut remain = str_vec.len();

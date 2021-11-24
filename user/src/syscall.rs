@@ -9,7 +9,7 @@ const SYSCALL_GET_TIME: usize = 169; //you mean get time of day by 169?
 
 const SYSCALL_FORK: usize = 220; //clone? who is fork?
 
-const SYSCALL_WAITPID: usize = 503; //wait4 is 260
+const SYSCALL_WAITPID: usize = 260; //wait4 is 260
 const SYSCALL_GETCWD: usize = 17;
 const SYSCALL_FCNTL: usize = 25;
 const SYSCALL_IOCTL: usize = 29;
