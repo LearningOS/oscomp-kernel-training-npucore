@@ -66,7 +66,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             let len = app_inode.get_size();
             let j: usize = len % PAGE_SIZE;
             let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
-            let start: usize = MEMORY_END - 2 * PAGE_SIZE - lrnd;
+            let start: usize = MEMORY_END;
             println!("[sys_exec] File size: {} bytes", len);
             crate::mm::KERNEL_SPACE.lock().alloc(
                 start,

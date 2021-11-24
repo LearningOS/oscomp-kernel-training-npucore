@@ -429,8 +429,10 @@ impl MapArea {
         let start_vpn: VirtPageNum = start_va.floor();
         let end_vpn: VirtPageNum = end_va.ceil();
         println!(
-            "[MapArea new]: start_vpn:0x{:X} end_vpn:0x{:X}",
-            start_vpn.0, end_vpn.0
+            "[MapArea new]: start_vpn:0x{:X} end_vpn:0x{:X} prot:{}",
+            start_vpn.0,
+            end_vpn.0,
+            map_perm.bits()
         );
         Self {
             vpn_range: VPNRange::new(start_vpn, end_vpn),
