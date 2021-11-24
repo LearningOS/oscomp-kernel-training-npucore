@@ -73,7 +73,7 @@ const SYSCALL_RENAMEAT2: usize = 276;
 const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
 const SYSCALL_CLEAR: usize = 502;
-mod fs;
+pub mod fs;
 mod process;
 
 use fs::*;
@@ -104,6 +104,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_GETTID => sys_gettid(),
         SYSCALL_SBRK => sys_sbrk(args[0] as isize),
         SYSCALL_BRK => sys_brk(args[0]),
+        SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
+        SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         //SYSCALL_GET_TIME_OF_DAY =>
         _ => panic!("Unsupported syscall_id: {}", syscall_id),
     }

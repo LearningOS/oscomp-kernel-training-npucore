@@ -1,8 +1,12 @@
+use core::borrow::BorrowMut;
+use core::mem::ManuallyDrop;
+
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::config::{TRAP_CONTEXT, USER_HEAP_SIZE};
+use crate::config::*;
 use crate::fs::{FileDescripter, Stdin, Stdout, FileClass};
-use crate::mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, MmapArea, MapPermission};
+use crate::task::current_user_token;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -70,7 +74,7 @@ impl TaskControlBlock {
     }
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, user_sp, user_heap, entry_point) = MemorySet::from_elf(elf_data);
+        let (memory_set, user_sp, user_heap, entry_point, auxv) = MemorySet::from_elf(elf_data);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -129,15 +133,46 @@ impl TaskControlBlock {
     }
     pub fn exec(&self, elf_data: &[u8], args: Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, mut user_sp, user_heap, entry_point) = MemorySet::from_elf(elf_data);
-        println!("[exec] load DONE. entry_point:{:X}", entry_point);
+        let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) = MemorySet::from_elf(elf_data);
+        println!("[exec] load DONE. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}", user_sp, user_heap, entry_point);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
             .ppn();
+        
+        ////////////// envp[] ///////////////////
+        let mut env: Vec<String> = Vec::new();
+        env.push(String::from("SHELL=/user_shell"));
+        env.push(String::from("PWD=/"));
+        env.push(String::from("USER=root"));
+        env.push(String::from("MOTD_SHOWN=pam"));
+        env.push(String::from("LANG=C.UTF-8"));
+        env.push(String::from("INVOCATION_ID=e9500a871cf044d9886a157f53826684"));
+        env.push(String::from("TERM=vt220"));
+        env.push(String::from("SHLVL=2"));
+        env.push(String::from("JOURNAL_STREAM=8:9265"));
+        env.push(String::from("OLDPWD=/root"));
+        env.push(String::from("_=busybox"));
+        env.push(String::from("LOGNAME=root"));
+        env.push(String::from("HOME=/"));
+        env.push(String::from("PATH=/"));
+        let mut envp: Vec<usize> = (0..=env.len()).collect();
+        envp[env.len()] = 0;
+        for i in 0..env.len() {
+            user_sp -= env[i].len() + 1;
+            envp[i] = user_sp;
+            let mut p = user_sp;
+            // write chars to [user_sp, user_sp + len]
+            for c in env[i].as_bytes() {
+                *translated_refmut(memory_set.token(), p as *mut u8) = *c;
+                p += 1;
+            }
+            *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+        }
+        // make the user_sp aligned to 8B for k210 platform
+        user_sp -= user_sp % core::mem::size_of::<usize>();
+
         // push arguments on user stack
-        user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
-        let argv_base = user_sp;
         let mut argv: Vec<_> = (0..=args.len()).collect();
         argv[args.len()] = 0;
         for i in 0..args.len() {
@@ -153,21 +188,74 @@ impl TaskControlBlock {
         // make the user_sp aligned to 8B for k210 platform
         user_sp -= user_sp % core::mem::size_of::<usize>();
 
+        ////////////// platform String ///////////////////
+        let platform = "RISC-V64";
+        user_sp -= platform.len() + 1;
+        user_sp -= user_sp % core::mem::size_of::<usize>();
+        let mut p = user_sp;
+        for c in platform.as_bytes() {
+            *translated_refmut(memory_set.token(), p as *mut u8) = *c;
+            p += 1;
+        }
+        *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+
+        ////////////// rand bytes ///////////////////
+        user_sp -= 16;
+        p = user_sp;
+        auxv.push(AuxHeader{aux_type: AT_RANDOM, value: user_sp});
+        for i in 0..0xf {
+            *translated_refmut(memory_set.token(), p as *mut u8) = i as u8;
+            p += 1;
+        }
+        
+        ////////////// padding //////////////////////
+        user_sp -= user_sp % 16;
+
+        ////////////// auxv[] //////////////////////
+        auxv.push(AuxHeader{aux_type: AT_EXECFN, value: argv[0]});// file name
+        auxv.push(AuxHeader{aux_type: AT_NULL, value:0});// end
+        user_sp -= auxv.len() * core::mem::size_of::<AuxHeader>();
+        let auxv_base = user_sp;
+        // println!("[auxv]: base 0x{:X}", auxv_base);
+        for i in 0..auxv.len() {
+            // println!("[auxv]: {:?}", auxv[i]);
+            let addr = user_sp + core::mem::size_of::<AuxHeader>() * i;
+            *translated_refmut(memory_set.token(), addr as *mut usize) = auxv[i].aux_type ;
+            *translated_refmut(memory_set.token(), (addr + core::mem::size_of::<usize>()) as *mut usize) = auxv[i].value ;
+        }
+
+        ////////////// *envp [] //////////////////////
+        user_sp -= (env.len() + 1) * core::mem::size_of::<usize>();
+        let envp_base = user_sp;
+        *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * (env.len())) as *mut usize) = 0;
+        for i in 0..env.len() {
+            *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * i) as *mut usize) = envp[i] ;
+        }
+
         ////////////// *argv [] //////////////////////
         user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
         let argv_base = user_sp;
-        *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * (args.len())) as *mut usize) = 0;
+        *translated_refmut(
+            memory_set.token(),
+            (user_sp + core::mem::size_of::<usize>() * (args.len())) as *mut usize,
+        ) = 0;
         for i in 0..args.len() {
-            *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * i) as *mut usize) = argv[i] ;
+            *translated_refmut(
+                memory_set.token(),
+                (user_sp + core::mem::size_of::<usize>() * i) as *mut usize,
+            ) = argv[i];
         }
+
         ////////////// argc //////////////////////
         user_sp -= core::mem::size_of::<usize>();
         *translated_refmut(memory_set.token(), user_sp as *mut usize) = args.len();
-        
+
         // **** hold current PCB lock
         let mut inner = self.acquire_inner_lock();
         // substitute memory_set
         inner.memory_set = memory_set;
+        inner.heap_bottom = user_heap;
+        inner.heap_pt = user_heap;
         // update trap_cx ppn
         inner.trap_cx_ppn = trap_cx_ppn;
         // initialize trap_cx
@@ -180,6 +268,8 @@ impl TaskControlBlock {
         );
         trap_cx.x[10] = args.len();
         trap_cx.x[11] = argv_base;
+        trap_cx.x[12] = envp_base;
+        trap_cx.x[13] = auxv_base;
         *inner.get_trap_cx() = trap_cx;
         // **** release current PCB lock
     }
@@ -242,24 +332,70 @@ impl TaskControlBlock {
     }
 
     pub fn sbrk(&self, increment: isize) -> usize {
-        let old_pt: usize = self.inner.lock().heap_pt;
+        let mut inner = self.acquire_inner_lock();
+        let old_pt: usize = inner.heap_pt;
         let new_pt: usize = old_pt + increment as usize;
         if increment > 0 {
-            let limit = self.inner.lock().heap_bottom + USER_HEAP_SIZE;
+            let limit = inner.heap_bottom + USER_HEAP_SIZE;
             if new_pt > limit {
-                println!("[sbrk] over the upperbond! {} {} {} {}", limit, self.inner.lock().heap_pt, new_pt, self.pid.0);
+                println!("[sbrk] over the upperbond! {} {} {} {}", limit, inner.heap_pt, new_pt, self.pid.0);
                 return old_pt;
             }
-            self.inner.lock().heap_pt = new_pt;
+            inner.memory_set.insert_heap_area(old_pt.into(), new_pt.into(), MapPermission::R|MapPermission::W|MapPermission::U);
+            inner.heap_pt = new_pt;
         }
         else {
-            if new_pt < self.inner.lock().heap_bottom {
+            if new_pt < inner.heap_bottom {
                 println!("[sbrk] shrinked to the lowest boundary!");
                 return old_pt;
             }
-            self.inner.lock().heap_pt = new_pt;
+            inner.heap_pt = new_pt;
         }
-        return new_pt;
+        new_pt
+    }
+
+    /// 建立从文件到内存的映射
+    pub fn mmap(
+        &self,
+        start: usize, // 开始地址
+        len: usize,       // 内存映射长度
+        prot: usize,      // 保护位标志
+        flags: usize,     // 映射方式
+        fd: usize,        // 被映射文件
+        offset: usize,    // 文件位移
+    ) -> usize {
+        println!("[mmap] start:{:X}; len:{:X}; prot:{:X}; flags:{:X}; fd:{:X}; offset:{:X}", start, len, prot, flags, fd, offset);
+        if start % PAGE_SIZE != 0 {
+            panic!("[mmap] start not aligned.");
+        }
+        if (prot & !0x7 != 0) || len > 0x1_000_000_000 {
+            return -1isize as usize;
+        }
+        let len = if len == 0 {PAGE_SIZE} else {len};
+        let mut inner = self.acquire_inner_lock();
+        if start != 0 { // "Start" va Already mapped
+            let mut startvpn = start / PAGE_SIZE;
+            while startvpn < (start + len) / PAGE_SIZE {
+                if inner.memory_set.set_pte_flags(startvpn.into(), ((prot<<1) | (1<<4)) as usize) == -1 {
+                    panic!("mmap: start_va not mmaped");
+                }
+                startvpn += 1;
+            }
+            start
+        }
+        else { // "Start" va not mapped
+            let start_va = inner.memory_set.get_mmap_top();
+            let permission = MapPermission::from_bits(((prot<<1) | (1<<4)) as u8).unwrap();
+            let fd_table = inner.fd_table.clone();
+            let token = inner.get_user_token();
+            inner.memory_set.insert_mmap_area(start_va, len, permission, flags, fd as isize, offset, fd_table, token);
+            start_va.0
+        }
+    }
+    pub fn munmap(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.acquire_inner_lock();
+        inner.memory_set.remove_mmap_area_with_start_vpn(VirtAddr::from(start).into());
+        0
     }
 }
 
@@ -279,4 +415,9 @@ impl ProcAddress {
     pub fn new() -> Self{
         Self{set_child_tid: 0, clear_child_tid: 0}
     }
+}
+
+pub struct AuxHeader{
+    pub aux_type: usize,
+    pub value: usize,
 }

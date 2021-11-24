@@ -30,6 +30,7 @@ impl Processor {
         let inner = self.inner.borrow();
         &inner.idle_task_cx_ptr as *const usize
     }
+
     pub fn run(&self) {
         loop {
             if let Some(task) = fetch_task() {

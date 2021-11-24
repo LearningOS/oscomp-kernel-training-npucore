@@ -166,7 +166,8 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
         task.exec(all_data.as_slice(), args_vec);
         println!("[sys_exec] exec() DONE.");
         // return argc because cx.x[10] will be covered with it later
-        argc as isize
+        //argc as isize
+        0
     } else {
         -1
     }
@@ -213,4 +214,21 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 pub fn sys_set_tid_address(tidptr: usize) -> isize {
     current_task().unwrap().acquire_inner_lock().address.clear_child_tid = tidptr;
     sys_gettid()
+}
+
+pub fn sys_mmap(
+    start: usize,
+    len: usize,
+    prot: usize,
+    flags: usize,
+    fd: usize,
+    offset: usize,
+) -> isize {
+    let task = current_task().unwrap();
+    task.mmap(start, len, prot, flags, fd, offset) as isize
+}
+
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    let task = current_task().unwrap();
+    task.munmap(start, len) as isize
 }
