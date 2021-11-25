@@ -174,3 +174,216 @@ pub fn sys_newfstatat(fd:isize, path: *const u8, buf: *mut u8, flag: u32)->isize
         }
     }
 }
+
+pub fn sys_fstat(fd:isize, buf: *mut u8)->isize{
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let mut buf_vec = translated_byte_buffer(token, buf, size_of::<Kstat>());
+    let inner = task.acquire_inner_lock();
+    // 使用UserBuffer结构，以便于跨页读写
+    let mut userbuf = UserBuffer::new(buf_vec);
+    let mut kstat = Kstat::empty();
+    if fd == AT_FDCWD {
+        let work_path = inner.current_path.clone();
+        if let Some(file) = open(
+            "/",
+            work_path.as_str(),
+            OpenFlags::RDONLY,
+            DiskInodeType::Directory
+        ) {
+            file.get_fstat(&mut kstat);
+            println!("syscall_fstat(fd:{}, [size = {}]) ", fd, kstat.st_size );
+            userbuf.write(kstat.as_bytes());
+            return 0
+        } else {
+            return -1
+        }
+    } else {
+        let fd_usz = fd as usize;
+        if fd_usz >= inner.fd_table.len() && fd_usz > FD_LIMIT {
+            return -1
+        }
+        if let Some(file) = &inner.fd_table[fd_usz] {
+            match &file.fclass {
+                FileClass::File(f) => {
+                    f.get_fstat(&mut kstat);
+                    userbuf.write(kstat.as_bytes());
+                    println!("syscall_fstat(fd:{}, [size = {}]) ", fd, kstat.st_size );
+                    return 0
+                },
+                _ => {
+                    userbuf.write(Kstat::new_abstract().as_bytes());
+                    println!("syscall_fstat(fd:{}, [size = {}]) ", fd, kstat.st_size );
+                    return 0 //warning
+                },
+            }
+        } else {
+            return -1
+        }
+    }
+}
+
+pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isize {
+    let task = current_task().unwrap();
+    let token = current_user_token();
+    // 这里传入的地址为用户的虚地址，因此要使用用户的虚地址进行映射
+    let path = translated_str(token, path);
+    println!("sys_openat: path = {}", path);
+    let mut inner = task.acquire_inner_lock();
+    
+    /////////////////////////////// WARNING ////////////////////////////////
+    // 只是测试用的临时处理
+    if path.contains("/dev") {
+        let fd = inner.alloc_fd();
+        
+        let fclass = {
+            if path.contains("tty") {
+                FileClass::Abstr(TTY.clone())
+            } else if path.contains("null") {
+                FileClass::Abstr(Arc::new(NullZero::new(true)))
+            } else if path.contains("zero") {
+                FileClass::Abstr(Arc::new(NullZero::new(false)))
+            } else {
+                return -1
+            }
+        };
+
+        inner.fd_table[fd] = Some( FileDescripter::new(
+            false,
+            fclass
+        ));
+        return fd as isize
+    }
+    //if path.contains("|") {
+    //    let fd = inner.alloc_fd();
+    //    inner.fd_table[fd] = Some( FileDescripter::new(
+    //        false,
+    //        FileClass::Abstr(  )
+    //    ));
+    //    return fd as isize
+    //}
+
+    ////////////////////////////////////////////////////////////////////////
+
+    let oflags = OpenFlags::from_bits(flags).unwrap();
+    if dirfd == AT_FDCWD {
+        if let Some(inode) = open(
+            inner.get_work_path().as_str(),
+            path.as_str(),
+            oflags,
+            DiskInodeType::File
+        ) {
+            let fd = inner.alloc_fd();
+            inner.fd_table[fd] = Some( FileDescripter::new(
+                oflags.contains(OpenFlags::CLOEXEC),
+                FileClass::File(inode)
+            ));
+            fd as isize
+        } else {
+            //panic!("open failed");
+            -1
+        }
+    } else {    
+        let fd_usz = dirfd as usize;
+        if fd_usz >= inner.fd_table.len() && fd_usz > FD_LIMIT {
+            return -1
+        }
+        if let Some(file) = &inner.fd_table[fd_usz] {
+            match &file.fclass {
+                FileClass::File(f) => {
+                    //let oflags = OpenFlags::from_bits(flags).unwrap();
+                    // 需要新建文件
+                    if oflags.contains(OpenFlags::CREATE){ 
+                        if let Some(tar_f) = f.create(path.as_str(), DiskInodeType::File){ 
+                            let fd = inner.alloc_fd();
+                            inner.fd_table[fd] = Some( FileDescripter::new(
+                                oflags.contains(OpenFlags::CLOEXEC),
+                                FileClass::File(tar_f)
+                            ));
+                            return fd as isize
+                        }else{
+                            //panic!("open failed");
+                            return -1;
+                        }
+                    }
+                    // 正常打开文件
+                    if let Some(tar_f) = f.find(path.as_str(), oflags){
+                        let fd = inner.alloc_fd();
+                        inner.fd_table[fd] = Some( FileDescripter::new(
+                            oflags.contains(OpenFlags::CLOEXEC),
+                            FileClass::File(tar_f)
+                        ));
+                        fd as isize
+                    }else{
+                        //panic!("open failed");
+                        return -1;
+                    }
+                },
+                _ => return -1, // 如果是抽象类文件，不能open
+            }
+        } else {
+            return -1
+        }
+    }
+    
+}
+
+pub fn sys_ioctl(fd:usize, cmd:u32, arg:usize)->isize{
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[fd] {
+        let file: Arc<dyn File + Send + Sync> = match &file.fclass {
+            FileClass::Abstr(f)=> {f.clone()},
+            FileClass::File(f)=>{f.clone()},
+            _ => return -1,
+        };
+        drop(inner);
+        return file.ioctl(cmd, arg)
+    } else {
+        return -1
+    }
+}
+
+pub fn sys_mkdir(dirfd:isize, path: *const u8, mode:u32)->isize{
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    let path = translated_str(token, path);
+    if dirfd == AT_FDCWD {
+        let work_path = inner.current_path.clone();
+        if let Some(inode) = open(
+            inner.get_work_path().as_str(),
+            path.as_str(),
+            OpenFlags::CREATE,
+            DiskInodeType::Directory
+        ) {
+            return 0
+        } else {
+            return -1
+        }
+    } else {
+        // DEBUG: 获取dirfd的OSInode
+        let fd_usz = dirfd as usize;
+        if fd_usz >= inner.fd_table.len() && fd_usz > FD_LIMIT {
+            return -1
+        }
+        if let Some(file) = &inner.fd_table[fd_usz] {
+            match &file.fclass {
+                FileClass::File(f) => {
+                    if let Some(new_dir) = f.create(path.as_str(), DiskInodeType::Directory){
+                        return 0;
+                    }else{
+                        return -1;
+                    }
+                },
+                _ => return -1,
+            }
+        } else {
+            return -1
+        }
+    }
+}

@@ -221,10 +221,16 @@ impl MemorySet {
     ) {
         let end_va = (start_va.0 + len).into();
         let mut mmap_area = MmapArea::new(fd, start_va, end_va, permission);
-        mmap_area.map_file(start_va, len, flags, offset, fd_table, token);
         self.push_mmap_area(
             mmap_area,
-            None,
+            start_va,
+            len,
+            permission,
+            flags,
+            fd,
+            offset,
+            fd_table,
+            token
         );
     }
     pub fn remove_mmap_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
@@ -238,13 +244,22 @@ impl MemorySet {
             self.mmap_areas.remove(idx);
         }
     }
-    pub fn push_mmap_area(&mut self, mut mmap_area: MmapArea, data: Option<&[u8]>) -> Result {
+    pub fn push_mmap_area(
+        &mut self,
+        mut mmap_area: MmapArea,
+        start_va: VirtAddr,
+        len: usize,
+        permission: MapPermission,
+        flags: usize,
+        fd: isize,
+        offset: usize,
+        fd_table: FdTable,
+        token: usize,
+    ) -> Result {
         if let Err(_) = mmap_area.area.map(&mut self.page_table) {
             return Err(core::fmt::Error);
         }
-        if let Some(data) = data {
-            mmap_area.area.copy_data(&mut self.page_table, data, 0);
-        }
+        mmap_area.map_file(start_va, len, flags, offset, fd_table, token);
         self.mmap_areas.push(mmap_area);
         Ok(())
     }
@@ -397,12 +412,12 @@ impl MemorySet {
         auxv.push(AuxHeader{aux_type: AT_SECURE, value: 0 as usize});
         auxv.push(AuxHeader{aux_type: AT_NOTELF, value: 0x112d as usize});
 
-        for i in 0..ph_count {
-            let ph = elf.program_header(i).unwrap();
+        for ph in elf.program_iter(){
             if ph.get_type().unwrap() == xmas_elf::program::Type::Load {
                 let start_va: VirtAddr = (ph.virtual_addr() as usize).into();
                 let end_va: VirtAddr = ((ph.virtual_addr() + ph.mem_size()) as usize).into();
                 let offset = start_va.0 - start_va.floor().0 * PAGE_SIZE;
+
                 let mut map_perm = MapPermission::U;
                 let ph_flags = ph.flags();
                 if ph_flags.is_read() {
@@ -628,7 +643,7 @@ impl MapArea {
             dst.copy_from_slice(src);
 
             start += PAGE_SIZE - page_offset;
-
+            
             page_offset = 0;
             if start >= len {
                 break;

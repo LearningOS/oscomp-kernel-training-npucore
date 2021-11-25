@@ -1,4 +1,4 @@
-use crate::config::{MEMORY_END, PAGE_SIZE};
+use crate::config::{MEMORY_END, PAGE_SIZE, CLOCK_FREQ};
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{translated_ref, translated_refmut, translated_str, UserBuffer, translated_byte_buffer};
 use crate::task::{
@@ -252,4 +252,35 @@ pub fn sys_mmap(
 pub fn sys_munmap(start: usize, len: usize) -> isize {
     let task = current_task().unwrap();
     task.munmap(start, len) as isize
+}
+
+pub const TICKS_PER_SEC: usize = 100;
+pub const MSEC_PER_SEC: usize = 1000;
+pub const USEC_PER_SEC: usize = 1000_000;
+pub const NSEC_PER_SEC: usize = 1000_000_000;
+
+pub fn get_time() -> usize {
+    let mut time:usize = 0;
+    unsafe{
+        asm!(
+            "rdtime a0",
+            inout("a0") time
+        );
+    }
+    time
+}
+
+pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
+    if tp as usize == 0 {// point is null
+        return 0;
+    }
+    
+    let token = current_user_token();
+    let ticks = get_time();
+    let sec = (ticks/CLOCK_FREQ) as u64;
+    let nsec = ((ticks%CLOCK_FREQ) * (NSEC_PER_SEC / CLOCK_FREQ))  as u64;
+    *translated_refmut(token, tp) = sec ;
+    *translated_refmut(token, unsafe { tp.add(1) }) = nsec;
+    println!("sys_get_time(clk_id: {}, tp: (sec: {}, nsec: {}) = {}", clk_id, sec, nsec, 0);
+    0
 }
