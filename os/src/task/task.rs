@@ -4,8 +4,10 @@ use core::mem::ManuallyDrop;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
-use crate::fs::{FileDescripter, Stdin, Stdout, FileClass};
-use crate::mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE, MmapArea, MapPermission};
+use crate::fs::{FileClass, FileDescripter, Stdin, Stdout};
+use crate::mm::{
+    translated_refmut, MapPermission, MemorySet, MmapArea, PhysPageNum, VirtAddr, KERNEL_SPACE,
+};
 use crate::task::current_user_token;
 use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
@@ -22,7 +24,7 @@ pub struct TaskControlBlock {
     inner: Mutex<TaskControlBlockInner>,
 }
 
-pub type FdTable =  Vec<Option<FileDescripter>>;
+pub type FdTable = Vec<Option<FileDescripter>>;
 pub struct TaskControlBlockInner {
     pub trap_cx_ppn: PhysPageNum,
     pub base_size: usize,
@@ -63,7 +65,7 @@ impl TaskControlBlockInner {
             self.fd_table.len() - 1
         }
     }
-    pub fn get_work_path(&self)->String{
+    pub fn get_work_path(&self) -> String {
         self.current_path.clone()
     }
 }
@@ -99,19 +101,19 @@ impl TaskControlBlock {
                 exit_code: 0,
                 fd_table: vec![
                     // 0 -> stdin
-                    Some( FileDescripter::new(
+                    Some(FileDescripter::new(
                         false,
-                        FileClass::Abstr(Arc::new(Stdin)) 
+                        FileClass::Abstr(Arc::new(Stdin)),
                     )),
                     // 1 -> stdout
-                    Some( FileDescripter::new(
+                    Some(FileDescripter::new(
                         false,
-                        FileClass::Abstr(Arc::new(Stdout)) 
+                        FileClass::Abstr(Arc::new(Stdout)),
                     )),
                     // 2 -> stderr
-                    Some( FileDescripter::new(
+                    Some(FileDescripter::new(
                         false,
-                        FileClass::Abstr(Arc::new(Stdout)) 
+                        FileClass::Abstr(Arc::new(Stdout)),
                     )),
                 ],
                 address: ProcAddress::new(),
@@ -133,13 +135,20 @@ impl TaskControlBlock {
     }
     pub fn exec(&self, elf_data: &[u8], args: Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) = MemorySet::from_elf(elf_data);
-        println!("[exec] load DONE. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}", user_sp, user_heap, entry_point);
+        let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
+            MemorySet::from_elf(elf_data);
+        println!(
+            "[exec] load DONE. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}",
+            user_sp, user_heap, entry_point
+        );
+        crate::mm::KERNEL_SPACE
+            .lock()
+            .munmap(elf_data.as_ptr() as usize, elf_data.len());
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
             .ppn();
-        
+
         ////////////// envp[] ///////////////////
         let mut env: Vec<String> = Vec::new();
         env.push(String::from("SHELL=/user_shell"));
@@ -147,7 +156,9 @@ impl TaskControlBlock {
         env.push(String::from("USER=root"));
         env.push(String::from("MOTD_SHOWN=pam"));
         env.push(String::from("LANG=C.UTF-8"));
-        env.push(String::from("INVOCATION_ID=e9500a871cf044d9886a157f53826684"));
+        env.push(String::from(
+            "INVOCATION_ID=e9500a871cf044d9886a157f53826684",
+        ));
         env.push(String::from("TERM=vt220"));
         env.push(String::from("SHLVL=2"));
         env.push(String::from("JOURNAL_STREAM=8:9265"));
@@ -202,34 +213,52 @@ impl TaskControlBlock {
         ////////////// rand bytes ///////////////////
         user_sp -= 16;
         p = user_sp;
-        auxv.push(AuxHeader{aux_type: AT_RANDOM, value: user_sp});
+        auxv.push(AuxHeader {
+            aux_type: AT_RANDOM,
+            value: user_sp,
+        });
         for i in 0..0xf {
             *translated_refmut(memory_set.token(), p as *mut u8) = i as u8;
             p += 1;
         }
-        
+
         ////////////// padding //////////////////////
         user_sp -= user_sp % 16;
 
         ////////////// auxv[] //////////////////////
-        auxv.push(AuxHeader{aux_type: AT_EXECFN, value: argv[0]});// file name
-        auxv.push(AuxHeader{aux_type: AT_NULL, value:0});// end
+        auxv.push(AuxHeader {
+            aux_type: AT_EXECFN,
+            value: argv[0],
+        }); // file name
+        auxv.push(AuxHeader {
+            aux_type: AT_NULL,
+            value: 0,
+        }); // end
         user_sp -= auxv.len() * core::mem::size_of::<AuxHeader>();
         let auxv_base = user_sp;
         // println!("[auxv]: base 0x{:X}", auxv_base);
         for i in 0..auxv.len() {
             // println!("[auxv]: {:?}", auxv[i]);
             let addr = user_sp + core::mem::size_of::<AuxHeader>() * i;
-            *translated_refmut(memory_set.token(), addr as *mut usize) = auxv[i].aux_type ;
-            *translated_refmut(memory_set.token(), (addr + core::mem::size_of::<usize>()) as *mut usize) = auxv[i].value ;
+            *translated_refmut(memory_set.token(), addr as *mut usize) = auxv[i].aux_type;
+            *translated_refmut(
+                memory_set.token(),
+                (addr + core::mem::size_of::<usize>()) as *mut usize,
+            ) = auxv[i].value;
         }
 
         ////////////// *envp [] //////////////////////
         user_sp -= (env.len() + 1) * core::mem::size_of::<usize>();
         let envp_base = user_sp;
-        *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * (env.len())) as *mut usize) = 0;
+        *translated_refmut(
+            memory_set.token(),
+            (user_sp + core::mem::size_of::<usize>() * (env.len())) as *mut usize,
+        ) = 0;
         for i in 0..env.len() {
-            *translated_refmut(memory_set.token(), (user_sp + core::mem::size_of::<usize>() * i) as *mut usize) = envp[i] ;
+            *translated_refmut(
+                memory_set.token(),
+                (user_sp + core::mem::size_of::<usize>() * i) as *mut usize,
+            ) = envp[i];
         }
 
         ////////////// *argv [] //////////////////////
@@ -338,13 +367,19 @@ impl TaskControlBlock {
         if increment > 0 {
             let limit = inner.heap_bottom + USER_HEAP_SIZE;
             if new_pt > limit {
-                println!("[sbrk] over the upperbond! {} {} {} {}", limit, inner.heap_pt, new_pt, self.pid.0);
+                println!(
+                    "[sbrk] over the upperbond! {} {} {} {}",
+                    limit, inner.heap_pt, new_pt, self.pid.0
+                );
                 return old_pt;
             }
-            inner.memory_set.insert_heap_area(old_pt.into(), new_pt.into(), MapPermission::R|MapPermission::W|MapPermission::U);
+            inner.memory_set.insert_heap_area(
+                old_pt.into(),
+                new_pt.into(),
+                MapPermission::R | MapPermission::W | MapPermission::U,
+            );
             inner.heap_pt = new_pt;
-        }
-        else {
+        } else {
             if new_pt < inner.heap_bottom {
                 println!("[sbrk] shrinked to the lowest boundary!");
                 return old_pt;
@@ -357,44 +392,63 @@ impl TaskControlBlock {
     /// 建立从文件到内存的映射
     pub fn mmap(
         &self,
-        start: usize, // 开始地址
-        len: usize,       // 内存映射长度
-        prot: usize,      // 保护位标志
-        flags: usize,     // 映射方式
-        fd: usize,        // 被映射文件
-        offset: usize,    // 文件位移
+        start: usize,  // 开始地址
+        len: usize,    // 内存映射长度
+        prot: usize,   // 保护位标志
+        flags: usize,  // 映射方式
+        fd: usize,     // 被映射文件
+        offset: usize, // 文件位移
     ) -> usize {
-        println!("[mmap] start:{:X}; len:{:X}; prot:{:X}; flags:{:X}; fd:{:X}; offset:{:X}", start, len, prot, flags, fd, offset);
+        println!(
+            "[mmap] start:{:X}; len:{:X}; prot:{:X}; flags:{:X}; fd:{:X}; offset:{:X}",
+            start, len, prot, flags, fd, offset
+        );
         if start % PAGE_SIZE != 0 {
             panic!("[mmap] start not aligned.");
         }
         if (prot & !0x7 != 0) || len > 0x1_000_000_000 {
             return -1isize as usize;
         }
-        let len = if len == 0 {PAGE_SIZE} else {len};
+        let len = if len == 0 { PAGE_SIZE } else { len };
         let mut inner = self.acquire_inner_lock();
-        if start != 0 { // "Start" va Already mapped
+        if start != 0 {
+            // "Start" va Already mapped
             let mut startvpn = start / PAGE_SIZE;
             while startvpn < (start + len) / PAGE_SIZE {
-                if inner.memory_set.set_pte_flags(startvpn.into(), ((prot<<1) | (1<<4)) as usize) == -1 {
+                if inner
+                    .memory_set
+                    .set_pte_flags(startvpn.into(), ((prot << 1) | (1 << 4)) as usize)
+                    == -1
+                {
                     panic!("mmap: start_va not mmaped");
                 }
                 startvpn += 1;
             }
             start
-        }
-        else { // "Start" va not mapped
+        } else {
+            // "Start" va not mapped
             let start_va = inner.memory_set.get_mmap_top();
-            let permission = MapPermission::from_bits(((prot<<1) | (1<<4)) as u8).unwrap();
+            let permission = MapPermission::from_bits(((prot << 1) | (1 << 4)) as u8).unwrap();
             let fd_table = inner.fd_table.clone();
             let token = inner.get_user_token();
-            inner.memory_set.insert_mmap_area(start_va, len, permission, flags, fd as isize, offset, fd_table, token);
+            inner.memory_set.insert_mmap_area(
+                start_va,
+                len,
+                permission,
+                flags,
+                fd as isize,
+                offset,
+                fd_table,
+                token,
+            );
             start_va.0
         }
     }
     pub fn munmap(&self, start: usize, len: usize) -> isize {
         let mut inner = self.acquire_inner_lock();
-        inner.memory_set.remove_mmap_area_with_start_vpn(VirtAddr::from(start).into());
+        inner
+            .memory_set
+            .remove_mmap_area_with_start_vpn(VirtAddr::from(start).into());
         0
     }
 }
@@ -412,12 +466,15 @@ pub struct ProcAddress {
 }
 
 impl ProcAddress {
-    pub fn new() -> Self{
-        Self{set_child_tid: 0, clear_child_tid: 0}
+    pub fn new() -> Self {
+        Self {
+            set_child_tid: 0,
+            clear_child_tid: 0,
+        }
     }
 }
 
-pub struct AuxHeader{
+pub struct AuxHeader {
     pub aux_type: usize,
     pub value: usize,
 }

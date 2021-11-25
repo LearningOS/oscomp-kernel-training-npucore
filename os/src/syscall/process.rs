@@ -184,7 +184,6 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             println!("[sys_exec] exec() DONE.");
 
             //remember to UNMAP here!
-            crate::mm::KERNEL_SPACE.lock().munmap(start, lrnd);
             // return argc because cx.x[10] will be covered with it later
 
             argc as isize
