@@ -4,6 +4,7 @@ mod pid;
 mod processor;
 mod switch;
 mod task;
+pub mod signal;
 
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use alloc::sync::Arc;
@@ -13,6 +14,7 @@ use manager::fetch_task;
 use switch::__switch;
 use task::{TaskControlBlock, TaskStatus};
 pub use task::{FdTable, AuxHeader};
+pub use signal::*;
 
 pub use manager::add_task;
 pub use pid::{pid_alloc, KernelStack, PidHandle};

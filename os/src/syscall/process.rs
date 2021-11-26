@@ -10,6 +10,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
+use crate::task::signal::*;
 
 pub struct utsname{
     sysname: [u8; 65],
@@ -78,7 +79,17 @@ pub fn sys_uname(buf: *mut u8) -> isize {
 }
 
 pub fn sys_getpid() -> isize {
-    current_task().unwrap().pid.0 as isize
+    let pid = current_task().unwrap().pid.0;
+    println!("[sys_getpid] pid:{}", pid);
+    pid as isize
+}
+
+pub fn sys_getppid() -> isize {
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    let ppid = inner.parent.as_ref().unwrap().upgrade().unwrap().pid.0;
+    println!("[sys_getppid] ppid:{}", ppid);
+    ppid as isize
 }
 
 pub fn sys_getuid() -> isize {
@@ -95,6 +106,36 @@ pub fn sys_getgid() -> isize {
 
 pub fn sys_getegid() -> isize {
     0 // root group
+}
+
+// Warning, we don't support this syscall in fact, task.setpgid() won't take effect for some reason
+// So it just pretend to do this work.
+// Fortunately, that won't make difference when we just try to run busybox sh so far.
+pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
+    println!("[sys_setpgid] pid:{}; pgid:{}", pid, pgid);
+    if pid == 0 {
+        let task = current_task().unwrap();
+        if pgid == 0 {
+            task.setpgid(task.getpid());
+        }
+        else {
+            task.setpgid(pgid);
+        }
+    }
+    else {
+        panic!("[sys_setpgid] Case that pid != 0 haven't been support");
+    }
+    0
+}
+
+pub fn sys_getpgid(pid: usize) -> isize {
+    println!("[sys_getpgid] pid:{}", pid);
+    if pid == 0 {
+        current_task().unwrap().getpgid() as isize
+    }
+    else {
+        panic!("[sys_getpgid] Case that pid != 0 haven't been support");
+    }
 }
 
 // For user, tid is pid in kernel
@@ -122,6 +163,7 @@ pub fn sys_brk(brk_addr: usize) -> isize{
 }
 
 pub fn sys_fork() -> isize {
+    println!("[sys_fork]");
     let current_task = current_task().unwrap();
     let new_task = current_task.fork();
     let new_pid = new_task.pid.0;
@@ -253,21 +295,33 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
     task.munmap(start, len) as isize
 }
 
+pub fn sys_mprotect(addr: usize, len: usize, prot: isize) -> isize{
+    if (addr % PAGE_SIZE != 0) || (len % PAGE_SIZE != 0){ // Not align
+        println!("sys_mprotect: not align");
+        return -1
+    }
+    let task = current_task().unwrap();
+    // let token = task.acquire_inner_lock().get_user_token();
+    let memory_set = &mut task.acquire_inner_lock().memory_set;
+    let start_vpn = addr / PAGE_SIZE;
+    for i in 0..(len/PAGE_SIZE){
+        // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
+        if memory_set.set_pte_flags(start_vpn.into(), (prot as usize)<<1) == -1{
+            // if fail
+            panic!("sys_mprotect: No such pte");
+        }
+    }
+    unsafe {
+        llvm_asm!("sfence.vma" :::: "volatile");
+        llvm_asm!("fence.i" :::: "volatile");
+    }
+    0
+}
+
 pub const TICKS_PER_SEC: usize = 100;
 pub const MSEC_PER_SEC: usize = 1000;
 pub const USEC_PER_SEC: usize = 1000_000;
 pub const NSEC_PER_SEC: usize = 1000_000_000;
-
-pub fn get_time() -> usize {
-    let mut time:usize = 0;
-    unsafe{
-        asm!(
-            "rdtime a0",
-            inout("a0") time
-        );
-    }
-    time
-}
 
 pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     if tp as usize == 0 {// point is null
@@ -275,11 +329,31 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     }
     
     let token = current_user_token();
-    let ticks = get_time();
+    let mut ticks = 0;
+    unsafe{
+        asm!(
+            "rdtime a0",
+            inout("a0") ticks
+        );
+    }
     let sec = (ticks/CLOCK_FREQ) as u64;
     let nsec = ((ticks%CLOCK_FREQ) * (NSEC_PER_SEC / CLOCK_FREQ))  as u64;
     *translated_refmut(token, tp) = sec ;
     *translated_refmut(token, unsafe { tp.add(1) }) = nsec;
     println!("sys_get_time(clk_id: {}, tp: (sec: {}, nsec: {}) = {}", clk_id, sec, nsec, 0);
+    0
+}
+
+// Warning, we don't support this syscall in fact
+// It just a 'Shell' for now, literal meaning.
+// int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+pub fn sys_sigaction(signum: isize, act :*mut usize, oldact: *mut usize) -> isize{
+    println!("[sys_sigaction] signum:{:?}; act_addr:{:?}, oldact:{:?}", signum, act, oldact);
+    0
+}
+// Warning, we don't support this syscall in fact
+// The same as above
+pub fn sys_sigprocmask(how: usize, set:*mut usize, oldset:*mut usize) -> isize{
+    println!("[sys_sigprocmask] how:{:?}; set:{:?}, oldset:{:?}", how, set, oldset);
     0
 }

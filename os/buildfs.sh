@@ -38,4 +38,6 @@ do
     sudo cp ../user/busybox_lua_testsuites/$programname ${U_FAT32_DIR}/fs/"$programname"
 done
 
+sudo cp -r ../user/virt_root/* ${U_FAT32_DIR}/fs/
+
 sudo umount ${U_FAT32_DIR}/fs

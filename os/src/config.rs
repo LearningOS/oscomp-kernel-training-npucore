@@ -2,7 +2,7 @@
 
 pub const USER_STACK_SIZE: usize = PAGE_SIZE * 20;
 pub const KERNEL_STACK_SIZE: usize = PAGE_SIZE * 2;
-pub const USER_HEAP_SIZE: usize = PAGE_SIZE * 2;
+pub const USER_HEAP_SIZE: usize = PAGE_SIZE * 20;
 pub const KERNEL_HEAP_SIZE: usize = PAGE_SIZE * 0x200; //was 0x30_0000 by THU
 pub const MMAP_BASE: usize = 0x6000_0000;
 pub const MMAP_SIZE: usize = PAGE_SIZE * 512;

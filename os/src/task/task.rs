@@ -15,10 +15,12 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
+use super::signal::*;
 
 pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
+    pub pgid: usize,
     pub kernel_stack: KernelStack,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
@@ -39,6 +41,7 @@ pub struct TaskControlBlockInner {
     pub heap_bottom: usize,
     pub heap_pt: usize,
     pub current_path: String,
+    pub siginfo: SigInfo,
 }
 
 impl TaskControlBlockInner {
@@ -68,6 +71,9 @@ impl TaskControlBlockInner {
     pub fn get_work_path(&self) -> String {
         self.current_path.clone()
     }
+    pub fn add_signal(&mut self, signal: Signals){
+        self.siginfo.signal_pending.push(signal);
+    }
 }
 
 impl TaskControlBlock {
@@ -83,12 +89,14 @@ impl TaskControlBlock {
             .ppn();
         // alloc a pid and a kernel stack in kernel space
         let pid_handle = pid_alloc();
+        let pgid = pid_handle.0;
         let kernel_stack = KernelStack::new(&pid_handle);
         let kernel_stack_top = kernel_stack.get_top();
         // push a task context which goes to trap_return to the top of kernel stack
         let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
         let task_control_block = Self {
             pid: pid_handle,
+            pgid: pgid,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
                 trap_cx_ppn,
@@ -120,6 +128,7 @@ impl TaskControlBlock {
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
                 current_path: String::from("/"),
+                siginfo: SigInfo::new(),
             }),
         };
         // prepare TrapContext in user space
@@ -328,6 +337,7 @@ impl TaskControlBlock {
         }
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
+            pgid: self.pgid,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
                 trap_cx_ppn,
@@ -343,6 +353,7 @@ impl TaskControlBlock {
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
                 current_path: parent_inner.current_path.clone(),
+                siginfo: parent_inner.siginfo.clone(),
             }),
         });
         // add child
@@ -359,7 +370,14 @@ impl TaskControlBlock {
     pub fn getpid(&self) -> usize {
         self.pid.0
     }
-
+    pub fn setpgid(&self, pgid: usize) -> usize {
+        //self.pgid = pgid;
+        //Temporarily suspend. Because the type of 'self' is 'Arc', which can't be borrow as mutable.
+        0
+    }
+    pub fn getpgid(&self) -> usize {
+        self.pgid
+    }
     pub fn sbrk(&self, increment: isize) -> usize {
         let mut inner = self.acquire_inner_lock();
         let old_pt: usize = inner.heap_pt;
