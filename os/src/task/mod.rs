@@ -2,25 +2,24 @@ mod context;
 mod manager;
 mod pid;
 mod processor;
+pub mod signal;
 mod switch;
 mod task;
-pub mod signal;
 
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 use lazy_static::*;
 use manager::fetch_task;
-use switch::__switch;
-use task::{TaskControlBlock, TaskStatus};
-pub use task::{FdTable, AuxHeader};
 pub use signal::*;
+use switch::__switch;
+pub use task::{AuxHeader, FdTable};
+use task::{TaskControlBlock, TaskStatus};
 
 pub use manager::add_task;
 pub use pid::{pid_alloc, KernelStack, PidHandle};
 pub use processor::{
-    current_task, current_trap_cx, current_user_token, run_tasks, schedule,
-    take_current_task,
+    current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
 };
 
 pub fn suspend_current_and_run_next() {
@@ -77,8 +76,24 @@ pub fn exit_current_and_run_next(exit_code: i32) {
 lazy_static! {
     pub static ref INITPROC: Arc<TaskControlBlock> = Arc::new({
         let inode = open("/", "initproc", OpenFlags::RDONLY, DiskInodeType::File).unwrap();
-        let v = inode.read_all();
-        TaskControlBlock::new(v.as_slice())
+        let len = inode.get_size();
+        let j: usize = len % crate::config::PAGE_SIZE;
+        let lrnd = if j == 0 {
+            len
+        } else {
+            len - j + crate::config::PAGE_SIZE
+        };
+        let start: usize = crate::config::MEMORY_END * 4;
+        crate::mm::KERNEL_SPACE.lock().alloc(
+            start,
+            lrnd,
+            (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
+        );
+        unsafe {
+            let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
+            let v = inode.read_into(&mut buf);
+            TaskControlBlock::new(buf)
+        }
     });
 }
 

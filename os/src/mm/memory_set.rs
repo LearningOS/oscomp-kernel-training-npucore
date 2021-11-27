@@ -1,15 +1,17 @@
 use super::{frame_alloc, FrameTracker};
+use super::{translated_byte_buffer, UserBuffer};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
-use super::{UserBuffer, translated_byte_buffer};
 use crate::config::*;
 use crate::fs::{File, FileClass, FileDescripter};
-use crate::task::{FdTable, AuxHeader};
+use crate::task::{AuxHeader, FdTable};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+//use proc_macro::Spacing;
 use core::fmt::Result;
+use core::panic;
 use lazy_static::*;
 use riscv::register::satp;
 use spin::Mutex;
@@ -45,21 +47,41 @@ pub struct MemorySet {
 
 impl MemorySet {
     pub fn munmap(&mut self, start: usize, len: usize) -> i32 {
+        println!("[munmap] Trying to unmap start area beg. with {}.", start);
         if len == 0 {
             return 0;
         }
-        let mut m = MapArea::new(
-            start.into(),
-            (len + start).into(),
-            MapType::Framed,
-            MapPermission::X,
-        );
-        if let Err(_) = m.unmap(&mut self.page_table) {
-            unsafe {
-                llvm_asm!("sfence.vma" :::: "volatile");
+        if let Some((i, m)) = self
+            .areas
+            .iter_mut()
+            .enumerate()
+            .find(|(_, area)| area.vpn_range.get_start() == VirtAddr::from(start).floor())
+        {
+            for vpn in m.vpn_range {
+                match m.map_type {
+                    MapType::Framed => {
+                        println!(
+                            "[munmap] Removing {}",
+                            (m.data_frames.get(&vpn).unwrap()).ppn.0
+                        );
+                        m.data_frames.remove(&vpn);
+                    }
+                    _ => {}
+                }
+                if !self.page_table.is_mapped(vpn) {
+                    unsafe {
+                        llvm_asm!("sfence.vma" :::: "volatile");
+                    }
+                    return -1;
+                }
+                self.page_table.unmap(vpn);
             }
-            return -1;
+            self.areas.remove(i);
+        } else {
+            panic!("Wrong munmap");
+            //return -1;
         }
+
         unsafe {
             llvm_asm!("sfence.vma" :::: "volatile");
         }
@@ -71,6 +93,7 @@ impl MemorySet {
         len: usize,       // 内存映射长度
         prot: usize,      // 保护位标志
     ) -> i32 {
+        println!("[alloc] trying to alloc start area beg. with {}.", start);
         if len == 0 {
             return 0;
         }
@@ -86,6 +109,7 @@ impl MemorySet {
         }
         if let Some(i) = MapPermission::from_bits(per) {
             let m: MapArea = MapArea::new(start.into(), (len + start).into(), MapType::Framed, i);
+            println!("[alloc] start with:{}", m.vpn_range.get_start().0);
             if let Ok(_) = self.push(m, None) {
                 unsafe {
                     llvm_asm!("sfence.vma" :::: "volatile");
@@ -205,7 +229,7 @@ impl MemorySet {
     pub fn get_mmap_top(&mut self) -> VirtAddr {
         match self.mmap_areas.last() {
             Some(mmap_area) => mmap_area.area.vpn_range.get_end().into(),
-            None => MMAP_BASE.into()
+            None => MMAP_BASE.into(),
         }
     }
     pub fn insert_mmap_area(
@@ -222,15 +246,7 @@ impl MemorySet {
         let end_va = (start_va.0 + len).into();
         let mut mmap_area = MmapArea::new(fd, start_va, end_va, permission);
         self.push_mmap_area(
-            mmap_area,
-            start_va,
-            len,
-            permission,
-            flags,
-            fd,
-            offset,
-            fd_table,
-            token
+            mmap_area, start_va, len, permission, flags, fd, offset, fd_table, token,
         );
     }
     pub fn remove_mmap_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
@@ -383,7 +399,7 @@ impl MemorySet {
     /// Include sections in elf and trampoline and TrapContext and user stack,
     /// also returns user_sp and entry point.
     pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize, usize, Vec<AuxHeader>) {
-        let mut auxv:Vec<AuxHeader> = Vec::new();
+        let mut auxv: Vec<AuxHeader> = Vec::new();
         let mut memory_set = Self::new_bare();
         // map trampoline
         memory_set.map_trampoline();
@@ -395,24 +411,69 @@ impl MemorySet {
         let ph_count = elf_header.pt2.ph_count();
         let mut max_end_vpn = VirtPageNum(0);
         let mut head_va = 0; // top va of ELF which points to ELF header
-        // push ELF related auxv
-        auxv.push(AuxHeader{aux_type: AT_PHENT, value: elf.header.pt2.ph_entry_size() as usize});// ELF64 header 64bytes
-        auxv.push(AuxHeader{aux_type: AT_PHNUM, value: ph_count as usize});
-        auxv.push(AuxHeader{aux_type: AT_PAGESZ, value: PAGE_SIZE as usize});
-        auxv.push(AuxHeader{aux_type: AT_BASE, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_FLAGS, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_ENTRY, value: elf.header.pt2.entry_point() as usize});
-        auxv.push(AuxHeader{aux_type: AT_UID, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_EUID, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_GID, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_EGID, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_PLATFORM, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_HWCAP, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_CLKTCK, value: 100 as usize});
-        auxv.push(AuxHeader{aux_type: AT_SECURE, value: 0 as usize});
-        auxv.push(AuxHeader{aux_type: AT_NOTELF, value: 0x112d as usize});
+                             // push ELF related auxv
+        auxv.push(AuxHeader {
+            aux_type: AT_PHENT,
+            value: elf.header.pt2.ph_entry_size() as usize,
+        }); // ELF64 header 64bytes
+        auxv.push(AuxHeader {
+            aux_type: AT_PHNUM,
+            value: ph_count as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_PAGESZ,
+            value: PAGE_SIZE as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_BASE,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_FLAGS,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_ENTRY,
+            value: elf.header.pt2.entry_point() as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_UID,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_EUID,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_GID,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_EGID,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_PLATFORM,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_HWCAP,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_CLKTCK,
+            value: 100 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_SECURE,
+            value: 0 as usize,
+        });
+        auxv.push(AuxHeader {
+            aux_type: AT_NOTELF,
+            value: 0x112d as usize,
+        });
 
-        for ph in elf.program_iter(){
+        for ph in elf.program_iter() {
             if ph.get_type().unwrap() == xmas_elf::program::Type::Load {
                 let start_va: VirtAddr = (ph.virtual_addr() as usize).into();
                 let end_va: VirtAddr = ((ph.virtual_addr() + ph.mem_size()) as usize).into();
@@ -456,7 +517,10 @@ impl MemorySet {
 
         // Get ph_head addr for auxv
         let ph_head_addr = head_va + elf.header.pt2.ph_offset() as usize;
-        auxv.push(AuxHeader{aux_type: AT_PHDR, value: ph_head_addr as usize});
+        auxv.push(AuxHeader {
+            aux_type: AT_PHDR,
+            value: ph_head_addr as usize,
+        });
 
         let mut user_stack_top: usize = TRAP_CONTEXT;
         user_stack_top -= PAGE_SIZE;
@@ -466,7 +530,6 @@ impl MemorySet {
         let mut user_heap_bottom: usize = max_end_va.into();
         // guard page
         user_heap_bottom += PAGE_SIZE;
-
 
         memory_set.push(
             MapArea::new(
@@ -532,7 +595,7 @@ impl MemorySet {
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
     }
-    pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: usize) -> isize{
+    pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: usize) -> isize {
         self.page_table.set_pte_flags(vpn, flags)
     }
     pub fn recycle_data_pages(&mut self) {
@@ -559,7 +622,9 @@ impl MapArea {
         let end_vpn: VirtPageNum = end_va.ceil();
         println!(
             "[MapArea new] start_vpn:{:X}; end_vpn:{:X}; map_perm:{:b}",
-            start_vpn.0, end_vpn.0, map_perm.bits()
+            start_vpn.0,
+            end_vpn.0,
+            map_perm.bits()
         );
         Self {
             vpn_range: VPNRange::new(start_vpn, end_vpn),
@@ -625,6 +690,14 @@ impl MapArea {
         }
         Ok(())
     }
+    pub fn unmap_release(&mut self, page_table: &mut PageTable) -> Result {
+        for vpn in self.vpn_range {
+            if let Err(_) = self.unmap_one(page_table, vpn) {
+                return Err(core::fmt::Error);
+            }
+        }
+        Ok(())
+    }
     /// data: start-aligned but maybe with shorter length
     /// assume that all frames were cleared before
     pub fn copy_data(&mut self, page_table: &mut PageTable, data: &[u8], offset: usize) {
@@ -643,7 +716,7 @@ impl MapArea {
             dst.copy_from_slice(src);
 
             start += PAGE_SIZE - page_offset;
-            
+
             page_offset = 0;
             if start >= len {
                 break;
@@ -659,41 +732,57 @@ pub struct MmapArea {
 }
 
 impl MmapArea {
-    pub fn new(
-        fd: isize,
-        start_va: VirtAddr,
-        end_va: VirtAddr,
-        map_perm: MapPermission,
-    ) -> Self {
-        println!("[MmapArea new] fd:{:X}; start_va:{:X}; end_va:{:X}", fd, start_va.0, end_va.0);
+    pub fn new(fd: isize, start_va: VirtAddr, end_va: VirtAddr, map_perm: MapPermission) -> Self {
+        println!(
+            "[MmapArea new] fd:{:X}; start_va:{:X}; end_va:{:X}",
+            fd, start_va.0, end_va.0
+        );
         Self {
             fd,
             area: MapArea::new(start_va, end_va, MapType::Framed, map_perm),
         }
     }
-    pub fn map_file(&mut self, start_va: VirtAddr, len: usize, flags: usize, offset: usize, fd_table: FdTable, token: usize) -> isize {
+    pub fn map_file(
+        &mut self,
+        start_va: VirtAddr,
+        len: usize,
+        flags: usize,
+        offset: usize,
+        fd_table: FdTable,
+        token: usize,
+    ) -> isize {
         let flags = MmapFlags::from_bits(flags).unwrap();
-        if flags.contains(MmapFlags::MAP_ANONYMOUS)
-            && self.fd == -1 
-            && offset == 0 {
+        if flags.contains(MmapFlags::MAP_ANONYMOUS) && self.fd == -1 && offset == 0 {
             println!("[map file] map anonymous file");
             return 1;
         }
 
-        if self.fd as usize >= fd_table.len() { return -1; }
+        if self.fd as usize >= fd_table.len() {
+            return -1;
+        }
 
         if let Some(file) = &fd_table[self.fd as usize] {
             match &file.fclass {
-                FileClass::File(f)=>{
+                FileClass::File(f) => {
                     f.set_offset(offset);
-                    if !f.readable() { return -1; }
-                    println!{"[map file] The start_va is 0x{:X}, offset of file is {}", start_va.0, offset};
-                    let read_len = f.read(UserBuffer::new(translated_byte_buffer(token, start_va.0 as *const u8, len)));
-                    println!{"[map file] read {} bytes", read_len};
-                },
-                _ => { return -1; },
+                    if !f.readable() {
+                        return -1;
+                    }
+                    println! {"[map file] The start_va is 0x{:X}, offset of file is {}", start_va.0, offset};
+                    let read_len = f.read(UserBuffer::new(translated_byte_buffer(
+                        token,
+                        start_va.0 as *const u8,
+                        len,
+                    )));
+                    println! {"[map file] read {} bytes", read_len};
+                }
+                _ => {
+                    return -1;
+                }
             };
-        } else { return -1 };
+        } else {
+            return -1;
+        };
         return 1;
     }
 }

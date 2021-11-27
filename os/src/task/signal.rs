@@ -1,9 +1,9 @@
-use alloc::vec::Vec;
 use alloc::collections::{BTreeMap, BinaryHeap};
+use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
 
-pub const SIG_DFL:usize = 0;	/* Default action.  */
-pub const SIG_IGN:usize = 1;	/* Ignore signal.  */
+pub const SIG_DFL: usize = 0; /* Default action.  */
+pub const SIG_IGN: usize = 1; /* Ignore signal.  */
 
 // signal
 bitflags! {
@@ -41,7 +41,7 @@ bitflags! {
     }
 }
 
-bitflags!{
+bitflags! {
     /* Bits in `sa_flags'.  */
     pub struct SaFlags: usize{
         const SA_NOCLDSTOP = 1		   ;     /* Don't send SIGCHLD when children stop.  */
@@ -57,23 +57,23 @@ bitflags!{
 
 #[derive(Clone)]
 pub struct SigAction {
-    pub sa_handler:usize,
+    pub sa_handler: usize,
     // pub sa_sigaction:usize,
-    pub sa_mask:Vec<Signals>,
-    pub sa_flags:SaFlags,
+    pub sa_mask: Vec<Signals>,
+    pub sa_flags: SaFlags,
 }
 
-impl SigAction{
-    pub fn new() -> Self{
-        Self{
+impl SigAction {
+    pub fn new() -> Self {
+        Self {
             sa_handler: 0,
             sa_flags: SaFlags::from_bits(0).unwrap(),
             sa_mask: Vec::new(),
         }
     }
 
-    pub fn is_null(&self) -> bool{
-        self.sa_handler==0 && self.sa_flags.is_empty() && self.sa_mask.is_empty()
+    pub fn is_null(&self) -> bool {
+        self.sa_handler == 0 && self.sa_flags.is_empty() && self.sa_mask.is_empty()
     }
 }
 // void     (*sa_handler)(int);//函数指针，保存了内核对信号的处理方式
@@ -83,15 +83,15 @@ impl SigAction{
 // //保存的值0，在处理信号的时候，调用sa_handler保存的函数
 // void     (*sa_restorer)(void);
 #[derive(Clone)]
-pub struct SigInfo{
+pub struct SigInfo {
     pub is_signal_execute: bool, // is process now executing in signal handler
     pub signal_pending: BinaryHeap<Signals>,
-    pub signal_handler: BTreeMap<Signals,SigAction>,
+    pub signal_handler: BTreeMap<Signals, SigAction>,
 }
 
-impl SigInfo{
-    pub fn new() -> Self{
-        Self{
+impl SigInfo {
+    pub fn new() -> Self {
+        Self {
             is_signal_execute: false,
             signal_pending: BinaryHeap::new(),
             signal_handler: BTreeMap::new(),
@@ -101,12 +101,18 @@ impl SigInfo{
 
 impl Debug for SigInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("( is_signal_execute:{}, signal_pending:{:?}, signal_handler:{:?})", self.is_signal_execute,  self.signal_pending,  self.signal_handler ))
+        f.write_fmt(format_args!(
+            "( is_signal_execute:{}, signal_pending:{:?}, signal_handler:{:?})",
+            self.is_signal_execute, self.signal_pending, self.signal_handler
+        ))
     }
 }
 
 impl Debug for SigAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("( sa_handler:0x{:X}, sa_mask:{:?}, sa_flags:{:?})", self.sa_handler,  self.sa_mask,  self.sa_flags ))
+        f.write_fmt(format_args!(
+            "( sa_handler:0x{:X}, sa_mask:{:?}, sa_flags:{:?})",
+            self.sa_handler, self.sa_mask, self.sa_flags
+        ))
     }
 }

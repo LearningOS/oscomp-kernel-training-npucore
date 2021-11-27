@@ -193,45 +193,45 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     }
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    if let Some(app_inode) = open(
-        inner.get_work_path().as_str(),
-        path.as_str(),
-        OpenFlags::RDONLY,
-        crate::fs::DiskInodeType::File,
-    ) {
-            drop(inner);
-            let len = app_inode.get_size();
-            let j: usize = len % PAGE_SIZE;
-            let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
-            let start: usize = MEMORY_END;
-            println!("[sys_exec] File size: {} bytes", len);
-            crate::mm::KERNEL_SPACE.lock().alloc(
-                start,
-                lrnd,
-                (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
-            );
+    match open(
+            inner.get_work_path().as_str(),
+            path.as_str(),
+            OpenFlags::RDONLY,
+            crate::fs::DiskInodeType::File,
+        ) {
+        Some(app_inode) => {
+                drop(inner);
+                let len = app_inode.get_size();
+                let j: usize = len % PAGE_SIZE;
+                let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
+                let start: usize = MEMORY_END;
+                println!("[sys_exec] File size: {} bytes", len);
+                crate::mm::KERNEL_SPACE.lock().alloc(
+                    start,
+                    lrnd,
+                    (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
+                );
 
-            /*read into all data*/
-            unsafe {
-                let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
-                app_inode.read_into(&mut buf);
+                /*read into all data*/
+                unsafe {
+                    let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
+                    app_inode.read_into(&mut buf);
+                }
+                println!("[sys_exec] read_all() DONE.");
+                let task = current_task().unwrap();
+                let argc = args_vec.len();
+                unsafe {
+                    let all_data = core::slice::from_raw_parts(start as *const u8, len);
+                    task.exec(all_data, args_vec);
+                }
+                println!("[sys_exec] exec() DONE.");
+
+                //remember to UNMAP here!
+                // return argc because cx.x[10] will be covered with it later
+
+                argc as isize
             }
-            println!("[sys_exec] read_all() DONE.");
-            let task = current_task().unwrap();
-            let argc = args_vec.len();
-            unsafe {
-                let all_data = core::slice::from_raw_parts(start as *const u8, len);
-                task.exec(all_data, args_vec);
-            }
-            println!("[sys_exec] exec() DONE.");
-
-            //remember to UNMAP here!
-            // return argc because cx.x[10] will be covered with it later
-
-            argc as isize
-        }
-    else {
-        -1
+        None => -1,
     }
 }
 

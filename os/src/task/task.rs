@@ -1,10 +1,12 @@
 use core::borrow::BorrowMut;
 use core::mem::ManuallyDrop;
 
+use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
 use crate::fs::{FileClass, FileDescripter, Stdin, Stdout};
+use crate::mm::VirtPageNum;
 use crate::mm::{
     translated_refmut, MapPermission, MemorySet, MmapArea, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -15,7 +17,6 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
-use super::signal::*;
 
 pub struct TaskControlBlock {
     // immutable
@@ -71,7 +72,7 @@ impl TaskControlBlockInner {
     pub fn get_work_path(&self) -> String {
         self.current_path.clone()
     }
-    pub fn add_signal(&mut self, signal: Signals){
+    pub fn add_signal(&mut self, signal: Signals) {
         self.siginfo.signal_pending.push(signal);
     }
 }
@@ -83,6 +84,11 @@ impl TaskControlBlock {
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, user_sp, user_heap, entry_point, auxv) = MemorySet::from_elf(elf_data);
+
+        crate::mm::KERNEL_SPACE
+            .lock()
+            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor());
+
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -152,7 +158,8 @@ impl TaskControlBlock {
         );
         crate::mm::KERNEL_SPACE
             .lock()
-            .munmap(elf_data.as_ptr() as usize, elf_data.len());
+            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor());
+
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
