@@ -16,8 +16,8 @@ use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
+use log::{debug, error, info, trace, warn};
 use spin::{Mutex, MutexGuard};
-use log::{error, warn, info, debug, trace};
 
 pub struct TaskControlBlock {
     // immutable

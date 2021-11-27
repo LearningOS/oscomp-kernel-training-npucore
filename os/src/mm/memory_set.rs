@@ -13,9 +13,9 @@ use alloc::vec::Vec;
 use core::fmt::Result;
 use core::panic;
 use lazy_static::*;
+use log::{debug, error, info, trace, warn};
 use riscv::register::satp;
 use spin::Mutex;
-use log::{error, warn, info, debug, trace};
 
 extern "C" {
     fn stext();
@@ -542,7 +542,8 @@ impl MemorySet {
         );
         trace!(
             "[elf] USER STACK PUSHED. user_stack_top:{:X}; user_stack_bottom:{:X}",
-            user_stack_top, user_stack_bottom
+            user_stack_top,
+            user_stack_bottom
         );
         // map TrapContext
         memory_set.push(
@@ -556,7 +557,8 @@ impl MemorySet {
         );
         trace!(
             "[elf] TRAP CONTEXT PUSHED. start_va:{:X}; end_va:{:X}",
-            TRAP_CONTEXT, TRAMPOLINE
+            TRAP_CONTEXT,
+            TRAMPOLINE
         );
         (
             memory_set,
