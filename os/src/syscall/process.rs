@@ -1,6 +1,9 @@
-use crate::config::{MEMORY_END, PAGE_SIZE, CLOCK_FREQ};
+use crate::config::{CLOCK_FREQ, MEMORY_END, PAGE_SIZE};
 use crate::fs::{open, DiskInodeType, OpenFlags};
-use crate::mm::{translated_ref, translated_refmut, translated_str, UserBuffer, translated_byte_buffer};
+use crate::mm::{
+    translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer,
+};
+use crate::task::signal::*;
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next,
@@ -10,9 +13,8 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
-use crate::task::signal::*;
 
-pub struct utsname{
+pub struct utsname {
     sysname: [u8; 65],
     nodename: [u8; 65],
     release: [u8; 65],
@@ -21,9 +23,9 @@ pub struct utsname{
     domainname: [u8; 65],
 }
 
-impl utsname{
-    pub fn new() -> Self{
-        Self{
+impl utsname {
+    pub fn new() -> Self {
+        Self {
             sysname: utsname::str2u8("Linux"),
             nodename: utsname::str2u8("debian"),
             release: utsname::str2u8("5.10.0-7-riscv64"),
@@ -33,24 +35,19 @@ impl utsname{
         }
     }
 
-    fn str2u8(str: &str) -> [u8;65]{
-        let mut arr:[u8;65] = [0;65];
+    fn str2u8(str: &str) -> [u8; 65] {
+        let mut arr: [u8; 65] = [0; 65];
         let str_bytes = str.as_bytes();
         let len = str.len();
-        for i in 0..len{
+        for i in 0..len {
             arr[i] = str_bytes[i];
         }
         arr
     }
-    
+
     pub fn as_bytes(&self) -> &[u8] {
         let size = core::mem::size_of::<Self>();
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const _ as usize as *const u8,
-                size,
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const _ as usize as *const u8, size) }
     }
 }
 
@@ -117,12 +114,10 @@ pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
         let task = current_task().unwrap();
         if pgid == 0 {
             task.setpgid(task.getpid());
-        }
-        else {
+        } else {
             task.setpgid(pgid);
         }
-    }
-    else {
+    } else {
         panic!("[sys_setpgid] Case that pid != 0 haven't been support");
     }
     0
@@ -132,8 +127,7 @@ pub fn sys_getpgid(pid: usize) -> isize {
     println!("[sys_getpgid] pid:{}", pid);
     if pid == 0 {
         current_task().unwrap().getpgid() as isize
-    }
-    else {
+    } else {
         panic!("[sys_getpgid] Case that pid != 0 haven't been support");
     }
 }
@@ -147,17 +141,16 @@ pub fn sys_sbrk(increment: isize) -> isize {
     current_task().unwrap().sbrk(increment) as isize
 }
 
-pub fn sys_brk(brk_addr: usize) -> isize{
+pub fn sys_brk(brk_addr: usize) -> isize {
     let mut new_addr = 0;
     if brk_addr == 0 {
         new_addr = current_task().unwrap().sbrk(0);
-    }
-    else{
+    } else {
         let former_addr = current_task().unwrap().sbrk(0);
         let grow_size: isize = (brk_addr - former_addr) as isize;
         new_addr = current_task().unwrap().sbrk(grow_size);
     }
-    
+
     println!("[sys_brk] brk_addr:{:X}; new_addr:{:X}", brk_addr, new_addr);
     new_addr as isize
 }
@@ -194,43 +187,43 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
     match open(
-            inner.get_work_path().as_str(),
-            path.as_str(),
-            OpenFlags::RDONLY,
-            crate::fs::DiskInodeType::File,
-        ) {
+        inner.get_work_path().as_str(),
+        path.as_str(),
+        OpenFlags::RDONLY,
+        crate::fs::DiskInodeType::File,
+    ) {
         Some(app_inode) => {
-                drop(inner);
-                let len = app_inode.get_size();
-                let j: usize = len % PAGE_SIZE;
-                let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
-                let start: usize = MEMORY_END;
-                println!("[sys_exec] File size: {} bytes", len);
-                crate::mm::KERNEL_SPACE.lock().alloc(
-                    start,
-                    lrnd,
-                    (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
-                );
+            drop(inner);
+            let len = app_inode.get_size();
+            let j: usize = len % PAGE_SIZE;
+            let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
+            let start: usize = MEMORY_END;
+            println!("[sys_exec] File size: {} bytes", len);
+            crate::mm::KERNEL_SPACE.lock().alloc(
+                start,
+                lrnd,
+                (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
+            );
 
-                /*read into all data*/
-                unsafe {
-                    let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
-                    app_inode.read_into(&mut buf);
-                }
-                println!("[sys_exec] read_all() DONE.");
-                let task = current_task().unwrap();
-                let argc = args_vec.len();
-                unsafe {
-                    let all_data = core::slice::from_raw_parts(start as *const u8, len);
-                    task.exec(all_data, args_vec);
-                }
-                println!("[sys_exec] exec() DONE.");
-
-                //remember to UNMAP here!
-                // return argc because cx.x[10] will be covered with it later
-
-                argc as isize
+            /*read into all data*/
+            unsafe {
+                let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
+                app_inode.read_into(&mut buf);
             }
+            println!("[sys_exec] read_all() DONE.");
+            let task = current_task().unwrap();
+            let argc = args_vec.len();
+            unsafe {
+                let all_data = core::slice::from_raw_parts(start as *const u8, len);
+                task.exec(all_data, args_vec);
+            }
+            println!("[sys_exec] exec() DONE.");
+
+            //remember to UNMAP here!
+            // return argc because cx.x[10] will be covered with it later
+
+            argc as isize
+        }
         None => -1,
     }
 }
@@ -274,7 +267,11 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 }
 
 pub fn sys_set_tid_address(tidptr: usize) -> isize {
-    current_task().unwrap().acquire_inner_lock().address.clear_child_tid = tidptr;
+    current_task()
+        .unwrap()
+        .acquire_inner_lock()
+        .address
+        .clear_child_tid = tidptr;
     sys_gettid()
 }
 
@@ -295,18 +292,19 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
     task.munmap(start, len) as isize
 }
 
-pub fn sys_mprotect(addr: usize, len: usize, prot: isize) -> isize{
-    if (addr % PAGE_SIZE != 0) || (len % PAGE_SIZE != 0){ // Not align
+pub fn sys_mprotect(addr: usize, len: usize, prot: isize) -> isize {
+    if (addr % PAGE_SIZE != 0) || (len % PAGE_SIZE != 0) {
+        // Not align
         println!("sys_mprotect: not align");
-        return -1
+        return -1;
     }
     let task = current_task().unwrap();
     // let token = task.acquire_inner_lock().get_user_token();
     let memory_set = &mut task.acquire_inner_lock().memory_set;
     let start_vpn = addr / PAGE_SIZE;
-    for i in 0..(len/PAGE_SIZE){
+    for i in 0..(len / PAGE_SIZE) {
         // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
-        if memory_set.set_pte_flags(start_vpn.into(), (prot as usize)<<1) == -1{
+        if memory_set.set_pte_flags(start_vpn.into(), (prot as usize) << 1) == -1 {
             // if fail
             panic!("sys_mprotect: No such pte");
         }
@@ -324,36 +322,46 @@ pub const USEC_PER_SEC: usize = 1000_000;
 pub const NSEC_PER_SEC: usize = 1000_000_000;
 
 pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
-    if tp as usize == 0 {// point is null
+    if tp as usize == 0 {
+        // point is null
         return 0;
     }
-    
+
     let token = current_user_token();
     let mut ticks = 0;
-    unsafe{
+    unsafe {
         asm!(
             "rdtime a0",
             inout("a0") ticks
         );
     }
-    let sec = (ticks/CLOCK_FREQ) as u64;
-    let nsec = ((ticks%CLOCK_FREQ) * (NSEC_PER_SEC / CLOCK_FREQ))  as u64;
-    *translated_refmut(token, tp) = sec ;
+    let sec = (ticks / CLOCK_FREQ) as u64;
+    let nsec = ((ticks % CLOCK_FREQ) * (NSEC_PER_SEC / CLOCK_FREQ)) as u64;
+    *translated_refmut(token, tp) = sec;
     *translated_refmut(token, unsafe { tp.add(1) }) = nsec;
-    println!("sys_get_time(clk_id: {}, tp: (sec: {}, nsec: {}) = {}", clk_id, sec, nsec, 0);
+    println!(
+        "sys_get_time(clk_id: {}, tp: (sec: {}, nsec: {}) = {}",
+        clk_id, sec, nsec, 0
+    );
     0
 }
 
 // Warning, we don't support this syscall in fact
 // It just a 'Shell' for now, literal meaning.
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
-pub fn sys_sigaction(signum: isize, act :*mut usize, oldact: *mut usize) -> isize{
-    println!("[sys_sigaction] signum:{:?}; act_addr:{:?}, oldact:{:?}", signum, act, oldact);
+pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
+    println!(
+        "[sys_sigaction] signum:{:?}; act_addr:{:?}, oldact:{:?}",
+        signum, act, oldact
+    );
     0
 }
 // Warning, we don't support this syscall in fact
 // The same as above
-pub fn sys_sigprocmask(how: usize, set:*mut usize, oldset:*mut usize) -> isize{
-    println!("[sys_sigprocmask] how:{:?}; set:{:?}, oldset:{:?}", how, set, oldset);
+pub fn sys_sigprocmask(how: usize, set: *mut usize, oldset: *mut usize) -> isize {
+    println!(
+        "[sys_sigprocmask] how:{:?}; set:{:?}, oldset:{:?}",
+        how, set, oldset
+    );
     0
 }
