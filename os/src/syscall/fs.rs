@@ -5,6 +5,7 @@ use crate::task::{current_task, current_user_token};
 use alloc::sync::Arc;
 use core::mem::size_of;
 use crate::task::FdTable;
+use log::{error, warn, info, debug, trace};
 
 const AT_FDCWD:isize = -100;
 pub const FD_LIMIT:usize = 128;
@@ -246,7 +247,7 @@ pub fn sys_readlinkat(dirfd: isize, pathname: *const u8, buf: *mut u8, bufsiz: u
         let buff = procinfo.as_bytes();
         userbuf.write(buff);
         let len = procinfo.len()-1;
-        println!("sys_readlinkat(dirfd = {}, pathname = {}, *buf = 0x{:X}, bufsiz = {}) = {}", dirfd, path, buf as usize, bufsiz, len);
+        info!("[sys_readlinkat] dirfd = {}, pathname = {}, *buf = 0x{:X}, bufsiz = {}, len = {}", dirfd, path, buf as usize, bufsiz, len);
         return len as isize;
     }
     else{
@@ -277,7 +278,7 @@ pub fn sys_newfstatat(fd:isize, path: *const u8, buf: *mut u8, flag: u32)->isize
         ) {
             file.get_newstat(&mut stat);
             //file.get_fstat(&mut stat);
-            println!("[sys_fstatat](fd:{}, path = {:?}, buff addr = 0x{:X},  [size = {}]) ", fd, path, buf as usize, stat.st_size );
+            info!("[sys_newfstatat] fd = {}, path = {:?}, buff addr = 0x{:X}, size = {}", fd, path, buf as usize, stat.st_size );
             userbuf.write(stat.as_bytes());
             return 0;
         } else {
@@ -321,7 +322,7 @@ pub fn sys_fstat(fd:isize, buf: *mut u8)->isize{
             DiskInodeType::Directory
         ) {
             file.get_fstat(&mut kstat);
-            println!("syscall_fstat(fd:{}, [size = {}]) ", fd, kstat.st_size );
+            info!("[syscall_fstat] fd = {}, size = {}", fd, kstat.st_size );
             userbuf.write(kstat.as_bytes());
             return 0
         } else {
@@ -337,12 +338,12 @@ pub fn sys_fstat(fd:isize, buf: *mut u8)->isize{
                 FileClass::File(f) => {
                     f.get_fstat(&mut kstat);
                     userbuf.write(kstat.as_bytes());
-                    println!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size );
+                    info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size );
                     return 0
                 },
                 _ => {
                     userbuf.write(Kstat::new_abstract().as_bytes());
-                    println!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size );
+                    info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size );
                     return 0 //warning
                 },
             }
@@ -357,7 +358,7 @@ pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isiz
     let token = current_user_token();
     // 这里传入的地址为用户的虚地址，因此要使用用户的虚地址进行映射
     let path = translated_str(token, path);
-    println!("[sys_openat] path:{}", path);
+    info!("[sys_openat] path:{}", path);
     let mut inner = task.acquire_inner_lock();
     
     /////////////////////////////// WARNING ////////////////////////////////
@@ -537,7 +538,7 @@ pub fn fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
         return -1;
     }
 
-    println!("fd:{}, cmd:{}, arg:{}", fd, cmd, arg);
+    info!("[sys_fcntl] fd:{}, cmd:{}, arg:{}", fd, cmd, arg);
 
     if let Some(file) = &mut inner.fd_table[fd] {
         match cmd {

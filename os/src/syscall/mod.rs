@@ -82,6 +82,7 @@ mod process;
 
 use fs::*;
 use process::*;
+use log::{error, warn, info, debug, trace};
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     match syscall_id {
@@ -128,6 +129,9 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         SYSCALL_MPROTECT => {sys_mprotect(args[0] as usize, args[1] as usize, args[2] as isize)},
         //SYSCALL_GET_TIME_OF_DAY =>
-        _ => panic!("Unsupported syscall_id: {}", syscall_id),
+        _ => {
+            error!("Unsupported syscall_id: {}", syscall_id);
+            sys_exit(-1);
+        }
     }
 }

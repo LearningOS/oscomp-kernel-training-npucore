@@ -39,6 +39,7 @@ fn clear_bss() {
 #[no_mangle]
 pub fn rust_main() -> ! {
     clear_bss();
+    console::log_init();
     println!("[kernel] Hello, world!");
     mm::init();
     mm::remap_test();
