@@ -164,7 +164,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
                 syscall_id
             );
             for i in 0..args.len() {
-                debug!("args[{}]: {}", i, args[i]);
+                debug!("args[{}]: {:X}", i, args[i]);
             }
             info!("Exiting.");
             sys_exit(-1)
