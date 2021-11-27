@@ -218,6 +218,73 @@ pub fn sys_pipe(pipe: *mut usize) -> isize {
     0
 }
 
+pub fn sys_getdents64(fd:isize, buf: *mut u8, len:usize)->isize{
+    //return 0;
+    //println!("=====================================");
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let buf_vec = translated_byte_buffer(token, buf, len);
+    let inner = task.acquire_inner_lock();
+    let dent_len = size_of::<Dirent>();
+    //let max_num = len / dent_len;
+    let mut total_len:usize = 0;
+    // 使用UserBuffer结构，以便于跨页读写
+    let mut userbuf = UserBuffer::new(buf_vec);
+    let mut dirent = Dirent::empty();
+    if fd == AT_FDCWD {
+        let work_path = inner.current_path.clone();
+        if let Some(file) = open(
+            "/",
+            work_path.as_str(),
+            OpenFlags::RDONLY,
+            DiskInodeType::Directory
+        ) {
+            loop {
+                if total_len + dent_len > len {break;}
+                if file.getdirent(&mut dirent) > 0 {
+                    userbuf.write_at( total_len, dirent.as_bytes());
+                    total_len += dent_len;
+                } else {
+                    break;
+                }
+            }
+            info!("[sys_getdents64] fd:{}, len:{} = {}", fd, len, total_len);
+            return total_len as isize; //warning
+        } else {
+            info!("[sys_getdents64] fd:{}, len:{} = {}", fd, len, -1);
+            return -1
+        }
+    } else {
+        let fd_usz = fd as usize;
+        if fd_usz >= inner.fd_table.len() && fd_usz > FD_LIMIT {
+            return -1
+        }
+        if let Some(file) = &inner.fd_table[fd_usz] {
+            match &file.fclass {
+                FileClass::File(f) => {
+                    loop {
+                        if total_len + dent_len > len {break;}
+                        if f.getdirent(&mut dirent) > 0 {
+                            userbuf.write_at( total_len, dirent.as_bytes());
+                            total_len += dent_len;
+                        } else {
+                            break;
+                        }
+                    }
+                    info!("[sys_getdents64] fd:{}, len:{} = {}", fd, len, total_len);
+                    return total_len as isize; //warning
+                },
+                _ => {
+                    info!("[sys_getdents64] fd:{} = {}", fd, -1);
+                    return -1;
+                }
+            }
+        } else {
+            return -1
+        }
+    }
+}
+
 pub fn sys_dup(fd: usize) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();

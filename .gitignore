@@ -9,3 +9,4 @@ user/.idea/*
 user/Cargo.lock
 tools/
 user/busybox_lua_testsuites/busybox_unstripped
+user/virt_root
