@@ -213,13 +213,6 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
                 app_inode.read_into(&mut buf);
             }
 
-            let task = current_task().unwrap();
-            let argc = args_vec.len();
-            unsafe {
-                let all_data = core::slice::from_raw_parts(start as *const u8, len);
-                task.exec(all_data, args_vec);
-            }
-
             //remember to UNMAP here!
             // return argc because cx.x[10] will be covered with it later
 

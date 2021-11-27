@@ -52,7 +52,7 @@ impl Log for Logger {
 
     fn log(&self, record: &Record) {
         if !self.enabled(record.metadata()) {
-            return
+            return;
         }
 
         print!("\x1b[{}m", level_to_color_code(record.level()));
