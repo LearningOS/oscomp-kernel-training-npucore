@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
+use log::{error, warn, info, debug, trace};
 
 bitflags! {
     pub struct PTEFlags: u8 {
@@ -151,7 +152,7 @@ impl PageTable {
         8usize << 60 | self.root_ppn.0
     }
     pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: usize) -> isize{
-        println!("[set pte flags] vpn:{:X}", vpn.0);
+        trace!("[set pte flags] vpn:{:X}", vpn.0);
         let idxs = vpn.indexes();
         let mut ppn = self.root_ppn;
         for i in 0..3 {

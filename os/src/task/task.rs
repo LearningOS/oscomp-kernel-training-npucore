@@ -17,6 +17,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
+use log::{error, warn, info, debug, trace};
 
 pub struct TaskControlBlock {
     // immutable
@@ -152,8 +153,8 @@ impl TaskControlBlock {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
             MemorySet::from_elf(elf_data);
-        println!(
-            "[exec] load DONE. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}",
+        info!(
+            "[exec] elf_data LOADED. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}",
             user_sp, user_heap, entry_point
         );
         crate::mm::KERNEL_SPACE
@@ -392,9 +393,9 @@ impl TaskControlBlock {
         if increment > 0 {
             let limit = inner.heap_bottom + USER_HEAP_SIZE;
             if new_pt > limit {
-                println!(
-                    "[sbrk] over the upperbond! {} {} {} {}",
-                    limit, inner.heap_pt, new_pt, self.pid.0
+                warn!(
+                    "[sbrk] over the upperbond! upperbond = {:X} old_pt = {:X} new_pt = {:X} pid = {:X}",
+                    limit, old_pt, new_pt, self.pid.0
                 );
                 return old_pt;
             }
@@ -406,7 +407,9 @@ impl TaskControlBlock {
             inner.heap_pt = new_pt;
         } else {
             if new_pt < inner.heap_bottom {
-                println!("[sbrk] shrinked to the lowest boundary!");
+                warn!("[sbrk] over the lowerbond! lowerbond = {:X} old_pt = {:X} new_pt = {:X} pid = {:X}",
+                inner.heap_bottom, old_pt, new_pt, self.pid.0
+            );
                 return old_pt;
             }
             inner.heap_pt = new_pt;
@@ -424,7 +427,7 @@ impl TaskControlBlock {
         fd: usize,     // 被映射文件
         offset: usize, // 文件位移
     ) -> usize {
-        println!(
+        info!(
             "[mmap] start:{:X}; len:{:X}; prot:{:X}; flags:{:X}; fd:{:X}; offset:{:X}",
             start, len, prot, flags, fd, offset
         );

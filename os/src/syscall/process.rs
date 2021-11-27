@@ -4,6 +4,7 @@ use crate::mm::{
     translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer,
 };
 use crate::task::signal::*;
+use crate::task::signal::*;
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next,
@@ -13,6 +14,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
+use log::{debug, error, info, trace, warn};
 
 pub struct utsname {
     sysname: [u8; 65],
@@ -77,7 +79,7 @@ pub fn sys_uname(buf: *mut u8) -> isize {
 
 pub fn sys_getpid() -> isize {
     let pid = current_task().unwrap().pid.0;
-    println!("[sys_getpid] pid:{}", pid);
+    info!("[sys_getpid] pid:{}", pid);
     pid as isize
 }
 
@@ -85,7 +87,7 @@ pub fn sys_getppid() -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let ppid = inner.parent.as_ref().unwrap().upgrade().unwrap().pid.0;
-    println!("[sys_getppid] ppid:{}", ppid);
+    info!("[sys_getppid] ppid:{}", ppid);
     ppid as isize
 }
 
@@ -109,7 +111,7 @@ pub fn sys_getegid() -> isize {
 // So it just pretend to do this work.
 // Fortunately, that won't make difference when we just try to run busybox sh so far.
 pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
-    println!("[sys_setpgid] pid:{}; pgid:{}", pid, pgid);
+    info!("[sys_setpgid] pid:{}; pgid:{}", pid, pgid);
     if pid == 0 {
         let task = current_task().unwrap();
         if pgid == 0 {
@@ -124,7 +126,7 @@ pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
 }
 
 pub fn sys_getpgid(pid: usize) -> isize {
-    println!("[sys_getpgid] pid:{}", pid);
+    info!("[sys_getpgid] pid:{}", pid);
     if pid == 0 {
         current_task().unwrap().getpgid() as isize
     } else {
@@ -151,12 +153,12 @@ pub fn sys_brk(brk_addr: usize) -> isize {
         new_addr = current_task().unwrap().sbrk(grow_size);
     }
 
-    println!("[sys_brk] brk_addr:{:X}; new_addr:{:X}", brk_addr, new_addr);
+    info!("[sys_brk] brk_addr:{:X}; new_addr:{:X}", brk_addr, new_addr);
     new_addr as isize
 }
 
 pub fn sys_fork() -> isize {
-    println!("[sys_fork]");
+    info!("[sys_fork]");
     let current_task = current_task().unwrap();
     let new_task = current_task.fork();
     let new_pid = new_task.pid.0;
@@ -198,7 +200,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
             let j: usize = len % PAGE_SIZE;
             let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
             let start: usize = MEMORY_END;
-            println!("[sys_exec] File size: {} bytes", len);
+            debug!("[sys_exec] File size: {} bytes", len);
             crate::mm::KERNEL_SPACE.lock().alloc(
                 start,
                 lrnd,
@@ -210,20 +212,32 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
                 let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
                 app_inode.read_into(&mut buf);
             }
-            println!("[sys_exec] read_all() DONE.");
+
             let task = current_task().unwrap();
             let argc = args_vec.len();
             unsafe {
                 let all_data = core::slice::from_raw_parts(start as *const u8, len);
                 task.exec(all_data, args_vec);
             }
-            println!("[sys_exec] exec() DONE.");
+
+            //remember to UNMAP here!
+            // return argc because cx.x[10] will be covered with it later
+
+            info!("[sys_exec] read_all() DONE.");
+            let task = current_task().unwrap();
+            let argc = args_vec.len();
+            unsafe {
+                let all_data = core::slice::from_raw_parts(start as *const u8, len);
+                task.exec(all_data, args_vec);
+            }
+            info!("[sys_exec] exec() DONE.");
 
             //remember to UNMAP here!
             // return argc because cx.x[10] will be covered with it later
 
             argc as isize
         }
+
         None => -1,
     }
 }
@@ -295,7 +309,7 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
 pub fn sys_mprotect(addr: usize, len: usize, prot: isize) -> isize {
     if (addr % PAGE_SIZE != 0) || (len % PAGE_SIZE != 0) {
         // Not align
-        println!("sys_mprotect: not align");
+        warn!("sys_mprotect: not align");
         return -1;
     }
     let task = current_task().unwrap();
@@ -339,7 +353,7 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     let nsec = ((ticks % CLOCK_FREQ) * (NSEC_PER_SEC / CLOCK_FREQ)) as u64;
     *translated_refmut(token, tp) = sec;
     *translated_refmut(token, unsafe { tp.add(1) }) = nsec;
-    println!(
+    info!(
         "sys_get_time(clk_id: {}, tp: (sec: {}, nsec: {}) = {}",
         clk_id, sec, nsec, 0
     );
@@ -350,7 +364,7 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
 // It just a 'Shell' for now, literal meaning.
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
-    println!(
+    info!(
         "[sys_sigaction] signum:{:?}; act_addr:{:?}, oldact:{:?}",
         signum, act, oldact
     );
@@ -358,8 +372,9 @@ pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isiz
 }
 // Warning, we don't support this syscall in fact
 // The same as above
+
 pub fn sys_sigprocmask(how: usize, set: *mut usize, oldset: *mut usize) -> isize {
-    println!(
+    info!(
         "[sys_sigprocmask] how:{:?}; set:{:?}, oldset:{:?}",
         how, set, oldset
     );

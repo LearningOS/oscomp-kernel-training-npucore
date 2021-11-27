@@ -15,6 +15,7 @@ use core::panic;
 use lazy_static::*;
 use riscv::register::satp;
 use spin::Mutex;
+use log::{error, warn, info, debug, trace};
 
 extern "C" {
     fn stext();
@@ -47,7 +48,7 @@ pub struct MemorySet {
 
 impl MemorySet {
     pub fn munmap(&mut self, start: usize, len: usize) -> i32 {
-        println!("[munmap] Trying to unmap start area beg. with {}.", start);
+        info!("[munmap] Trying to unmap start area beg. with {}.", start);
         if len == 0 {
             return 0;
         }
@@ -60,7 +61,7 @@ impl MemorySet {
             for vpn in m.vpn_range {
                 match m.map_type {
                     MapType::Framed => {
-                        println!(
+                        debug!(
                             "[munmap] Removing {}",
                             (m.data_frames.get(&vpn).unwrap()).ppn.0
                         );
@@ -93,7 +94,7 @@ impl MemorySet {
         len: usize,       // 内存映射长度
         prot: usize,      // 保护位标志
     ) -> i32 {
-        println!("[alloc] trying to alloc start area beg. with {}.", start);
+        info!("[alloc] trying to alloc start area beg. with {}.", start);
         if len == 0 {
             return 0;
         }
@@ -109,7 +110,7 @@ impl MemorySet {
         }
         if let Some(i) = MapPermission::from_bits(per) {
             let m: MapArea = MapArea::new(start.into(), (len + start).into(), MapType::Framed, i);
-            println!("[alloc] start with:{}", m.vpn_range.get_start().0);
+            debug!("[alloc] start with:{}", m.vpn_range.get_start().0);
             if let Ok(_) = self.push(m, None) {
                 unsafe {
                     llvm_asm!("sfence.vma" :::: "volatile");
@@ -219,7 +220,6 @@ impl MemorySet {
         Ok(())
     }
     fn push_with_offset(&mut self, mut map_area: MapArea, offset: usize, data: Option<&[u8]>) {
-        // println!{"3"}
         map_area.map(&mut self.page_table);
         if let Some(data) = data {
             map_area.copy_data(&mut self.page_table, data, offset);
@@ -511,7 +511,7 @@ impl MemorySet {
                         ),
                     );
                 }
-                println!("[elf] LOAD SEGMENT PUSHED. start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}", start_va.0, end_va.0, offset);
+                trace!("[elf] LOAD SEGMENT PUSHED. start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}", start_va.0, end_va.0, offset);
             }
         }
 
@@ -540,7 +540,7 @@ impl MemorySet {
             ),
             None,
         );
-        println!(
+        trace!(
             "[elf] USER STACK PUSHED. user_stack_top:{:X}; user_stack_bottom:{:X}",
             user_stack_top, user_stack_bottom
         );
@@ -554,7 +554,7 @@ impl MemorySet {
             ),
             None,
         );
-        println!(
+        trace!(
             "[elf] TRAP CONTEXT PUSHED. start_va:{:X}; end_va:{:X}",
             TRAP_CONTEXT, TRAMPOLINE
         );
@@ -620,7 +620,7 @@ impl MapArea {
     ) -> Self {
         let start_vpn: VirtPageNum = start_va.floor();
         let end_vpn: VirtPageNum = end_va.ceil();
-        println!(
+        trace!(
             "[MapArea new] start_vpn:{:X}; end_vpn:{:X}; map_perm:{:b}",
             start_vpn.0,
             end_vpn.0,
@@ -733,7 +733,7 @@ pub struct MmapArea {
 
 impl MmapArea {
     pub fn new(fd: isize, start_va: VirtAddr, end_va: VirtAddr, map_perm: MapPermission) -> Self {
-        println!(
+        debug!(
             "[MmapArea new] fd:{:X}; start_va:{:X}; end_va:{:X}",
             fd, start_va.0, end_va.0
         );
@@ -753,7 +753,7 @@ impl MmapArea {
     ) -> isize {
         let flags = MmapFlags::from_bits(flags).unwrap();
         if flags.contains(MmapFlags::MAP_ANONYMOUS) && self.fd == -1 && offset == 0 {
-            println!("[map file] map anonymous file");
+            debug!("[map file] map anonymous file");
             return 1;
         }
 
@@ -768,13 +768,13 @@ impl MmapArea {
                     if !f.readable() {
                         return -1;
                     }
-                    println! {"[map file] The start_va is 0x{:X}, offset of file is {}", start_va.0, offset};
+                    debug! {"[map file] The start_va is 0x{:X}, offset of file is {}", start_va.0, offset};
                     let read_len = f.read(UserBuffer::new(translated_byte_buffer(
                         token,
                         start_va.0 as *const u8,
                         len,
                     )));
-                    println! {"[map file] read {} bytes", read_len};
+                    trace! {"[map file] read {} bytes", read_len};
                 }
                 _ => {
                     return -1;
@@ -842,5 +842,5 @@ pub fn remap_test() {
             .executable(),
         false,
     );
-    println!("remap_test passed!");
+    info!("remap_test passed!");
 }

@@ -20,6 +20,7 @@ k210-soc = { path = "../dependency/k210-soc" }
 simple-fat32 = { path = "../simple_fat32" }
 embedded-hal = "=1.0.0-alpha.1"
 nb = "1"
+log = "0.4.14"
 
 [features]
 board_qemu = []

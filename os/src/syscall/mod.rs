@@ -81,6 +81,7 @@ pub mod fs;
 mod process;
 
 use fs::*;
+use log::{debug, error, info, trace, warn};
 use process::*;
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
@@ -157,14 +158,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_MPROTECT => sys_mprotect(args[0] as usize, args[1] as usize, args[2] as isize),
         //SYSCALL_GET_TIME_OF_DAY =>
         _ => {
-            println!(
+            error!(
                 "Unsupported syscall_id: {}, calling over arguments:",
                 syscall_id
             );
             for i in 0..args.len() {
-                println!("args[{}]: {}", i, args[i]);
+                debug!("args[{}]: {}", i, args[i]);
             }
-            println!("Exiting.");
+            info!("Exiting.");
             sys_exit(-1)
         }
     }
