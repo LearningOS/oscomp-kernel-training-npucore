@@ -13,16 +13,8 @@ const BS: u8 = 0x08u8;
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use user_lib::{
-    fork,
-    exec,
-    waitpid,
-    open,
-    OpenFlags,
-    close,
-    dup,
-};
 use user_lib::console::getchar;
+use user_lib::{close, dup, exec, fork, open, waitpid, OpenFlags};
 
 #[no_mangle]
 pub fn main() -> i32 {
@@ -37,26 +29,25 @@ pub fn main() -> i32 {
                 if !line.is_empty() {
                     let args: Vec<_> = line.as_str().split(' ').collect();
                     let mut args_copy: Vec<String> = args
-                    .iter()
-                    .map(|&arg| {
-                        let mut string = String::new();
-                        string.push_str(arg);
-                        string
-                    })
-                    .collect();
+                        .iter()
+                        .map(|&arg| {
+                            let mut string = String::new();
+                            string.push_str(arg);
+                            string
+                        })
+                        .collect();
 
-                    args_copy
-                    .iter_mut()
-                    .for_each(|string| {
+                    args_copy.iter_mut().for_each(|string| {
                         string.push('\0');
                     });
 
                     // redirect input
                     let mut input = String::new();
                     if let Some((idx, _)) = args_copy
-                    .iter()
-                    .enumerate()
-                    .find(|(_, arg)| arg.as_str() == "<\0") {
+                        .iter()
+                        .enumerate()
+                        .find(|(_, arg)| arg.as_str() == "<\0")
+                    {
                         input = args_copy[idx + 1].clone();
                         args_copy.drain(idx..=idx + 1);
                     }
@@ -64,17 +55,16 @@ pub fn main() -> i32 {
                     // redirect output
                     let mut output = String::new();
                     if let Some((idx, _)) = args_copy
-                    .iter()
-                    .enumerate()
-                    .find(|(_, arg)| arg.as_str() == ">\0") {
+                        .iter()
+                        .enumerate()
+                        .find(|(_, arg)| arg.as_str() == ">\0")
+                    {
                         output = args_copy[idx + 1].clone();
                         args_copy.drain(idx..=idx + 1);
                     }
 
-                    let mut args_addr: Vec<*const u8> = args_copy
-                        .iter()
-                        .map(|arg| arg.as_ptr())
-                        .collect();
+                    let mut args_addr: Vec<*const u8> =
+                        args_copy.iter().map(|arg| arg.as_ptr()).collect();
                     args_addr.push(0 as *const u8);
                     let pid = fork();
                     if pid == 0 {
@@ -92,10 +82,8 @@ pub fn main() -> i32 {
                         }
                         // output redirection
                         if !output.is_empty() {
-                            let output_fd = open(
-                                output.as_str(),
-                                OpenFlags::CREATE | OpenFlags::WRONLY
-                            );
+                            let output_fd =
+                                open(output.as_str(), OpenFlags::CREATE | OpenFlags::WRONLY);
                             if output_fd == -1 {
                                 println!("Error when opening file {}", output);
                                 return -4;

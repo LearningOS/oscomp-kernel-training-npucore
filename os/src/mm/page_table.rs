@@ -349,6 +349,15 @@ impl UserBuffer {
         //}
         0
     }
+    /* pub fn get_nth_struct<T>(&self, n: usize) -> T {
+     *     let mut ret: T;
+     *     let offset = n * core::mem::size_of::<T>(); //size rounded to byte
+     *     let bitpos = offset & 0b111;
+     *     let start = offset >> 3;
+     * 	if core::mem::sizeof::<T>()<4
+     *     //ret = T read in size_of(T) at an offset of n*size_of(T)
+     *     ret
+     * } */
 }
 
 impl IntoIterator for UserBuffer {

@@ -29,55 +29,74 @@ impl File for Stdin {
     fn writable(&self) -> bool {
         false
     }
+    fn r_ready(&self) -> bool {
+        //println!("!!!!{}", *STDINLOCK.lock().deref());
+        let mut lock = STDINLOCK.lock();
+        let mut c: usize;
+        if *(lock.deref()) == (0 as usize) || *(lock.deref()) == (usize::max_value() - 1 as usize) {
+            *lock.deref_mut() = console_getchar();
+            if *lock.deref() != 0 {
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        }
+    }
+    fn w_ready(&self) -> bool {
+        false
+    }
     fn read(&self, mut user_buf: UserBuffer) -> usize {
-        //assert_eq!(user_buf.len(), 1);
-        let lock = STDINLOCK.lock();
+        let mut lock = STDINLOCK.lock();
         // busy loop
         let mut c: usize;
         let mut count = 0;
         if user_buf.len() > 1 {
             return 0;
         }
+        fn wr_buf(user_buf: &mut UserBuffer, ch: &u8, i: usize) {
+            unsafe {
+                user_buf.buffers[i].as_mut_ptr().write_volatile(*ch);
+            }
+        }
+        fn blocking_read(user_buf: &mut UserBuffer) -> usize {
+            let mut i: usize = 1;
+            if i < user_buf.len() {
+                let c: u8 = console_getchar() as u8;
+                while c != 0 && i < user_buf.len() {
+                    wr_buf(user_buf, &c, i);
+                    i += 1;
+                }
+            }
+            i
+        }
+        let mut ret: usize = 0;
         loop {
-            c = console_getchar();
-            if c == 0 {
+            if *lock.deref() == 0 {
+                *lock.deref_mut() = console_getchar();
+                if *lock.deref() != 0 {
+                    c = *lock.deref();
+                    wr_buf(&mut user_buf, &(c as u8), 0);
+
+                    ret = blocking_read(&mut user_buf);
+
+                    *lock.deref_mut() = 0 as usize;
+                    break;
+                }
                 suspend_current_and_run_next();
                 continue;
             } else {
+                c = *lock.deref();
+                wr_buf(&mut user_buf, &(c as u8), 0);
+
+                ret = blocking_read(&mut user_buf);
+
+                *lock.deref_mut() = 0 as usize;
                 break;
             }
         }
-        let ch = c as u8;
-        unsafe {
-            user_buf.buffers[0].as_mut_ptr().write_volatile(ch);
-            //user_buf.write_at(count, ch);
-        }
-        return 1;
-        /*
-        loop {
-            if count == user_buf.len(){
-                break;
-            }
-            loop {
-                c = console_getchar();
-                if c == 0 {
-                    suspend_current_and_run_next();
-                    continue;
-                } else {
-                    break;
-                }
-            }
-            let ch = c as u8;
-            if ch as char == '\n' {
-                break;
-            }
-            unsafe {
-                //user_buf.buffers[0].as_mut_ptr().write_volatile(ch);
-                user_buf.write_at(count, ch);
-            }
-            count += 1;
-        }
-        count*/
+        return ret;
     }
     fn write(&self, _user_buf: UserBuffer) -> usize {
         panic!("Cannot write to stdin!");
@@ -224,7 +243,7 @@ pub(crate) fn legacy_stdio_getchar() -> u8 {
     }
 }
 
-use core::fmt;
+use core::{fmt, ops::DerefMut};
 
 //struct Stdout;
 

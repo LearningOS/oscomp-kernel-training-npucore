@@ -87,6 +87,11 @@ pub fn read(fd: usize, buf: &mut [u8]) -> isize {
 pub fn write(fd: usize, buf: &[u8]) -> isize {
     sys_write(fd, buf)
 }
+pub fn getchar() -> u8 {
+    let mut buf: [u8; 1] = [0u8];
+    sys_read(0, &mut buf);
+    buf[0]
+}
 pub fn exit(exit_code: i32) -> ! {
     sys_exit(exit_code);
 }

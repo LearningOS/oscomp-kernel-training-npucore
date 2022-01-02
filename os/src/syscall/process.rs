@@ -232,7 +232,8 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
         }
 
         None => -1,
-    }
+    };
+    0
 }
 
 /// If there is not a child process whose pid is same as given, return -1.
