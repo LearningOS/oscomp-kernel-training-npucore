@@ -283,7 +283,15 @@ impl OSInode {
 
     pub fn lseek(&self, offset: isize, whence: i32) -> isize {
         let mut inner = self.inner.lock();
+        log::info!(
+            "[OSInode] lseek(offset={},whence={}), file offset: {}",
+            offset,
+            whence,
+            inner.offset
+        );
         if whence == SEEK_END {
+            //if inner.offset as isize - offset < 0
+
             if inner.offset as isize - offset < 0 {
                 return -1;
             }
@@ -299,7 +307,9 @@ impl OSInode {
             }
             SEEK_END => {
                 let size = inner.inode.get_size();
-                inner.offset = (size as isize + offset - 1) as usize;
+                inner.offset = (size as isize + offset) as usize;
+                // was once
+                // `(size as isize + offset - 1) as usize;`
             }
             SEEK_SET => {
                 inner.offset = offset as usize;

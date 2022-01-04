@@ -1,6 +1,9 @@
 use lazy_static::__Deref;
 
-use crate::task::{current_task, suspend_current_and_run_next};
+use crate::{
+    mm::{copy_from_user, translated_byte_buffer},
+    task::{current_task, suspend_current_and_run_next},
+};
 
 ///  A scheduling  scheme  whereby  the  local  process  periodically  checks  until  the  pre-specified events (for example, read, write) have occurred.
 use super::{FileDescripter, OSInode};
@@ -30,15 +33,14 @@ const POLLHUP: usize = 0x010;
 const POLLNVAL: usize = 0x020;
 
 /// The PollFd struct in 32-bit style.
-/// Members:
-///   [fd](PollFd.fd): u32 file descriptor
-///   [events](PollFd.events): u16 requested events
-///   [revents](PollFd.revents) :u16 returned events
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct PollFd {
+    /// File descriptor
     fd: u32,
+    /// Requested events
     events: u16,
+    /// Returned events
     revents: u16,
 }
 
@@ -48,17 +50,26 @@ impl PollFd {
 pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
     ppoll(poll_fd, nfds, time_spec, 0)
 }
-pub fn ppoll(poll_fd: usize, nfds: usize, time_spec: usize, sigmask: usize) -> isize {
+pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: usize) -> isize {
     /*the sigmask is so far ignored */
     /*support only POLLIN for currently*/
-    let poll_fd = unsafe {  };
     let mut done: isize = 0;
     let mut no_abs: bool = true;
-    let task = current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
-    //println!("poll_fd:{:?}", poll_fd[0]);
+    let mut poll_fd: alloc::vec::Vec<PollFd> = alloc::vec::Vec::with_capacity(nfds);
+    poll_fd.resize(
+        nfds,
+        PollFd {
+            fd: 0,
+            events: 0,
+            revents: 0,
+        },
+    );
+    //    println!("poll_fd:{:?}, Hi!", poll_fd);
+    copy_from_user(&mut poll_fd[0], poll_fd_p, nfds * 8);
     //return 1;
     //poll_fd.len()
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
     if poll_fd.len() != 0 {
         loop {
             let mut i = 0;
@@ -71,13 +82,18 @@ pub fn ppoll(poll_fd: usize, nfds: usize, time_spec: usize, sigmask: usize) -> i
                         None
                     } else {
                         /*should be "poll_fd[i].fd as usize"*/
-                        Some(inner.fd_table[0].as_ref().unwrap().clone())
+                        Some(
+                            inner.fd_table[poll_fd[i].fd as usize]
+                                .as_ref()
+                                .unwrap()
+                                .clone(),
+                        )
                     }
                 };
                 match j.unwrap().fclass {
                     super::FileClass::Abstr(file) => {
                         no_abs = false;
-                        if file.r_ready() && (poll_fd[i].events as usize & POLLIN) != 0 {
+                        if (poll_fd[i].events as usize & POLLIN) != 0 && file.r_ready() {
                             poll_fd[i].revents = POLLIN as u16;
                             done = 1 + i as isize;
                             break;

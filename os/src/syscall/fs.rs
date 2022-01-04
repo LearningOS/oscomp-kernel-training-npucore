@@ -31,6 +31,30 @@ pub fn sys_getcwd(buf: *mut u8, len: usize) -> isize {
         return buf as isize;
     }
 }
+pub fn sys_lseek(fd: usize, offset: usize, whence: usize) -> isize {
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[fd] {
+        let ret = match &file.fclass {
+            FileClass::File(f) => {
+                /*print!("\n");*/
+                info!("lseek(fd={},offset={},whence={}), ", fd, offset, whence);
+                //f.clone();
+
+                f.lseek(offset as isize, whence as i32) as isize
+            }
+            _ => -1,
+        };
+        drop(inner);
+        ret
+    } else {
+        -1
+    }
+}
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();

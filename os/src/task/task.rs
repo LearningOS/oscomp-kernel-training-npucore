@@ -151,6 +151,7 @@ impl TaskControlBlock {
     }
     pub fn exec(&self, elf_data: &[u8], args: Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
+        debug!("args.len():{}", args.len());
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
             MemorySet::from_elf(elf_data);
         info!(

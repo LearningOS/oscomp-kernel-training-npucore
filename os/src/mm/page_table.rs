@@ -5,13 +5,18 @@ use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
 use log::{debug, error, info, trace, warn};
-
 bitflags! {
+    /// Page Table Entry flags
     pub struct PTEFlags: u8 {
+    /// Valid Bit
         const V = 1 << 0;
+    /// Readable Bit
         const R = 1 << 1;
+    /// Writable Bit
         const W = 1 << 2;
+    /// Executable Bit
         const X = 1 << 3;
+    /// User Space Bit, true if it can be accessed from user space.
         const U = 1 << 4;
         const G = 1 << 5;
         const A = 1 << 6;
@@ -19,6 +24,7 @@ bitflags! {
     }
 }
 
+/// Page Table Entry
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct PageTableEntry {
@@ -62,7 +68,7 @@ pub struct PageTable {
     frames: Vec<FrameTracker>,
 }
 
-/// Assume that it won't oom when creating/mapping.
+/// Assume that it won't encounter oom when creating/mapping.
 impl PageTable {
     pub fn new() -> Self {
         let frame = frame_alloc().unwrap();
@@ -78,6 +84,7 @@ impl PageTable {
             frames: Vec::new(),
         }
     }
+    /// Predicate for the valid bit.
     pub fn is_mapped(&mut self, vpn: VirtPageNum) -> bool {
         if let Some(i) = self.find_pte(vpn) {
             if i.is_valid() {
@@ -211,6 +218,7 @@ pub fn translated_str(token: usize, ptr: *const u8) -> String {
     string
 }
 
+/// Translate the user space pointer `ptr` into a reference in user space through page table `token`
 pub fn translated_ref<T>(token: usize, ptr: *const T) -> &'static T {
     let page_table = PageTable::from_token(token);
     page_table
@@ -219,6 +227,7 @@ pub fn translated_ref<T>(token: usize, ptr: *const T) -> &'static T {
         .get_ref()
 }
 
+/// Translate the user space pointer `ptr` into a mutable reference in user space through page table `token`
 pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
     let page_table = PageTable::from_token(token);
     let va = ptr as usize;
