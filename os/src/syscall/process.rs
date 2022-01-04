@@ -172,7 +172,7 @@ pub fn sys_fork() -> isize {
     new_pid as isize
 }
 
-pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
+pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
     let mut args_vec: Vec<String> = Vec::new();
@@ -188,7 +188,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     }
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    match open(
+    let i = match open(
         inner.get_work_path().as_str(),
         path.as_str(),
         OpenFlags::RDONLY,
@@ -233,7 +233,11 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
         }
         None => -1,
     };
-    0
+    if who == 0 {
+        0
+    } else {
+        i
+    }
 }
 
 /// If there is not a child process whose pid is same as given, return -1.
