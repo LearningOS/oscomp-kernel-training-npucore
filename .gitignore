@@ -1,15 +1,27 @@
-.idea/*
-os/target/*
-os/.vscode/*
-os/src/link_app.S
+# cargo config
 os/Cargo.lock
-os/last-*
-user/target/*
-user/.idea/*
 user/Cargo.lock
+
+# IDE config
+.idea/
+.vscode/
+
+# kernel build
+os/target/
+
+# user programs build
+user/riscv64/
+user/target/
+
+# a copy of user programs debug build in "user/target/*"(for gdb)
+os/user/
+
+# for virt_root
+user/virt_root/
+
+# unsorted
+os/src/link_app.S
+os/last-*
 tools/
 user/busybox_lua_testsuites/busybox_unstripped
-user/virt_root
 user/.ccls-cache/
-.#*
-user/user_C_program/user/riscv64

@@ -20,10 +20,15 @@ TOP := ../../k210.bin
 
 # BOARD
 BOARD ?= qemu
-SBI ?= rustsbi
+SBI ?= opensbi-1.0
 ifeq ($(BOARD), qemu)
-	BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
-	#BOOTLOADER := default
+	ifeq ($(SBI), rustsbi)
+		BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
+	else ifeq ($(SBI), default)
+		BOOTLOADER := default
+	else
+		BOOTLOADER := ../bootloader/fw_payload.bin
+	endif
 else ifeq ($(BOARD), k210)
 	BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
 endif
@@ -59,19 +64,24 @@ env:
 #(rustup target list | grep "riscv64gc-unknown-none-elf (installed)") || rustup target add $(TARGET)
 #cargo install cargo-binutils
 
+# build all user programs
+user:
+	@cd ../user && make
+
 # dev/zero永远输出0
-sdcard: 
+sdcard:
 	@echo "Are you sure write to $(SDCARD) ? [y/N] " && read ans && [ $${ans:-N} = y ]
 	#@sudo dd if=/dev/zero of=$(SDCARD) bs=1048576 count=16
 	#@sudo dd if=$(FS_IMG) of=$(SDCARD)
 	./buildfs.sh "$(SDCARD)"
+
 $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
 #	@$(OBJDUMP) -S $(KERNEL_ELF) > $(KERNEL_ELF).S
 
 $(APPS):
 
-fat32: 
+fat32:
 	./buildfs.sh "$(U_FAT32_DIR)/fat32.img"
 
 fsimg-format:
@@ -80,11 +90,11 @@ fsimg-format:
 kernel:
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
-ifeq ($(MODE),debug)
-	@cargo build --features "board_$(BOARD)"
-else
-	@cargo build --release --features "board_$(BOARD)"
-endif
+	ifeq ($(MODE), debug)
+		@cargo build --features "board_$(BOARD)"
+	else
+		@cargo build --release --features "board_$(BOARD)"
+	endif
 	@rm src/linker.ld
 
 clean:
@@ -92,10 +102,10 @@ clean:
 
 run: run-inner
 
-run-inner:  build do-run
+run-inner: build do-run
 
 do-run:
-ifeq ($(BOARD),qemu)
+ifeq ($(BOARD), qemu)
 	@qemu-system-riscv64 \
 		-machine virt \
 		-nographic \
