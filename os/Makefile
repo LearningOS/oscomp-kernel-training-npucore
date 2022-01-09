@@ -90,11 +90,11 @@ fsimg-format:
 kernel:
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
-	ifeq ($(MODE), debug)
-		@cargo build --features "board_$(BOARD)"
-	else
-		@cargo build --release --features "board_$(BOARD)"
-	endif
+ifeq ($(MODE), debug)
+	@cargo build --features "board_$(BOARD)"
+else
+	@cargo build --release --features "board_$(BOARD)"
+endif
 	@rm src/linker.ld
 
 clean:
