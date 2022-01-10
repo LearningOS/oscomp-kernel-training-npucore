@@ -6,6 +6,7 @@ KERNEL_BIN := $(KERNEL_ELF).bin
 DISASM_TMP := target/$(TARGET)/$(MODE)/asm
 FS_IMG := ../user/target/$(TARGET)/$(MODE)/fs.img
 U_FAT32_DIR := ../fat32-fuse
+CORE_NUM := 1
 ifeq ($(BOARD), k210)
 	U_FAT32 := /dev/sdc
 else 
@@ -113,7 +114,7 @@ ifeq ($(BOARD), qemu)
 		-device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) \
 		-drive file=$(U_FAT32),if=none,format=raw,id=x0 \
         -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0\
-		-smp threads=2
+		-smp threads=$(CORE_NUM)
 else
 	(which $(K210-BURNER)) || (cd .. && git clone https://gitee.com/begehau/kflash.py.git && mv kflash.py tools)
 	@cp $(BOOTLOADER) $(BOOTLOADER).copy
@@ -141,7 +142,7 @@ gdb:
 	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,\
 	file=target/riscv64gc-unknown-none-elf/debug/os,addr=0x80200000 -drive \
 	file=$(U_FAT32),if=none,format=raw,id=x0 \
-	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -smp threads=2 -S -s
+	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -smp threads=$(CORE_NUM) -S -s
 	
 	#file=target/riscv64gc-unknown-none-elf/$(MODE)/os,addr=0x80200000 -drive \
 
@@ -153,7 +154,7 @@ runsimple:
 		-device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) \
 		-drive file=$(U_FAT32),if=none,format=raw,id=x0 \
         -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0\
-		-smp threads=2
+		-smp threads=$(CORE_NUM)
 
 release: build
 	@cp $(BOOTLOADER) $(BOOTLOADER).copy
