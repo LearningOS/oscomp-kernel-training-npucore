@@ -29,7 +29,7 @@ binary: elf
 	$(foreach elf, $(RELEASE_ELFS), $(OBJCOPY) $(elf) --strip-all -O binary $(patsubst $(RELEASE_DIR)/%, $(RELEASE_DIR)/%.bin, $(elf));)
 
 debug: elf
-	@mkdir ../os/user && cp $(DEBUG_ELFS) ../os/user
+	@mkdir -p ../os/user && cp $(DEBUG_ELFS) ../os/user
 
 clean:
 	@cargo clean

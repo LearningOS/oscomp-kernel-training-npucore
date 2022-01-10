@@ -161,3 +161,4 @@ release: build
 	@dd if=$(KERNEL_BIN) of=$(BOOTLOADER).copy bs=$(K210_BOOTLOADER_SIZE) seek=1
 	@mv $(BOOTLOADER).copy $(TOP)
 
+.PHONY: user
