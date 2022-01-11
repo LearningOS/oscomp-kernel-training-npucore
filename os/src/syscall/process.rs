@@ -111,22 +111,20 @@ pub fn sys_getegid() -> isize {
 // So it just pretend to do this work.
 // Fortunately, that won't make difference when we just try to run busybox sh so far.
 pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
-    info!("[sys_setpgid] pid:{}; pgid:{}", pid, pgid);
-    if pid == 0 {
-        let task = current_task().unwrap();
-        if pgid == 0 {
-            task.setpgid(task.getpid());
-        } else {
-            task.setpgid(pgid);
-        }
-    } else {
-        panic!("[sys_setpgid] Case that pid != 0 haven't been support");
-    }
-    0
+    /*
+     * Note: pid is NOT currently used. Meaning only the currently running pid is used.
+     * Later implementation will add this to the funciton.
+     */
+    //info!("[sys_setpgid] pid:{}; pgid:{}", pid, pgid);
+    let mut task = current_task().unwrap();
+    task.setpgid(pgid)
 }
 
 pub fn sys_getpgid(pid: usize) -> isize {
-    info!("[sys_getpgid] pid:{}", pid);
+    /*
+     * Note: pid is NOT currently used. Meaning only the currently running pid is used.
+     * Later implementation will add this to the funciton.
+     */
     if pid == 0 {
         current_task().unwrap().getpgid() as isize
     } else {

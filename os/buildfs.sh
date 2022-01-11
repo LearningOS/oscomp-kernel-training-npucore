@@ -21,7 +21,7 @@ sudo mount ${U_FAT32} ${U_FAT32_DIR}/fs
 sudo rm ${U_FAT32_DIR}/fs/*
 
 for programname in $(ls ../user/riscv64)
-do 
+do
     sudo cp ../user/riscv64/$programname ${U_FAT32_DIR}/fs/"$programname"
 done
 

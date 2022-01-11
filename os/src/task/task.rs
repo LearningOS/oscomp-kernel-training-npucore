@@ -16,13 +16,13 @@ use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
+use lazy_static::__Deref;
 use log::{debug, error, info, trace, warn};
 use spin::{Mutex, MutexGuard};
 
 pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
-    pub pgid: usize,
     pub kernel_stack: KernelStack,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
@@ -44,6 +44,7 @@ pub struct TaskControlBlockInner {
     pub heap_pt: usize,
     pub current_path: String,
     pub siginfo: SigInfo,
+    pub pgid: usize,
 }
 
 impl TaskControlBlockInner {
@@ -103,10 +104,10 @@ impl TaskControlBlock {
         let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
         let task_control_block = Self {
             pid: pid_handle,
-            pgid: pgid,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
                 trap_cx_ppn,
+                pgid,
                 base_size: user_sp,
                 task_cx_ptr: task_cx_ptr as usize,
                 task_status: TaskStatus::Ready,
@@ -346,10 +347,10 @@ impl TaskControlBlock {
         }
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
-            pgid: self.pgid,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
                 trap_cx_ppn,
+                pgid: parent_inner.pgid,
                 base_size: parent_inner.base_size,
                 task_cx_ptr: task_cx_ptr as usize,
                 task_status: TaskStatus::Ready,
@@ -379,13 +380,18 @@ impl TaskControlBlock {
     pub fn getpid(&self) -> usize {
         self.pid.0
     }
-    pub fn setpgid(&self, pgid: usize) -> usize {
-        //self.pgid = pgid;
-        //Temporarily suspend. Because the type of 'self' is 'Arc', which can't be borrow as mutable.
+    pub fn setpgid(&self, pgid: usize) -> isize {
+        if pgid < 0 {
+            return -1;
+        }
+        let mut inner = self.acquire_inner_lock();
+        inner.pgid = pgid;
         0
+        //Temporarily suspend. Because the type of 'self' is 'Arc', which can't be borrow as mutable.
     }
     pub fn getpgid(&self) -> usize {
-        self.pgid
+        let inner = self.acquire_inner_lock();
+        inner.pgid
     }
     pub fn sbrk(&self, increment: isize) -> usize {
         let mut inner = self.acquire_inner_lock();

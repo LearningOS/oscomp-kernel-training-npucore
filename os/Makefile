@@ -21,7 +21,7 @@ TOP := ../../k210.bin
 
 # BOARD
 BOARD ?= qemu
-SBI ?= opensbi-1.0
+SBI ?= rustsbi
 ifeq ($(BOARD), qemu)
 	ifeq ($(SBI), rustsbi)
 		BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
@@ -72,8 +72,8 @@ user:
 # dev/zero永远输出0
 sdcard:
 	@echo "Are you sure write to $(SDCARD) ? [y/N] " && read ans && [ $${ans:-N} = y ]
-	#@sudo dd if=/dev/zero of=$(SDCARD) bs=1048576 count=16
-	#@sudo dd if=$(FS_IMG) of=$(SDCARD)
+#	@sudo dd if=/dev/zero of=$(SDCARD) bs=1048576 count=16
+#	@sudo dd if=$(FS_IMG) of=$(SDCARD)
 	./buildfs.sh "$(SDCARD)"
 
 $(KERNEL_BIN): kernel
@@ -82,7 +82,7 @@ $(KERNEL_BIN): kernel
 
 $(APPS):
 
-fat32:
+fat32: $(U_FAT32_DIR)/fat32.img
 	./buildfs.sh "$(U_FAT32_DIR)/fat32.img"
 
 fsimg-format:
@@ -142,9 +142,7 @@ gdb:
 	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,\
 	file=target/riscv64gc-unknown-none-elf/debug/os,addr=0x80200000 -drive \
 	file=$(U_FAT32),if=none,format=raw,id=x0 \
-	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -smp threads=$(CORE_NUM) -S -s
-	
-	#file=target/riscv64gc-unknown-none-elf/$(MODE)/os,addr=0x80200000 -drive \
+	-device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0 -smp threads=$(CORE_NUM) -S -s # file=target/riscv64gc-unknown-none-elf/$(MODE)/os,addr=0x80200000 -drive
 
 runsimple:
 	@qemu-system-riscv64 \
