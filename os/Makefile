@@ -21,7 +21,7 @@ TOP := ../../k210.bin
 
 # BOARD
 BOARD ?= qemu
-SBI ?= opensbi-1.0
+SBI ?= rustsbi
 ifeq ($(BOARD), qemu)
 	ifeq ($(SBI), rustsbi)
 		BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
