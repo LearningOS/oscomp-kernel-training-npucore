@@ -10,7 +10,7 @@ DEBUG_ELFS := $(patsubst $(APP_DIR)/%.rs, $(DEBUG_DIR)/%, $(APPS))
 OBJDUMP := rust-objdump --arch-name=riscv64
 OBJCOPY := rust-objcopy --binary-architecture=riscv64
 
-build: update binary debug
+build: update debug
 
 # for "user_C_program"
 update:
@@ -25,13 +25,10 @@ elf: $(APPS)
 	@cargo build --release
 	@cargo build
 
-binary: elf
-	$(foreach elf, $(RELEASE_ELFS), $(OBJCOPY) $(elf) --strip-all -O binary $(patsubst $(RELEASE_DIR)/%, $(RELEASE_DIR)/%.bin, $(elf));)
-
 debug: elf
 	@mkdir -p ../os/user && cp $(DEBUG_ELFS) ../os/user
 
 clean:
 	@cargo clean
 
-.PHONY: build elf binary debug clean
+.PHONY: build elf debug clean

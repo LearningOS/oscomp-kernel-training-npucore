@@ -20,14 +20,6 @@ sudo mount ${U_FAT32} ${U_FAT32_DIR}/fs
 # mount -o remount rw ${U_FAT32_DIR}/fs
 sudo rm ${U_FAT32_DIR}/fs/*
 
-for programname in $(ls ../user/src/bin)
-do
-    #if [ $programname != "initproc.rs" ] && [ $programname != "user_shell.rs" ]
-    #then 
-        sudo cp ../user/target/riscv64gc-unknown-none-elf/release/${programname%.rs} ../fat32-fuse/fs/${programname%.rs}
-    #fi
-done
-
 for programname in $(ls ../user/riscv64)
 do 
     sudo cp ../user/riscv64/$programname ${U_FAT32_DIR}/fs/"$programname"
