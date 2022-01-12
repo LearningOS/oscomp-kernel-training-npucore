@@ -111,24 +111,20 @@ pub fn sys_getegid() -> isize {
 // So it just pretend to do this work.
 // Fortunately, that won't make difference when we just try to run busybox sh so far.
 pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
-    /*
-     * Note: pid is NOT currently used. Meaning only the currently running pid is used.
-     * Later implementation will add this to the funciton.
-     */
-    //info!("[sys_setpgid] pid:{}; pgid:{}", pid, pgid);
-    let mut task = current_task().unwrap();
-    task.setpgid(pgid)
+    /* An attempt.*/
+    let mut task = crate::task::find_process_by_pid(pid);
+    match task {
+        Some(i) => i.setpgid(pgid),
+        None => -1,
+    }
 }
 
 pub fn sys_getpgid(pid: usize) -> isize {
-    /*
-     * Note: pid is NOT currently used. Meaning only the currently running pid is used.
-     * Later implementation will add this to the funciton.
-     */
-    if pid == 0 {
-        current_task().unwrap().getpgid() as isize
-    } else {
-        panic!("[sys_getpgid] Case that pid != 0 haven't been support");
+    /* An attempt.*/
+    let mut task = crate::task::find_process_by_pid(pid);
+    match task {
+        Some(i) => i.getpgid() as isize,
+        None => -1,
     }
 }
 

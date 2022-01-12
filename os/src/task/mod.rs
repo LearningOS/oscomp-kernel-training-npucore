@@ -97,6 +97,25 @@ lazy_static! {
     });
 }
 
+/// Literal definition.
+/// Note: The process lookup is done over tree enumeration, at a high cost.
+pub fn find_process_by_pid(pid: usize) -> Option<Arc<TaskControlBlock>> {
+    if pid == INITPROC.getpid() {
+        Some(INITPROC.clone())
+    } else {
+        INITPROC.find_child_process_by_pid(pid)
+    }
+}
+
+pub fn find_process_by_pgid(pgid: usize) -> alloc::vec::Vec<Arc<TaskControlBlock>> {
+    let mut v = alloc::vec::Vec::new();
+    if pgid == INITPROC.getpgid() {
+        v.push(INITPROC.clone());
+    }
+    v.append(&mut INITPROC.find_child_process_by_pgid(pgid));
+    v
+}
+
 pub fn add_initproc() {
     add_task(INITPROC.clone());
 }
