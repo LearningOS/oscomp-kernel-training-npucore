@@ -16,6 +16,8 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
 
+use super::SYSCALL_EXEC;
+
 pub struct utsname {
     sysname: [u8; 65],
     nodename: [u8; 65],
@@ -167,6 +169,7 @@ pub fn sys_fork() -> isize {
 }
 
 pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
+    info!("[sys_exec] Called from: {}", who);
     let token = current_user_token();
     let path = translated_str(token, path);
     let mut args_vec: Vec<String> = Vec::new();
@@ -227,11 +230,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
         }
         None => -1,
     };
-    if who == 0 {
-        0
-    } else {
-        i
-    }
+    0
 }
 
 /// If there is not a child process whose pid is same as given, return -1.

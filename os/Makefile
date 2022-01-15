@@ -21,7 +21,7 @@ TOP := ../../k210.bin
 
 # BOARD
 BOARD ?= qemu
-SBI ?= rustsbi
+SBI ?= opensbi-1.0
 ifeq ($(BOARD), qemu)
 	ifeq ($(SBI), rustsbi)
 		BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
@@ -31,7 +31,7 @@ ifeq ($(BOARD), qemu)
 		BOOTLOADER := ../bootloader/fw_payload.bin
 	endif
 else ifeq ($(BOARD), k210)
-	BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
+	BOOTLOADER := ../bootloader/rustsbi-$(BOARD).bin
 endif
 K210_BOOTLOADER_SIZE := 131072
 

@@ -64,7 +64,8 @@ impl File for Stdin {
             let mut i: usize = 1;
             if i < user_buf.len() {
                 let c: u8 = console_getchar() as u8;
-                while c != 0 && i < user_buf.len() {
+                //log::error!("{}", c);
+                while c != 0 && c != 255u8 && i < user_buf.len() {
                     wr_buf(user_buf, &c, i);
                     i += 1;
                 }
@@ -72,11 +73,15 @@ impl File for Stdin {
             i
         }
         let mut ret: usize = 0;
+        let mut tmp: usize = 0;
         loop {
-            if *lock.deref() == 0 {
-                *lock.deref_mut() = console_getchar();
-                if *lock.deref() != 0 {
-                    c = *lock.deref();
+            tmp = *lock.deref();
+            if tmp == 0 || tmp as u8 == 255 {
+                //如果缓冲没有字符
+                tmp = console_getchar();
+                *lock.deref_mut() = tmp;
+                if tmp != 0 && tmp as u8 != 255 {
+                    c = tmp;
                     wr_buf(&mut user_buf, &(c as u8), 0);
 
                     ret = blocking_read(&mut user_buf);
