@@ -45,6 +45,11 @@ pub fn exit_current_and_run_next(exit_code: i32) {
     let task = take_current_task().unwrap();
     // **** hold current PCB lock
     let mut inner = task.acquire_inner_lock();
+    log::info!(
+        "[sys_exit] Trying to exit pid {} with {}",
+        task.pid.0,
+        exit_code
+    );
     // Change status to Zombie
     inner.task_status = TaskStatus::Zombie;
     // Record exit code
@@ -67,6 +72,7 @@ pub fn exit_current_and_run_next(exit_code: i32) {
     drop(inner);
     // **** release current PCB lock
     // drop task manually to maintain rc correctly
+    log::info!("[sys_exit] Pid {} exited with {}", task.pid.0, exit_code);
     drop(task);
     // we do not have to save task context
     let _unused: usize = 0;

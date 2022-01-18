@@ -68,7 +68,10 @@ env:
 # build all user programs
 user:
 	@cd ../user && make
-
+rust-user:
+	@cd ../user && make debug
+c-user:
+	@cd ../user && make update
 # dev/zero永远输出0
 sdcard:
 	@echo "Are you sure write to $(SDCARD) ? [y/N] " && read ans && [ $${ans:-N} = y ]

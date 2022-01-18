@@ -154,12 +154,14 @@ impl File for Pipe {
         }
     }
     fn write(&self, buf: UserBuffer) -> usize {
+        //log::info!("[pipe.write] attempt to write...");
         assert_eq!(self.writable(), true);
         let mut buf_iter = buf.into_iter();
         let mut write_size = 0usize;
         loop {
             let mut ring_buffer = self.buffer.lock();
             let loop_write = ring_buffer.available_write();
+            //log::info!("[pipe.write] Lock acquired...");
             if loop_write == 0 {
                 drop(ring_buffer);
                 // gdb_print!(SYSCALL_ENABLE,"[pipe] try write");

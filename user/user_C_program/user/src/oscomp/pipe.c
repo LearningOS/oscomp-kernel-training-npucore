@@ -23,7 +23,11 @@ void test_pipe(void){
             write(STDOUT, buf, 1);
 	write(STDOUT, "\n", 1);
 	close(fd[0]);
-	wait(NULL);
+
+
+	//=========================================================
+	wait(NULL);// Why wait(NULL)? IS THIS THE PROBLEM?
+	//=========================================================
     }else{
 	close(fd[0]);
 	write(fd[1], data, strlen(data));

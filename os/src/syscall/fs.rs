@@ -221,6 +221,7 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
 }
 
 pub fn sys_close(fd: usize) -> isize {
+    info!("[sys_close] fd:{}", fd);
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
     if fd >= inner.fd_table.len() {

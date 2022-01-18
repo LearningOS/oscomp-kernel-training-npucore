@@ -14,6 +14,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
+use core::ptr::null;
 use log::{debug, error, info, trace, warn};
 
 use super::SYSCALL_EXEC;
@@ -263,7 +264,10 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
         // ++++ temporarily hold child lock
         let exit_code = child.acquire_inner_lock().exit_code;
         // ++++ release child PCB lock
-        *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code;
+        if exit_code_ptr as usize != 0 {
+            // this may NULL!!!
+            *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code;
+        }
         found_pid as isize
     } else {
         -2
