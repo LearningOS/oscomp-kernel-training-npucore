@@ -29,7 +29,7 @@ impl Pipe {
 }
 
 // const RING_BUFFER_SIZE: usize = 32;
-const RING_BUFFER_SIZE: usize = 1024;
+const RING_BUFFER_SIZE: usize = 3010;
 
 #[derive(Copy, Clone, PartialEq)]
 enum RingBufferStatus {
@@ -132,9 +132,7 @@ impl File for Pipe {
                 }
                 // gdb_print!(SYSCALL_ENABLE,"[pipe] try read");
                 drop(ring_buffer);
-                // if suspend_current_and_run_next() < 0{
-                //     return read_size;
-                // }
+                suspend_current_and_run_next();
                 continue;
             }
             //gdb_print!(SYSCALL_ENABLE,"[pipe] can read {} bytes\n", loop_read);

@@ -99,7 +99,7 @@ pub fn sys_close(fd: usize) -> isize {
     syscall(SYSCALL_CLOSE, [fd, 0, 0])
 }
 
-pub fn sys_pipe(pipe: &mut [usize]) -> isize {
+pub fn sys_pipe(pipe: &mut [i32]) -> isize {
     syscall(SYSCALL_PIPE, [pipe.as_mut_ptr() as usize, 0, 0])
 }
 

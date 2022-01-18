@@ -234,6 +234,7 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 pub fn sys_pipe(pipe: *mut usize) -> isize {
+    let pipe = unsafe { pipe as *mut i32 };
     let task = current_task().unwrap();
     let token = current_user_token();
     let mut inner = task.acquire_inner_lock();
@@ -242,8 +243,8 @@ pub fn sys_pipe(pipe: *mut usize) -> isize {
     inner.fd_table[read_fd] = Some(FileDescripter::new(false, FileClass::Abstr(pipe_read)));
     let write_fd = inner.alloc_fd();
     inner.fd_table[write_fd] = Some(FileDescripter::new(false, FileClass::Abstr(pipe_write)));
-    *translated_refmut(token, pipe) = read_fd;
-    *translated_refmut(token, unsafe { pipe.add(1) }) = write_fd;
+    *translated_refmut(token, pipe) = read_fd as i32;
+    *translated_refmut(token, unsafe { pipe.add(1) }) = write_fd as i32;
     0
 }
 
