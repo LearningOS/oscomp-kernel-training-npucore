@@ -5,12 +5,11 @@ const SYSCALL_DUP: usize = 24; //23?
 
 const SYSCALL_OPEN: usize = 506; //where?
 
-const SYSCALL_GET_TIME: usize = 169; //you mean get time of day by 169?
+const SYSCALL_GET_TIME: usize = 1690; //you mean get time of day by 169?
 
 const SYSCALL_FORK: usize = 220; //clone? who is fork?
 
 const SYSCALL_WAITPID: usize = 260; //wait4 is 260
-
 const SYSCALL_GETCWD: usize = 17;
 const SYSCALL_FCNTL: usize = 25;
 const SYSCALL_IOCTL: usize = 29;
@@ -85,7 +84,12 @@ use fs::*;
 use log::{debug, error, info, trace, warn};
 use process::*;
 
+use crate::timer::TimeSpec;
+
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
+    if ![124, 260, 63, 64].contains(&syscall_id) {
+        info!("syscall_id: {}, args: {:?}", syscall_id, args);
+    }
     match syscall_id {
         SYSCALL_GETCWD => sys_getcwd(args[0] as *mut u8, args[1] as usize),
         SYSCALL_DUP => sys_dup(args[0]),
@@ -141,7 +145,15 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[1] as *mut usize,
             args[2] as *mut usize,
         ),
+        SYSCALL_NANOSLEEP => sys_nano_sleep(
+            args[0] as *const crate::timer::TimeSpec,
+            args[1] as *mut crate::timer::TimeSpec,
+        ),
         SYSCALL_GET_TIME => sys_get_time(),
+        SYSCALL_GET_TIME_OF_DAY => sys_get_time_of_day(
+            args[0] as *mut crate::timer::TimeVal,
+            args[1] as *mut crate::timer::TimeZone,
+        ),
         SYSCALL_SETPGID => sys_setpgid(args[0] as usize, args[1] as usize),
         SYSCALL_GETPGID => sys_getpgid(args[0] as usize),
         SYSCALL_UNAME => sys_uname(args[0] as *mut u8),

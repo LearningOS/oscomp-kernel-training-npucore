@@ -5,7 +5,7 @@ const SYSCALL_DUP: usize = 24; //23?
 
 const SYSCALL_OPEN: usize = 506; //where?
 
-const SYSCALL_GET_TIME: usize = 169; //you mean get time of day by 169?
+const SYSCALL_GET_TIME: usize = 1690; //you mean get time of day by 169?
 
 const SYSCALL_FORK: usize = 220; //clone? who is fork?
 

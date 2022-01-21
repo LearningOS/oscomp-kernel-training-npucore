@@ -9,7 +9,7 @@ use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next,
 };
-use crate::timer::get_time_ms;
+use crate::timer::{get_time, get_time_ms, TimeVal};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -63,6 +63,64 @@ pub fn sys_exit(exit_code: i32) -> ! {
 
 pub fn sys_yield() -> isize {
     suspend_current_and_run_next();
+    0
+}
+
+pub fn sys_nano_sleep(
+    rreq: *const crate::timer::TimeSpec,
+    rrem: *mut crate::timer::TimeSpec,
+) -> isize {
+    if rreq as usize == 0 {
+        return -1;
+    }
+    let req = *translated_ref(current_user_token(), rreq);
+    let mut rem = *translated_ref(current_user_token(), rrem);
+    if req.tv_nsec != 0 {
+        let start = crate::timer::get_time_ns();
+        let mut i = (crate::timer::get_time_ns() - start) as i32;
+        loop {
+            if i < req.tv_nsec {
+                i = (crate::timer::get_time_ns() - start) as i32;
+                // debug!("[sys_nano_sleep] delta={}", i);
+                if rrem as usize != 0 {
+                    rem.tv_nsec = i;
+                    rem.tv_sec = i / 1_000_000_000;
+                }
+                suspend_current_and_run_next();
+            } else {
+                break;
+            }
+        }
+    } else {
+        let start = crate::timer::get_time_sec();
+        let mut i = (crate::timer::get_time_sec() - start) as i32;
+        loop {
+            if i < req.tv_sec {
+                i = (crate::timer::get_time_sec() - start) as i32;
+                // debug!("[sys_nano_sleep] delta={}", i);
+                if rrem as usize != 0 {
+                    rem.tv_sec = i;
+                    rem.tv_nsec = i * 1000_000_000;
+                }
+                suspend_current_and_run_next();
+            } else {
+                break;
+            }
+        }
+    }
+
+    0
+}
+
+pub fn sys_get_time_of_day(
+    time_val: *mut crate::timer::TimeVal,
+    time_zone: *mut crate::timer::TimeZone,
+) -> isize {
+    // Timezone is currently NOT supported.
+    let mut ans = crate::timer::TimeVal::now();
+    if time_val as usize != 0 {
+        *translated_refmut(current_user_token(), time_val) = ans;
+    }
     0
 }
 
