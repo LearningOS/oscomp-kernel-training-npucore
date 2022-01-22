@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 
 #[derive(Debug, Copy, Clone)]
 #[repr(C)]
+/// Vector to record the target to read to or write from.
 pub struct IoVec {
     /// Starting address
     base: *mut u8,

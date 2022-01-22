@@ -166,6 +166,36 @@ pub fn sys_sendfile(out_fd: isize, in_fd: isize, offset_ptr: *mut usize, count: 
         return -1;
     }
 }
+/// A read mirror to writev(). Read the file denoted by fd according to what was recorded in vector [IoVec;iovcnt].
+///
+/// The  readv()  system call reads iovcnt buffers from the file associated with the file descriptor fd into the buffers described by iov ("scatter input").
+pub fn sys_readv(fd: usize, iov: *const IoVec, iovcnt: usize) -> isize {
+    let iov_head = iov as *mut IoVec;
+    let token = current_user_token();
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    if fd >= inner.fd_table.len() {
+        return -1;
+    }
+    if let Some(file) = &inner.fd_table[fd] {
+        let mut sum: isize = 0;
+        let f: Arc<dyn File + Send + Sync> = match &file.fclass {
+            FileClass::Abstr(f) => f.clone(),
+            FileClass::File(f) => f.clone(),
+            _ => return -1,
+        };
+        if !f.writable() {
+            return -1;
+        }
+        drop(inner);
+        unsafe {
+            let buf = UserBuffer::new(IoVecs::new(iov_head, iovcnt, token).0);
+            f.read(buf) as isize
+        }
+    } else {
+        -1
+    }
+}
 
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();

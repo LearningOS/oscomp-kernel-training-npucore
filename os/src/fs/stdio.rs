@@ -47,6 +47,7 @@ impl File for Stdin {
     fn w_ready(&self) -> bool {
         false
     }
+    /// We assume that an empty buffer is given to the function, and we should write to it from the beginning.
     fn read(&self, mut user_buf: UserBuffer) -> usize {
         let mut lock = STDINLOCK.lock();
         // busy loop
@@ -61,7 +62,7 @@ impl File for Stdin {
             }
         }
         fn blocking_read(user_buf: &mut UserBuffer) -> usize {
-            let mut i: usize = 1;
+            let mut i: usize = 1; // the write starts from 1 because the preceeding seek gets the first character.
             if i < user_buf.len() {
                 let c: u8 = console_getchar() as u8;
                 //log::error!("{}", c);

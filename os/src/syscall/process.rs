@@ -414,7 +414,7 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
 }
 
 // Warning, we don't support this syscall in fact
-// It just a 'Shell' for now, literal meaning.
+// It just a stub.
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
     info!(
