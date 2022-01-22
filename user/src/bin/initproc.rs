@@ -1,15 +1,12 @@
 #![no_std]
 #![no_main]
+use user_lib::{__start_backup, exec, fork, wait, yield_};
 
-#[macro_use]
-extern crate user_lib;
-
-use user_lib::{
-    fork,
-    wait,
-    exec,
-    yield_,
-};
+#[no_mangle]
+#[link_section = ".text.entry"]
+pub extern "C" fn _start(argc: usize, argv: usize) -> ! {
+    __start_backup(argc, argv)
+}
 
 #[no_mangle]
 fn main() -> i32 {
@@ -23,7 +20,7 @@ fn main() -> i32 {
                 yield_();
                 continue;
             }
-            println!(
+            user_lib::println!(
                 "[initproc] Released a zombie process, pid={}, exit_code={}",
                 pid,
                 exit_code,

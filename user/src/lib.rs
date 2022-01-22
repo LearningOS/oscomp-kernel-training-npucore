@@ -8,6 +8,7 @@
 pub mod console;
 mod lang_items;
 mod syscall;
+mod usr_call;
 
 extern crate alloc;
 #[macro_use]
@@ -16,6 +17,7 @@ extern crate bitflags;
 use alloc::vec::Vec;
 use buddy_system_allocator::LockedHeap;
 use syscall::*;
+pub use usr_call::*;
 
 const USER_HEAP_SIZE: usize = 32768;
 
@@ -29,31 +31,24 @@ pub fn handle_alloc_error(layout: core::alloc::Layout) -> ! {
     panic!("Heap allocation error, layout = {:?}", layout);
 }
 
+#[linkage = "weak"]
 #[no_mangle]
 #[link_section = ".text.entry"]
-pub extern "C" fn _start(argc: usize, argv: usize) -> ! {
-    unsafe {
-        HEAP.lock()
-            .init(HEAP_SPACE.as_ptr() as usize, USER_HEAP_SIZE);
-    }
-    let mut v: Vec<&'static str> = Vec::new();
-    for i in 0..argc {
-        let str_start =
-            unsafe { ((argv + i * core::mem::size_of::<usize>()) as *const usize).read_volatile() };
-        let len = (0usize..)
-            .find(|i| unsafe { ((str_start + *i) as *const u8).read_volatile() == 0 })
-            .unwrap();
-        v.push(
-            core::str::from_utf8(unsafe {
-                core::slice::from_raw_parts(str_start as *const u8, len)
-            })
-            .unwrap(),
-        );
-    }
-    exit(main(argc, v.as_slice()));
+pub extern "C" fn _start() -> ! {
+    unsafe { llvm_asm!("mv a0,sp") };
+    __start_legacy();
 }
 
-pub extern "C" fn __start_legacy(argc: usize, argv: usize) -> ! {
+pub extern "C" fn __start_legacy() -> ! {
+    let argc: usize;
+    let argv: usize;
+    unsafe { llvm_asm!("mv a1,a0") };
+    unsafe { llvm_asm!("lw a0,0(a0)":"=r"(argc)) };
+    unsafe { llvm_asm!("addi a1, a1, 8":"=r"(argv)) };
+    exit(__start_backup(argc, argv));
+}
+
+pub extern "C" fn __start_backup(argc: usize, argv: usize) -> ! {
     unsafe {
         HEAP.lock()
             .init(HEAP_SPACE.as_ptr() as usize, USER_HEAP_SIZE);
@@ -88,76 +83,5 @@ bitflags! {
         const RDWR = 1 << 1;
         const CREATE = 1 << 9;
         const TRUNC = 1 << 10;
-    }
-}
-
-pub fn dup(fd: usize) -> isize {
-    sys_dup(fd)
-}
-pub fn open(path: &str, flags: OpenFlags) -> isize {
-    sys_open(path, flags.bits)
-}
-pub fn close(fd: usize) -> isize {
-    sys_close(fd)
-}
-pub fn pipe(pipe_fd: &mut [i32]) -> isize {
-    sys_pipe(pipe_fd)
-}
-pub fn read(fd: usize, buf: &mut [u8]) -> isize {
-    sys_read(fd, buf)
-}
-pub fn write(fd: usize, buf: &[u8]) -> isize {
-    sys_write(fd, buf)
-}
-pub fn getchar() -> u8 {
-    let mut buf: [u8; 1] = [0u8];
-    sys_read(0, &mut buf);
-    buf[0]
-}
-pub fn exit(exit_code: i32) -> ! {
-    sys_exit(exit_code);
-}
-pub fn yield_() -> isize {
-    sys_yield()
-}
-pub fn get_time() -> isize {
-    sys_get_time()
-}
-pub fn getpid() -> isize {
-    sys_getpid()
-}
-pub fn fork() -> isize {
-    sys_fork()
-}
-pub fn exec(path: &str, args: &[*const u8]) -> isize {
-    sys_exec(path, args)
-}
-pub fn wait(exit_code: &mut i32) -> isize {
-    loop {
-        match sys_waitpid(-1, exit_code as *mut _) {
-            -2 => {
-                yield_();
-            }
-            // -1 or a real pid
-            exit_pid => return exit_pid,
-        }
-    }
-}
-
-pub fn waitpid(pid: usize, exit_code: &mut i32) -> isize {
-    loop {
-        match sys_waitpid(pid as isize, exit_code as *mut _) {
-            -2 => {
-                yield_();
-            }
-            // -1 or a real pid
-            exit_pid => return exit_pid,
-        }
-    }
-}
-pub fn sleep(period_ms: usize) {
-    let start = sys_get_time();
-    while sys_get_time() < start + period_ms as isize {
-        sys_yield();
     }
 }
