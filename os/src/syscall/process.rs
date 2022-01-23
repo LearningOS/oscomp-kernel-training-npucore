@@ -140,7 +140,7 @@ pub fn sys_uname(buf: *mut u8) -> isize {
 
 pub fn sys_getpid() -> isize {
     let pid = current_task().unwrap().pid.0;
-    info!("[sys_getpid] pid:{}", pid);
+    //info!("[sys_getpid] pid:{}", pid);
     pid as isize
 }
 

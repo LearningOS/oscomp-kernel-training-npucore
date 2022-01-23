@@ -31,6 +31,7 @@ pub struct TaskControlBlock {
 
 pub type FdTable = Vec<Option<FileDescripter>>;
 pub struct TaskControlBlockInner {
+    pub sigmask: Signals,
     pub trap_cx_ppn: PhysPageNum,
     pub base_size: usize,
     pub task_cx_ptr: usize,
@@ -147,6 +148,7 @@ impl TaskControlBlock {
             inner: Mutex::new(TaskControlBlockInner {
                 trap_cx_ppn,
                 pgid,
+                sigmask: Signals::empty(),
                 base_size: user_sp,
                 task_cx_ptr: task_cx_ptr as usize,
                 task_status: TaskStatus::Ready,
@@ -402,6 +404,7 @@ impl TaskControlBlock {
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
                 current_path: parent_inner.current_path.clone(),
+                sigmask: Signals::empty(),
                 siginfo: parent_inner.siginfo.clone(),
             }),
         });

@@ -81,15 +81,98 @@ const SYSCALL_CLEAR: usize = 502;
 pub mod fs;
 mod process;
 
+use alloc::string;
 use fs::*;
 use log::{debug, error, info, trace, warn};
 use process::*;
-
+pub fn syscall_name(id: usize) -> &'static str {
+    match id {
+        SYSCALL_DUP => "dup",
+        SYSCALL_OPEN => "open",
+        SYSCALL_GET_TIME => "get",
+        SYSCALL_FORK => "fork",
+        SYSCALL_WAITPID => "waitpid",
+        SYSCALL_GETCWD => "getcwd",
+        SYSCALL_FCNTL => "fcntl",
+        SYSCALL_IOCTL => "ioctl",
+        SYSCALL_MKDIRAT => "mkdirat",
+        SYSCALL_UNLINKAT => "unlinkat",
+        SYSCALL_LINKAT => "linkat",
+        SYSCALL_UMOUNT2 => "umount2",
+        SYSCALL_MOUNT => "mount",
+        SYSCALL_FACCESSAT => "faccessat",
+        SYSCALL_CHDIR => "chdir",
+        SYSCALL_OPENAT => "openat",
+        SYSCALL_CLOSE => "close",
+        SYSCALL_PIPE => "pipe",
+        SYSCALL_GETDENTS64 => "getdents64",
+        SYSCALL_LSEEK => "lseek",
+        SYSCALL_READ => "read",
+        SYSCALL_WRITE => "write",
+        SYSCALL_READV => "readv",
+        SYSCALL_WRITEV => "writev",
+        SYSCALL_SENDFILE => "sendfile",
+        SYSCALL_PSELECT6 => "pselect6",
+        SYSCALL_PPOLL => "ppoll",
+        SYSCALL_READLINKAT => "readlinkat",
+        SYSCALL_NEW_FSTATAT => "new_fstatat",
+        SYSCALL_FSTAT => "fstat",
+        SYSCALL_FSYNC => "fsync",
+        SYSCALL_UTIMENSAT => "utimensat",
+        SYSCALL_EXIT => "exit",
+        SYSCALL_EXIT_GRUOP => "exit_GRUOP",
+        SYSCALL_SET_TID_ADDRESS => "set_tid_address",
+        SYSCALL_NANOSLEEP => "nanosleep",
+        SYSCALL_GETITIMER => "getitimer",
+        SYSCALL_SETITIMER => "setitimer",
+        SYSCALL_CLOCK_GETTIME => "clock_gettime",
+        SYSCALL_YIELD => "yield",
+        SYSCALL_KILL => "kill",
+        SYSCALL_SIGACTION => "sigaction",
+        SYSCALL_SIGPROCMASK => "sigprocmask",
+        SYSCALL_SIGRETURN => "sigreturn",
+        SYSCALL_TIMES => "times",
+        SYSCALL_SETPGID => "setpgid",
+        SYSCALL_GETPGID => "getpgid",
+        SYSCALL_UNAME => "uname",
+        SYSCALL_GETRUSAGE => "getrusage",
+        SYSCALL_GET_TIME_OF_DAY => "get",
+        SYSCALL_GETPID => "getpid",
+        SYSCALL_GETPPID => "getppid",
+        SYSCALL_GETUID => "getuid",
+        SYSCALL_GETEUID => "geteuid",
+        SYSCALL_GETGID => "getgid",
+        SYSCALL_GETEGID => "getegid",
+        SYSCALL_GETTID => "gettid",
+        SYSCALL_SBRK => "sbrk",
+        SYSCALL_BRK => "brk",
+        SYSCALL_MUNMAP => "munmap",
+        SYSCALL_CLONE => "clone",
+        SYSCALL_EXEC => "exec",
+        SYSCALL_EXECEV => "execev",
+        SYSCALL_MMAP => "mmap",
+        SYSCALL_MPROTECT => "mprotect",
+        SYSCALL_WAIT4 => "wait4",
+        SYSCALL_PRLIMIT => "prlimit",
+        SYSCALL_RENAMEAT2 => "renameat2",
+        // non-standard
+        SYSCALL_LS => "ls",
+        SYSCALL_SHUTDOWN => "shutdown",
+        SYSCALL_CLEAR => "clear",
+        _ => "unknown",
+    }
+}
 use crate::{fs::IoVec, timer::TimeSpec};
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![124, 260, 63, 64, 66, 73].contains(&syscall_id) {
-        info!("syscall_id: {}, args: {:?}", syscall_id, args);
+        info!(
+            "[syscall] pid: {}, syscall_id: {} ({}), \nargs: {:?}",
+            sys_getpid(),
+            syscall_name(syscall_id),
+            syscall_id,
+            args
+        );
     }
     match syscall_id {
         SYSCALL_GETCWD => sys_getcwd(args[0] as *mut u8, args[1] as usize),
@@ -189,7 +272,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         //SYSCALL_GET_TIME_OF_DAY =>
         _ => {
             error!(
-                "Unsupported syscall_id: {}, calling over arguments:",
+                "Unsupported syscall:{} ({}), calling over arguments:",
+                syscall_name(syscall_id),
                 syscall_id
             );
             for i in 0..args.len() {

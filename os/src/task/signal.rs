@@ -2,11 +2,21 @@ use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
 
-pub const SIG_DFL: usize = 0; /* Default action.  */
-pub const SIG_IGN: usize = 1; /* Ignore signal.  */
+use crate::mm::translated_refmut;
 
-// signal
+use super::{current_task, current_user_token};
+
+/// Default action.
+pub const SIG_DFL: usize = 0;
+/// Ignore signal.  
+pub const SIG_IGN: usize = 1;
+
+pub const SIG_BLOCK: usize = 1;
+pub const SIG_UNBLOCK: usize = 2;
+pub const SIG_SETMASK: usize = 3;
+
 bitflags! {
+    /// Signal
     pub struct Signals: usize{
         const	SIGHUP		= 1 << ( 0);
         const	SIGINT		= 1 << ( 1);
@@ -42,23 +52,32 @@ bitflags! {
 }
 
 bitflags! {
-    /* Bits in `sa_flags'.  */
+    /// Bits in `sa_flags' used to denote the default signal action.
     pub struct SaFlags: usize{
-        const SA_NOCLDSTOP = 1		   ;     /* Don't send SIGCHLD when children stop.  */
-        const SA_NOCLDWAIT = 2		   ;     /* Don't create zombie on child death.  */
-        const SA_SIGINFO   = 4		   ;     /* Invoke signal-catching function with three arguments instead of one.  */
-        const SA_ONSTACK   = 0x08000000;    /* Use signal stack by using `sa_restorer'. */
-        const SA_RESTART   = 0x10000000;    /* Restart syscall on signal return.  */
-        const SA_NODEFER   = 0x40000000;    /* Don't automatically block the signal when its handler is being executed.  */
-        const SA_RESETHAND = 0x80000000;    /* Reset to SIG_DFL on entry to handler.  */
-        const SA_INTERRUPT = 0x20000000;    /* Historical no-op.  */
+    /// Don't send SIGCHLD when children stop.
+        const SA_NOCLDSTOP = 1		   ;
+    /// Don't create zombie on child death.
+        const SA_NOCLDWAIT = 2		   ;
+    /// Invoke signal-catching function with three arguments instead of one.
+        const SA_SIGINFO   = 4		   ;
+    /// Use signal stack by using `sa_restorer'.
+        const SA_ONSTACK   = 0x08000000;
+    /// Restart syscall on signal return.
+        const SA_RESTART   = 0x10000000;
+    /// Don't automatically block the signal when its handler is being executed.
+        const SA_NODEFER   = 0x40000000;
+    /// Reset to SIG_DFL on entry to handler.
+        const SA_RESETHAND = 0x80000000;
+    /// Historical no-op.
+        const SA_INTERRUPT = 0x20000000;
     }
 }
 
 #[derive(Clone)]
+#[repr(C)]
 pub struct SigAction {
     pub sa_handler: usize,
-    // pub sa_sigaction:usize,
+    //pub sa_sigaction: SaFlags,
     pub sa_mask: Vec<Signals>,
     pub sa_flags: SaFlags,
 }
@@ -116,3 +135,43 @@ impl Debug for SigAction {
         ))
     }
 }
+
+pub fn sigprocmask(how: usize, set: Option<Signals>, old: *mut Signals) -> isize {
+    let task = current_task();
+    if let Some(task) = task {
+        let mut inner = task.acquire_inner_lock();
+
+        // Copy the old to the oldset.
+        if old as usize != 0 {
+            *translated_refmut(current_user_token(), old) = inner.sigmask;
+        }
+
+        // Assign the sigmask.
+        if let Some(s) = set {
+            let i = match how {
+                SIG_BLOCK => {
+                    inner.sigmask = inner.sigmask.union(s);
+                    0
+                } /*add the signals not yet blocked in the given set to the mask.*/
+                SIG_UNBLOCK => {
+                    inner.sigmask = inner.sigmask.difference(s);
+                    0
+                } /*remove the blocked signals in the set from the sigmask. NOTE: unblocking a signal not blocked is allowed. */
+                SIG_SETMASK => {
+                    inner.sigmask = s;
+                    0
+                } /*set the signal mask to what we see.*/
+                _ => -1, // "how" variable NOT recognized
+            };
+            inner.sigmask = inner
+                .sigmask
+                .difference(Signals::SIGKILL | Signals::SIGSTOP);
+            i
+        } else {
+            0
+        }
+    } else {
+        -1
+    }
+}
+//pub fn sigprocmask(how: usize, set: )
