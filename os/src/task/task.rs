@@ -1,6 +1,7 @@
 use core::borrow::Borrow;
 use core::borrow::BorrowMut;
 use core::mem::ManuallyDrop;
+use core::fmt::{self, Debug, Formatter};
 
 use super::signal::*;
 use super::TaskContext;
@@ -12,7 +13,9 @@ use crate::mm::{
     translated_refmut, MapPermission, MemorySet, MmapArea, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
 use crate::task::current_user_token;
+use crate::timer::get_time_ms;
 use crate::trap::{trap_handler, TrapContext};
+use crate::timer::TimeVal;
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
@@ -47,6 +50,82 @@ pub struct TaskControlBlockInner {
     pub current_path: String,
     pub siginfo: SigInfo,
     pub pgid: usize,
+    pub rusage: Rusage,
+    pub clock: ProcClock,
+}
+
+pub struct ProcClock{
+    last_enter_u_mode: TimeVal,
+    last_enter_s_mode: TimeVal,
+}
+
+impl ProcClock{
+    pub fn new() -> Self{
+        let now = TimeVal::now();
+        Self{
+            last_enter_u_mode: now,
+            last_enter_s_mode: now,
+        }
+    }
+}
+
+pub struct Rusage{
+    ru_utime   :TimeVal,      /* user CPU time used */
+    ru_stime   :TimeVal,      /* system CPU time used */
+    ru_maxrss  :isize  ,      // NOT IMPLEMENTED /* maximum resident set size */
+    ru_ixrss   :isize  ,      // NOT IMPLEMENTED /* integral shared memory size */
+    ru_idrss   :isize   ,     // NOT IMPLEMENTED /* integral unshared data size */
+    ru_isrss   :isize  ,      // NOT IMPLEMENTED /* integral unshared stack size */
+    ru_minflt  :isize  ,      // NOT IMPLEMENTED /* page reclaims (soft page faults) */
+    ru_majflt  :isize  ,      // NOT IMPLEMENTED /* page faults (hard page faults) */
+    ru_nswap   :isize  ,      // NOT IMPLEMENTED /* swaps */
+    ru_inblock :isize  ,      // NOT IMPLEMENTED /* block input operations */
+    ru_oublock :isize  ,      // NOT IMPLEMENTED /* block output operations */
+    ru_msgsnd  :isize  ,      // NOT IMPLEMENTED /* IPC messages sent */
+    ru_msgrcv  :isize  ,      // NOT IMPLEMENTED /* IPC messages received */
+    ru_nsignals:isize  ,      // NOT IMPLEMENTED /* signals received */
+    ru_nvcsw   :isize  ,      // NOT IMPLEMENTED /* voluntary context switches */
+    ru_nivcsw  :isize  ,      // NOT IMPLEMENTED /* involuntary context switches */
+}
+
+impl Rusage{
+    pub fn new() -> Self{
+        Self{
+            ru_utime   :TimeVal::new(),
+            ru_stime   :TimeVal::new(),
+            ru_maxrss  :0,
+            ru_ixrss   :0,
+            ru_idrss   :0,
+            ru_isrss   :0,
+            ru_minflt  :0,
+            ru_majflt  :0,
+            ru_nswap   :0,
+            ru_inblock :0,
+            ru_oublock :0,
+            ru_msgsnd  :0,
+            ru_msgrcv  :0,
+            ru_nsignals:0,
+            ru_nvcsw   :0,
+            ru_nivcsw  :0,
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        let size = core::mem::size_of::<Self>();
+        unsafe {
+            core::slice::from_raw_parts(
+                self as *const _ as usize as *const u8,
+                size,
+            )
+        }
+    }
+
+}
+
+impl Debug for Rusage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("(ru_utime:{:?}, ru_stime:{:?})", self.ru_utime, self.ru_stime))
+    }
 }
 
 impl TaskControlBlockInner {
@@ -78,6 +157,19 @@ impl TaskControlBlockInner {
     }
     pub fn add_signal(&mut self, signal: Signals) {
         self.siginfo.signal_pending.push(signal);
+    }
+    pub fn update_process_time_before_trap(&mut self) {
+        let now = TimeVal::now();
+        self.rusage.ru_utime = self.rusage.ru_utime + now - self.clock.last_enter_u_mode;
+        self.clock.last_enter_s_mode = now;
+    }
+    pub fn update_process_time_after_trap(&mut self) {
+        let now = TimeVal::now();
+        self.rusage.ru_stime = self.rusage.ru_stime + now - self.clock.last_enter_s_mode;
+        self.clock.last_enter_u_mode = now;
+    }
+    pub fn update_process_time_after_switch(&mut self) {
+        self.clock = ProcClock::new();
     }
 }
 
@@ -178,6 +270,8 @@ impl TaskControlBlock {
                 heap_pt: user_heap,
                 current_path: String::from("/"),
                 siginfo: SigInfo::new(),
+                rusage: Rusage::new(),
+                clock: ProcClock::new(),
             }),
         };
         // prepare TrapContext in user space
@@ -406,6 +500,8 @@ impl TaskControlBlock {
                 current_path: parent_inner.current_path.clone(),
                 sigmask: Signals::empty(),
                 siginfo: parent_inner.siginfo.clone(),
+                rusage: Rusage::new(),
+                clock: ProcClock::new(),
             }),
         });
         // add child

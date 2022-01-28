@@ -1,5 +1,6 @@
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
+use log::info;
 use core::fmt::{self, Debug, Formatter};
 
 use crate::mm::translated_refmut;
@@ -11,9 +12,9 @@ pub const SIG_DFL: usize = 0;
 /// Ignore signal.  
 pub const SIG_IGN: usize = 1;
 
-pub const SIG_BLOCK: usize = 1;
-pub const SIG_UNBLOCK: usize = 2;
-pub const SIG_SETMASK: usize = 3;
+pub const SIG_BLOCK: usize = 0;
+pub const SIG_UNBLOCK: usize = 1;
+pub const SIG_SETMASK: usize = 2;
 
 bitflags! {
     /// Signal
@@ -48,6 +49,43 @@ bitflags! {
         const	SIGPROF		= 1 << (27);
         const	SIGWINCH	= 1 << (28);
         const	SIGIO		= 1 << (29);
+    }
+}
+
+impl Signals{
+    pub fn to_signum(&self) -> usize{
+        match self {
+            SIGHUP      => 0,
+            SIGINT		=> 1,
+            SIGQUIT	    => 2,
+            SIGILL		=> 3,
+            SIGTRAP	    => 4,
+            SIGABRT	    => 5,
+            SIGIOT		=> 6,
+            SIGBUS		=> 7,
+            SIGFPE		=> 8,
+            SIGKILL	    => 9,
+            SIGUSR1	    => 10,
+            SIGSEGV	    => 11,
+            SIGUSR2	    => 12,
+            SIGPIPE	    => 13,
+            SIGALRM	    => 14,
+            SIGTERM	    => 15,
+            SIGSTKFL    => 16,
+            SIGCHLD	    => 17,
+            SIGCONT	    => 18,
+            SIGSTOP	    => 19,
+            SIGTSTP	    => 20,
+            SIGTTIN	    => 21,
+            SIGTTOU	    => 22,
+            SIGURG      => 23,
+            SIGXCPU	    => 24,
+            SIGXFSZ	    => 25,
+            SIGVTALR    => 26,
+            SIGPROF	    => 27,
+            SIGWINCH    => 28,
+            SIGIO		=> 29,
+        }
     }
 }
 
@@ -136,14 +174,76 @@ impl Debug for SigAction {
     }
 }
 
-pub fn sigprocmask(how: usize, set: Option<Signals>, old: *mut Signals) -> isize {
+pub fn sigaction(signum: isize, act: &SigAction, oldact: *mut SigAction) -> isize {
     let task = current_task();
+    let token = current_user_token();
     if let Some(task) = task {
         let mut inner = task.acquire_inner_lock();
 
         // Copy the old to the oldset.
+        let key = Signals::from_bits(1 << (signum-1)).unwrap();
+        if let Some(act) = inner.siginfo.signal_handler.remove(&key) {
+            if oldact as usize != 0 {
+                *translated_refmut(token, oldact) = act;
+            }
+        }
+        else{
+            if oldact as usize != 0{
+                *translated_refmut(token, oldact) = SigAction::new();
+            }
+        }
+        // Assign the sigmask.
+        {
+            info!("sys_sigaction(signum: {:?}, act: None, oldact: {:?} ) = {}", signum, oldact, 0);
+            let mut sigaction_new = SigAction {
+                sa_handler:act.sa_handler,
+                sa_mask:Vec::new(),
+                sa_flags:act.sa_flags,
+            };
+            // sigaction_new.sa_mask.push(act.sa_mask.last());
+            // push to PCB
+            let sigaction_new_copy = sigaction_new.clone();
+            let mut inner = task.acquire_inner_lock();
+            if !(act.sa_handler == SIG_DFL || act.sa_handler == SIG_IGN) {
+                inner.siginfo.signal_handler.insert(key, sigaction_new);
+            };
+            0
+        }
+    } else {
+        -1
+    }
+
+}
+
+pub fn do_signal_handlers(){
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    if !inner.siginfo.is_signal_execute {
+        inner.siginfo.is_signal_execute = true;
+        while let Some(signal) = inner.siginfo.signal_pending.pop() {
+            // action found
+            if let Some(act) = inner.siginfo.signal_handler.get(&signal) {
+                let handler = act.sa_handler;
+                if (signal == Signals::SIGTERM || signal == Signals::SIGKILL) && handler == SIG_DFL {
+                    drop(current_task);
+                    super::exit_current_and_run_next(signal.to_signum() as i32);
+                }
+            }
+            // action not found
+            else{
+
+            }
+        }
+    }
+}
+
+pub fn sigprocmask(how: usize, set: Option<Signals>, old: *mut Signals) -> isize {
+    if let Some(task) = current_task() {
+        let mut inner = task.acquire_inner_lock();
+
+        // Copy the old to the oldset.
         if old as usize != 0 {
-            *translated_refmut(current_user_token(), old) = inner.sigmask;
+            *translated_refmut(inner.get_user_token(), old) = inner.sigmask; // fix deadlock here
         }
 
         // Assign the sigmask.
@@ -174,4 +274,3 @@ pub fn sigprocmask(how: usize, set: Option<Signals>, old: *mut Signals) -> isize
         -1
     }
 }
-//pub fn sigprocmask(how: usize, set: )

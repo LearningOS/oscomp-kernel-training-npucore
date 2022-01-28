@@ -1,9 +1,11 @@
 mod context;
 
+use core::borrow::BorrowMut;
+
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
 use crate::syscall::syscall;
 use crate::task::{
-    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next,
+    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, current_task, do_signal_handlers,
 };
 use crate::timer::set_next_trigger;
 use riscv::register::{
@@ -43,6 +45,10 @@ pub fn trap_handler() -> ! {
     let stval = stval::read();
     match scause.cause() {
         Trap::Exception(Exception::UserEnvCall) => {
+            let task = current_task().unwrap();
+            let mut inner = task.acquire_inner_lock();
+            inner.update_process_time_before_trap();
+            drop(inner);
             // jump to next instruction anyway
             let mut cx = current_trap_cx();
             cx.sepc += 4;
@@ -99,6 +105,7 @@ pub fn trap_handler() -> ! {
 
 #[no_mangle]
 pub fn trap_return() -> ! {
+    do_signal_handlers();
     set_user_trap_entry();
     let trap_cx_ptr = TRAP_CONTEXT;
     let user_satp = current_user_token();
@@ -107,6 +114,10 @@ pub fn trap_return() -> ! {
         fn __restore();
     }
     let restore_va = __restore as usize - __alltraps as usize + TRAMPOLINE;
+    let task = current_task().unwrap();
+            let mut inner = task.acquire_inner_lock();
+            inner.update_process_time_after_trap();
+            drop(inner);
     unsafe {
         llvm_asm!("fence.i" :::: "volatile");
         llvm_asm!("jr $0" :: "r"(restore_va), "{a0}"(trap_cx_ptr), "{a1}"(user_satp) :: "volatile");

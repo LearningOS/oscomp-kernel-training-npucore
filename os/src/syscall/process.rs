@@ -7,7 +7,7 @@ use crate::task::signal::*;
 use crate::task::signal::*;
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
-    suspend_current_and_run_next,
+    suspend_current_and_run_next, Rusage,
 };
 use crate::timer::{get_time, get_time_ms, TimeVal};
 use alloc::string::String;
@@ -395,13 +395,7 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     }
 
     let token = current_user_token();
-    let mut ticks = 0;
-    unsafe {
-        asm!(
-            "rdtime a0",
-            inout("a0") ticks
-        );
-    }
+    let mut ticks = get_time();
     let sec = (ticks / CLOCK_FREQ) as u64;
     let nsec = ((ticks % CLOCK_FREQ) * (NSEC_PER_SEC / CLOCK_FREQ)) as u64;
     *translated_refmut(token, tp) = sec;
@@ -417,8 +411,11 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
 // It just a stub.
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
+    // let token = current_user_token();
+    // let sig_act = &*translated_ref(token, act as *const SigAction);
+    // sigaction(signum, sig_act, oldact as *mut SigAction)
     info!(
-        "[sys_sigaction] signum:{:?}; act_addr:{:?}, oldact:{:?}",
+        "[sys_sigaction] signum:{:?}; act:{:?}, oldact:{:?}",
         signum, act, oldact
     );
     0
@@ -427,9 +424,21 @@ pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isiz
 // The same as above
 
 pub fn sys_sigprocmask(how: usize, set: *mut usize, oldset: *mut usize) -> isize {
+    let token = current_user_token();
+    let sig_set = Signals::from_bits(*translated_ref(token, set));
     info!(
         "[sys_sigprocmask] how:{:?}; set:{:?}, oldset:{:?}",
         how, set, oldset
     );
+    sigprocmask(how, sig_set, oldset as *mut Signals)
+}
+
+pub fn sys_getrusage(who: isize, usage: *mut u8) -> isize {
+    let task = current_task().unwrap();
+    let token = current_user_token();
+    let mut userbuf = UserBuffer::new(translated_byte_buffer(token, usage, core::mem::size_of::<Rusage>()));
+    let rusage = &task.acquire_inner_lock().rusage;
+    userbuf.write(rusage.as_bytes());
+    info!("[sys_getrusage] who: {}, usage: {:?}", who, rusage);
     0
 }

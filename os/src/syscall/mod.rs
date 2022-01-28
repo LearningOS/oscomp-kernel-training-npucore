@@ -235,6 +235,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[1] as *mut crate::timer::TimeSpec,
         ),
         SYSCALL_GET_TIME => sys_get_time(),
+        SYSCALL_GETRUSAGE => sys_getrusage(args[0] as isize, args[1] as *mut u8),
         SYSCALL_GET_TIME_OF_DAY => sys_get_time_of_day(
             args[0] as *mut crate::timer::TimeVal,
             args[1] as *mut crate::timer::TimeZone,
@@ -263,6 +264,15 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         SYSCALL_MPROTECT => sys_mprotect(args[0] as usize, args[1] as usize, args[2] as isize),
+        // SYSCALL_PSELECT6=> {
+        //     unsafe {
+        //         //llvm_asm!("sfence.vma" :::: "volatile");
+        //     }
+        //     sys_pselect(
+        //     args[0] as usize, args[1] as *mut u8, 
+        //     args[2] as *mut u8, args[3] as *mut u8, 
+        //     args[4] as *mut usize
+        // )},
         SYSCALL_PPOLL => sys_ppoll(
             args[0] as usize,
             args[1] as usize,
