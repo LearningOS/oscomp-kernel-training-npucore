@@ -136,7 +136,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_GETPGID => "getpgid",
         SYSCALL_UNAME => "uname",
         SYSCALL_GETRUSAGE => "getrusage",
-        SYSCALL_GET_TIME_OF_DAY => "get",
+        SYSCALL_GET_TIME_OF_DAY => "get_time_of_day",
         SYSCALL_GETPID => "getpid",
         SYSCALL_GETPPID => "getppid",
         SYSCALL_GETUID => "getuid",
@@ -230,6 +230,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[1] as *mut usize,
             args[2] as *mut usize,
         ),
+        SYSCALL_SIGRETURN => sys_sigreturn(),
         SYSCALL_NANOSLEEP => sys_nano_sleep(
             args[0] as *const crate::timer::TimeSpec,
             args[1] as *mut crate::timer::TimeSpec,

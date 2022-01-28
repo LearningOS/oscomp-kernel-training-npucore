@@ -433,6 +433,19 @@ pub fn sys_sigprocmask(how: usize, set: *mut usize, oldset: *mut usize) -> isize
     sigprocmask(how, sig_set, oldset as *mut Signals)
 }
 
+pub fn sys_sigreturn() -> isize{
+    // mark not processing signal handler
+    let current_task = current_task().unwrap();
+    info!("sys_sigreturn()(pid: {})", current_task.pid.0);
+    let mut inner = current_task.acquire_inner_lock();
+    assert_eq!(inner.siginfo.is_signal_execute, true);
+    inner.siginfo.is_signal_execute = false;
+    // restore trap_cx
+    let trap_cx = inner.get_trap_cx();
+    *trap_cx = inner.trapcx_backup.clone();
+    return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
+}
+
 pub fn sys_getrusage(who: isize, usage: *mut u8) -> isize {
     let task = current_task().unwrap();
     let token = current_user_token();

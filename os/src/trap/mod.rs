@@ -5,7 +5,7 @@ use core::borrow::BorrowMut;
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
 use crate::syscall::syscall;
 use crate::task::{
-    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, current_task, do_signal_handlers,
+    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, current_task, do_signal_handlers, Signals,
 };
 use crate::timer::set_next_trigger;
 use riscv::register::{
@@ -45,10 +45,10 @@ pub fn trap_handler() -> ! {
     let stval = stval::read();
     match scause.cause() {
         Trap::Exception(Exception::UserEnvCall) => {
-            let task = current_task().unwrap();
-            let mut inner = task.acquire_inner_lock();
-            inner.update_process_time_before_trap();
-            drop(inner);
+            // let task = current_task().unwrap();
+            // let mut inner = task.acquire_inner_lock();
+            // inner.update_process_time_before_trap();
+            // drop(inner);
             // jump to next instruction anyway
             let mut cx = current_trap_cx();
             cx.sepc += 4;
@@ -67,14 +67,11 @@ pub fn trap_handler() -> ! {
         | Trap::Exception(Exception::InstructionPageFault)
         | Trap::Exception(Exception::LoadFault)
         | Trap::Exception(Exception::LoadPageFault) => {
-            println!(
-                "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
-                scause.cause(),
-                stval,
-                current_trap_cx().sepc,
-            );
-            // page fault exit code
-            exit_current_and_run_next(-2);
+            let task = current_task().unwrap();
+            let mut inner = task.acquire_inner_lock();
+            inner.add_signal(Signals::SIGSEGV);
+            log::warn!("SIGSEGV!!!");
+            log::warn!("{:?}",inner.siginfo);
         }
         Trap::Exception(Exception::IllegalInstruction) => {
             println!("[kernel] IllegalInstruction in application, continue.");
@@ -112,12 +109,13 @@ pub fn trap_return() -> ! {
     extern "C" {
         fn __alltraps();
         fn __restore();
+        fn __signal_trampoline();
     }
     let restore_va = __restore as usize - __alltraps as usize + TRAMPOLINE;
-    let task = current_task().unwrap();
-            let mut inner = task.acquire_inner_lock();
-            inner.update_process_time_after_trap();
-            drop(inner);
+    // let task = current_task().unwrap();
+    // let mut inner = task.acquire_inner_lock();
+    // inner.update_process_time_after_trap();
+    // drop(inner);
     unsafe {
         llvm_asm!("fence.i" :::: "volatile");
         llvm_asm!("jr $0" :: "r"(restore_va), "{a0}"(trap_cx_ptr), "{a1}"(user_satp) :: "volatile");

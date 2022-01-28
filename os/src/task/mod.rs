@@ -45,6 +45,11 @@ pub fn exit_current_and_run_next(exit_code: i32) {
     let task = take_current_task().unwrap();
     // **** hold current PCB lock
     let mut inner = task.acquire_inner_lock();
+    {
+        let parent_task = inner.parent.as_ref().unwrap().upgrade().unwrap(); // this will acquire inner of current task
+        let mut parent_inner = parent_task.acquire_inner_lock();
+        parent_inner.add_signal(Signals::SIGCHLD);
+    }
     log::info!(
         "[sys_exit] Trying to exit pid {} with {}",
         task.pid.0,

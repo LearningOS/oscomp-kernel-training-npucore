@@ -1,9 +1,15 @@
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
 use log::info;
+use riscv::register::{
+    mtvec::TrapMode,
+    scause::{self, Exception, Interrupt, Trap},
+    sie, stval, stvec,
+};
 use core::fmt::{self, Debug, Formatter};
 
 use crate::mm::translated_refmut;
+use crate::task::{current_trap_cx, exit_current_and_run_next};
 
 use super::{current_task, current_user_token};
 
@@ -200,7 +206,6 @@ pub fn sigaction(signum: isize, act: &SigAction, oldact: *mut SigAction) -> isiz
                 sa_mask:Vec::new(),
                 sa_flags:act.sa_flags,
             };
-            // sigaction_new.sa_mask.push(act.sa_mask.last());
             // push to PCB
             let sigaction_new_copy = sigaction_new.clone();
             let mut inner = task.acquire_inner_lock();
@@ -218,20 +223,60 @@ pub fn sigaction(signum: isize, act: &SigAction, oldact: *mut SigAction) -> isiz
 pub fn do_signal_handlers(){
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
+    let mut exception_signal: Option<Signals> = None;
     if !inner.siginfo.is_signal_execute {
-        inner.siginfo.is_signal_execute = true;
         while let Some(signal) = inner.siginfo.signal_pending.pop() {
             // action found
+            inner.siginfo.is_signal_execute = true;
+            log::info!("Pop signal {:?} from pending queue", signal);
             if let Some(act) = inner.siginfo.signal_handler.get(&signal) {
+                log::info!("{:?} handler found", signal);
                 let handler = act.sa_handler;
-                if (signal == Signals::SIGTERM || signal == Signals::SIGKILL) && handler == SIG_DFL {
-                    drop(current_task);
-                    super::exit_current_and_run_next(signal.to_signum() as i32);
+                {// avoid borrow mut trap_cx, because we need to modify trapcx_backup
+                    let trap_cx = inner.get_trap_cx().clone();
+                    inner.trapcx_backup = trap_cx;          // backup
                 }
+                {
+                    let trap_cx = inner.get_trap_cx();
+                    trap_cx.set_sp(crate::config::USER_SIGNAL_STACK);      // sp-> signal_stack
+                    trap_cx.x[10] = signal.to_signum();    // a0=signum
+                    trap_cx.x[1] = crate::config::SIGNAL_TRAMPOLINE;       // ra-> signal_trampoline
+                    trap_cx.sepc = handler;    // sepc-> sa_handler
+                    info!(" --- {:?} (si_signo={:?}, si_code=UNKNOWN, si_addr=0x{:X})", signal, signal, handler);   
+                }
+                
             }
             // action not found
-            else{
-
+            else {
+                log::warn!("{:?} handler not found", signal);
+                if signal == Signals::SIGTERM || signal == Signals::SIGKILL || signal == Signals::SIGSEGV {
+                    exception_signal = Some(signal);
+                    break;
+                }
+                else{
+                    log::warn!("Ingore signal {:?}", signal);
+                }
+            }
+        }
+        if let Some(signal) = exception_signal {
+            drop(inner);
+            drop(task);
+            if signal == Signals::SIGTERM || signal == Signals::SIGKILL {
+                log::info!("Use default handler for {:?}", signal);
+                exit_current_and_run_next(signal.to_signum() as i32);
+            }
+            if signal == Signals::SIGSEGV {
+                log::info!("Use default handler for SIGSEGV");
+                let scause = scause::read();
+                let stval = stval::read();
+                println!(
+                    "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
+                    scause.cause(),
+                    stval,
+                    current_trap_cx().sepc,
+                );
+                // page fault exit code
+                exit_current_and_run_next(-2);
             }
         }
     }

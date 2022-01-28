@@ -22,6 +22,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::__Deref;
 use log::{debug, error, info, trace, warn};
+use riscv::register::mcause::Trap;
 use spin::{Mutex, MutexGuard};
 
 pub struct TaskControlBlock {
@@ -49,6 +50,7 @@ pub struct TaskControlBlockInner {
     pub heap_pt: usize,
     pub current_path: String,
     pub siginfo: SigInfo,
+    pub trapcx_backup: TrapContext,
     pub pgid: usize,
     pub rusage: Rusage,
     pub clock: ProcClock,
@@ -270,6 +272,13 @@ impl TaskControlBlock {
                 heap_pt: user_heap,
                 current_path: String::from("/"),
                 siginfo: SigInfo::new(),
+                trapcx_backup: TrapContext::app_init_context(
+                    entry_point,
+                    user_sp,
+                    KERNEL_SPACE.lock().token(),
+                    kernel_stack_top,
+                    trap_handler as usize,
+                ),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
             }),
@@ -500,6 +509,7 @@ impl TaskControlBlock {
                 current_path: parent_inner.current_path.clone(),
                 sigmask: Signals::empty(),
                 siginfo: parent_inner.siginfo.clone(),
+                trapcx_backup: parent_inner.get_trap_cx().clone(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
             }),

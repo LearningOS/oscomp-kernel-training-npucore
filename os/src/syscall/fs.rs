@@ -485,7 +485,8 @@ pub fn sys_fstat(fd: isize, buf: *mut u8) -> isize {
                     return 0;
                 }
                 _ => {
-                    userbuf.write(Kstat::new_abstract().as_bytes());
+                    let kstat=Kstat::new_abstract();
+                    userbuf.write(kstat.as_bytes());
                     info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size);
                     return 0; //warning
                 }

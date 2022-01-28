@@ -67,3 +67,8 @@ __restore:
     # back to user stack
     ld sp, 2*8(sp)
     sret
+
+__signal_trampoline:
+    # ecall sys_sigreturn
+    addi	a7, zero, 139
+    ecall
