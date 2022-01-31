@@ -70,8 +70,7 @@ pub fn trap_handler() -> ! {
             let task = current_task().unwrap();
             let mut inner = task.acquire_inner_lock();
             inner.add_signal(Signals::SIGSEGV);
-            log::warn!("SIGSEGV!!!");
-            log::warn!("{:?}",inner.siginfo);
+            log::debug!("{:?}",inner.siginfo);
         }
         Trap::Exception(Exception::IllegalInstruction) => {
             println!("[kernel] IllegalInstruction in application, continue.");

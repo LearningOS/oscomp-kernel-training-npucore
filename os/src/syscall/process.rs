@@ -397,7 +397,7 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     let token = current_user_token();
     let mut ticks = get_time();
     let sec = (ticks / CLOCK_FREQ) as u64;
-    let nsec = ((ticks % CLOCK_FREQ) * (NSEC_PER_SEC / CLOCK_FREQ)) as u64;
+    let nsec = ((ticks % CLOCK_FREQ) * NSEC_PER_SEC / CLOCK_FREQ) as u64;
     *translated_refmut(token, tp) = sec;
     *translated_refmut(token, unsafe { tp.add(1) }) = nsec;
     info!(
@@ -411,9 +411,9 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
 // It just a stub.
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
-    // let token = current_user_token();
-    // let sig_act = &*translated_ref(token, act as *const SigAction);
-    // sigaction(signum, sig_act, oldact as *mut SigAction)
+    let token = current_user_token();
+    let sig_act = &*translated_ref(token, act as *const SigAction);
+    sigaction(signum, sig_act, oldact);
     info!(
         "[sys_sigaction] signum:{:?}; act:{:?}, oldact:{:?}",
         signum, act, oldact

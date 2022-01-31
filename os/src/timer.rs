@@ -67,7 +67,7 @@ impl TimeVal {
     pub fn from_tick(tick: usize) -> Self {
         Self {
             tv_sec: (tick / CLOCK_FREQ) as u32,
-            tv_usec: ((tick % CLOCK_FREQ) / (CLOCK_FREQ / USEC_PER_SEC)) as u32,
+            tv_usec: ((tick % CLOCK_FREQ) * USEC_PER_SEC / CLOCK_FREQ) as u32,
         }
     }
     pub fn from_s(s: usize) -> Self {

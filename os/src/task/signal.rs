@@ -61,12 +61,12 @@ bitflags! {
 impl Signals{
     pub fn to_signum(&self) -> usize{
         match self {
-            SIGHUP      => 0,
-            SIGINT		=> 1,
-            SIGQUIT	    => 2,
-            SIGILL		=> 3,
-            SIGTRAP	    => 4,
-            SIGABRT	    => 5,
+            SIGHUP      => 1,
+            SIGINT		=> 2,
+            SIGQUIT	    => 3,
+            SIGILL		=> 4,
+            SIGTRAP	    => 5,
+            SIGABRT	    => 6,
             SIGIOT		=> 6,
             SIGBUS		=> 7,
             SIGFPE		=> 8,
@@ -122,7 +122,7 @@ bitflags! {
 pub struct SigAction {
     pub sa_handler: usize,
     //pub sa_sigaction: SaFlags,
-    pub sa_mask: Vec<Signals>,
+    pub sa_mask: Signals,
     pub sa_flags: SaFlags,
 }
 
@@ -131,7 +131,7 @@ impl SigAction {
         Self {
             sa_handler: 0,
             sa_flags: SaFlags::from_bits(0).unwrap(),
-            sa_mask: Vec::new(),
+            sa_mask: Signals::from_bits(0).unwrap(),
         }
     }
 
@@ -180,22 +180,32 @@ impl Debug for SigAction {
     }
 }
 
-pub fn sigaction(signum: isize, act: &SigAction, oldact: *mut SigAction) -> isize {
+pub fn sigaction(signum: isize, act: &SigAction, oldact: *mut usize) -> isize {
     let task = current_task();
     let token = current_user_token();
+    info!("enter sigaction");
     if let Some(task) = task {
         let mut inner = task.acquire_inner_lock();
-
+        info!("task not null");
         // Copy the old to the oldset.
         let key = Signals::from_bits(1 << (signum-1)).unwrap();
+        info!("key: {:?}", key);
         if let Some(act) = inner.siginfo.signal_handler.remove(&key) {
             if oldact as usize != 0 {
-                *translated_refmut(token, oldact) = act;
+                info!("handler found in oldact");
+                *translated_refmut(token, oldact) = act.sa_handler;
+                *translated_refmut(token, unsafe {oldact.add(1)}) = 0;
+                *translated_refmut(token, unsafe {oldact.add(2)}) = 0;
+                //log::debug!("{:?}",unsafe {&*(oldact as *mut SigAction)});
             }
         }
         else{
             if oldact as usize != 0{
-                *translated_refmut(token, oldact) = SigAction::new();
+                info!("handler not found in oldact");
+                *translated_refmut(token, oldact) = 0;
+                *translated_refmut(token, unsafe {oldact.add(1)}) = 0;
+                *translated_refmut(token, unsafe {oldact.add(2)}) = 0;
+                //log::debug!("{:?}",unsafe {&*(oldact as *mut SigAction)});
             }
         }
         // Assign the sigmask.
@@ -203,15 +213,15 @@ pub fn sigaction(signum: isize, act: &SigAction, oldact: *mut SigAction) -> isiz
             info!("sys_sigaction(signum: {:?}, act: None, oldact: {:?} ) = {}", signum, oldact, 0);
             let mut sigaction_new = SigAction {
                 sa_handler:act.sa_handler,
-                sa_mask:Vec::new(),
+                sa_mask:act.sa_mask,
                 sa_flags:act.sa_flags,
             };
             // push to PCB
             let sigaction_new_copy = sigaction_new.clone();
-            let mut inner = task.acquire_inner_lock();
             if !(act.sa_handler == SIG_DFL || act.sa_handler == SIG_IGN) {
                 inner.siginfo.signal_handler.insert(key, sigaction_new);
             };
+            log::debug!("{:?}",inner.siginfo);
             0
         }
     } else {

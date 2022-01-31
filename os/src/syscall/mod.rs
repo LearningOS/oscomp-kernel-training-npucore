@@ -89,7 +89,7 @@ pub fn syscall_name(id: usize) -> &'static str {
     match id {
         SYSCALL_DUP => "dup",
         SYSCALL_OPEN => "open",
-        SYSCALL_GET_TIME => "get",
+        SYSCALL_GET_TIME => "get_time",
         SYSCALL_FORK => "fork",
         SYSCALL_WAITPID => "waitpid",
         SYSCALL_GETCWD => "getcwd",
