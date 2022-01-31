@@ -585,6 +585,31 @@ impl MemorySet {
                     .copy_from_slice(src_ppn.get_bytes_array());
             }
         }
+        for area in user_space.heap_areas.iter() {
+            let new_area = MapArea::from_another(area);
+            memory_set.push_heap_area(new_area, None);
+            // copy data from another space
+            for vpn in area.vpn_range {
+                let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                dst_ppn
+                    .get_bytes_array()
+                    .copy_from_slice(src_ppn.get_bytes_array());
+            }
+        }
+        for area in user_space.mmap_areas.iter() {
+            let mut new_area = MmapArea::from_another(area);
+            new_area.area.map(&mut memory_set.page_table);
+            memory_set.mmap_areas.push(new_area);
+            // copy data from another space
+            for vpn in area.area.vpn_range {
+                let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                dst_ppn
+                    .get_bytes_array()
+                    .copy_from_slice(src_ppn.get_bytes_array());
+            }
+        }
         memory_set
     }
     pub fn activate(&self) {
@@ -742,6 +767,17 @@ impl MmapArea {
         Self {
             fd,
             area: MapArea::new(start_va, end_va, MapType::Framed, map_perm),
+        }
+    }
+    pub fn from_another(another: &MmapArea) -> Self {
+        Self {
+            fd: another.fd,
+            area: MapArea {
+                vpn_range: VPNRange::new(another.area.vpn_range.get_start(), another.area.vpn_range.get_end()),
+                data_frames: BTreeMap::new(),
+                map_type: another.area.map_type,
+                map_perm: another.area.map_perm,
+            }
         }
     }
     pub fn map_file(
