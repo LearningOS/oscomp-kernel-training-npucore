@@ -3,8 +3,7 @@ use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
     translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer,
 };
-use crate::task::signal::*;
-use crate::task::signal::*;
+use crate::task::{signal::*, block_current_and_run_next};
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next, Rusage,
@@ -330,6 +329,8 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
         }
         found_pid as isize
     } else {
+        drop(inner);
+        block_current_and_run_next();
         -2
     }
     // ---- release current PCB lock automatically

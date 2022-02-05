@@ -633,6 +633,8 @@ pub enum TaskStatus {
     Ready,
     Running,
     Zombie,
+    Sleep,
+    Stop,
 }
 
 pub struct ProcAddress {

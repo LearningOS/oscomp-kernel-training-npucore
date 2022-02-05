@@ -213,7 +213,7 @@ pub fn sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
                     let act = translated_ref(token, act as *const SigAction);
                     let mut sigaction_new = SigAction {
                         sa_handler:act.sa_handler,
-                        sa_mask:act.sa_mask,
+                        sa_mask:act.sa_mask.difference(Signals::SIGSTOP | Signals::SIGKILL),
                         sa_flags:act.sa_flags,
                     };
                     // push to PCB, ignore mask and flags now

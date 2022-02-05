@@ -16,7 +16,7 @@ use switch::__switch;
 pub use task::{AuxHeader, FdTable, Rusage};
 use task::{TaskControlBlock, TaskStatus};
 
-pub use manager::add_task;
+pub use manager::{add_task, sleep_task, wake_task};
 pub use pid::{pid_alloc, KernelStack, PidHandle};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
@@ -40,6 +40,24 @@ pub fn suspend_current_and_run_next() {
     schedule(task_cx_ptr2);
 }
 
+pub fn block_current_and_run_next() {
+    // There must be an application running.
+    let task = take_current_task().unwrap();
+
+    // ---- hold current PCB lock
+    let mut task_inner = task.acquire_inner_lock();
+    let task_cx_ptr2 = task_inner.get_task_cx_ptr2();
+    // Change status to Sleep
+    task_inner.task_status = TaskStatus::Sleep;
+    drop(task_inner);
+    // ---- release current PCB lock
+
+    // push back to wait queue.
+    sleep_task(task);
+    // jump to scheduling cycle
+    schedule(task_cx_ptr2);
+}
+
 pub fn exit_current_and_run_next(exit_code: i32) {
     // take from Processor
     let task = take_current_task().unwrap();
@@ -49,6 +67,15 @@ pub fn exit_current_and_run_next(exit_code: i32) {
         let parent_task = inner.parent.as_ref().unwrap().upgrade().unwrap(); // this will acquire inner of current task
         let mut parent_inner = parent_task.acquire_inner_lock();
         parent_inner.add_signal(Signals::SIGCHLD);
+        // *warning* so far we can assert that a process has 'Sleep' status only when it has called sys_wait.
+        // but in future we may face more complex situations and this part should be revised.
+        if parent_inner.task_status == TaskStatus::Sleep {
+            // wake up parent if parent is waiting.
+            parent_inner.task_status = TaskStatus::Ready;
+            drop(parent_inner);
+            // push back to ready queue.
+            wake_task(parent_task);
+        }
     }
     log::info!(
         "[sys_exit] Trying to exit pid {} with {}",
