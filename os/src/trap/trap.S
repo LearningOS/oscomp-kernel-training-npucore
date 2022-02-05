@@ -68,7 +68,10 @@ __restore:
     ld sp, 2*8(sp)
     sret
 
-__signal_trampoline:
+    .section .text.signaltrampoline
+    .globl __call_sigreturn
+    .align 2
+__call_sigreturn:
     # ecall sys_sigreturn
     addi	a7, zero, 139
     ecall

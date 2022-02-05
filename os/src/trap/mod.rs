@@ -5,7 +5,7 @@ use core::borrow::BorrowMut;
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
 use crate::syscall::syscall;
 use crate::task::{
-    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, current_task, do_signal_handlers, Signals,
+    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, current_task, do_signal, Signals,
 };
 use crate::timer::set_next_trigger;
 use riscv::register::{
@@ -15,6 +15,12 @@ use riscv::register::{
 };
 
 global_asm!(include_str!("trap.S"));
+
+extern "C" {
+    pub fn __alltraps();
+    pub fn __restore();
+    pub fn __call_sigreturn();
+}
 
 pub fn init() {
     set_kernel_trap_entry();
@@ -101,15 +107,10 @@ pub fn trap_handler() -> ! {
 
 #[no_mangle]
 pub fn trap_return() -> ! {
-    do_signal_handlers();
+    do_signal();
     set_user_trap_entry();
     let trap_cx_ptr = TRAP_CONTEXT;
     let user_satp = current_user_token();
-    extern "C" {
-        fn __alltraps();
-        fn __restore();
-        fn __signal_trampoline();
-    }
     let restore_va = __restore as usize - __alltraps as usize + TRAMPOLINE;
     // let task = current_task().unwrap();
     // let mut inner = task.acquire_inner_lock();
@@ -124,6 +125,9 @@ pub fn trap_return() -> ! {
 
 #[no_mangle]
 pub fn trap_from_kernel() -> ! {
+    println!("I will protect {:X}!", __call_sigreturn as usize);
+    // It seems like rust has not keyword like "volatile" to protect some variables from being optimized out.
+    // So I have to put it here. Hope someone can find a better way to solve it!
     panic!("a trap {:?} from kernel!", scause::read().cause());
 }
 

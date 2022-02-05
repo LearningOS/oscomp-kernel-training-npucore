@@ -28,6 +28,7 @@ extern "C" {
     fn ebss();
     fn ekernel();
     fn strampoline();
+    fn ssignaltrampoline();
 }
 
 lazy_static! {
@@ -319,6 +320,14 @@ impl MemorySet {
             PTEFlags::R | PTEFlags::X,
         );
     }
+    /// Can be accessed in user mode.
+    fn map_signaltrampoline(&mut self) {
+        self.page_table.map(
+            VirtAddr::from(SIGNAL_TRAMPOLINE).into(),
+            PhysAddr::from(ssignaltrampoline as usize).into(),
+            PTEFlags::R | PTEFlags::X | PTEFlags::U,
+        );
+    }
     /// Without kernel stacks.
     pub fn new_kernel() -> Self {
         let mut memory_set = Self::new_bare();
@@ -403,6 +412,8 @@ impl MemorySet {
         let mut memory_set = Self::new_bare();
         // map trampoline
         memory_set.map_trampoline();
+        // map signaltrampoline
+        memory_set.map_signaltrampoline();
         // map program headers of elf, with U flag
         let elf = xmas_elf::ElfFile::new(elf_data).unwrap();
         let elf_header = elf.header;
@@ -522,10 +533,6 @@ impl MemorySet {
             value: ph_head_addr as usize,
         });
 
-        let mut user_stack_top: usize = TRAP_CONTEXT;
-        user_stack_top -= PAGE_SIZE;
-        let user_stack_bottom: usize = user_stack_top - USER_STACK_SIZE;
-
         let max_end_va: VirtAddr = max_end_vpn.into();
         let mut user_heap_bottom: usize = max_end_va.into();
         // guard page
@@ -533,8 +540,8 @@ impl MemorySet {
 
         memory_set.push(
             MapArea::new(
-                user_stack_bottom.into(),
-                user_stack_top.into(),
+                USER_STACK_TOP.into(),
+                USER_STACK_BOTTOM.into(),
                 MapType::Framed,
                 MapPermission::R | MapPermission::W | MapPermission::U,
             ),
@@ -542,9 +549,20 @@ impl MemorySet {
         );
         trace!(
             "[elf] USER STACK PUSHED. user_stack_top:{:X}; user_stack_bottom:{:X}",
-            user_stack_top,
-            user_stack_bottom
+            USER_STACK_TOP,
+            USER_STACK_BOTTOM
         );
+        // memory_set.push(MapArea::new(
+        //     user_signal_stack_bottom.into(),
+        //     user_signal_stack_top.into(),
+        //     MapType::Framed,
+        //     MapPermission::R | MapPermission::W | MapPermission::U,
+        // ), None);
+        // trace!(
+        //     "[elf] USER SIGNAL STACK PUSHED. user_signal_stack_top:{:X}; user_signal_stack_bottom:{:X}",
+        //     user_signal_stack_top,
+        //     user_signal_stack_bottom
+        // );
         // map TrapContext
         memory_set.push(
             MapArea::new(
@@ -562,7 +580,7 @@ impl MemorySet {
         );
         (
             memory_set,
-            user_stack_top,
+            USER_STACK_BOTTOM,
             user_heap_bottom,
             elf.header.pt2.entry_point() as usize,
             auxv,
@@ -572,6 +590,8 @@ impl MemorySet {
         let mut memory_set = Self::new_bare();
         // map trampoline
         memory_set.map_trampoline();
+        // map signaltrampoline
+        memory_set.map_signaltrampoline();
         // copy data sections/trap_context/user_stack
         for area in user_space.areas.iter() {
             let new_area = MapArea::from_another(area);
@@ -841,12 +861,34 @@ bitflags! {
 }
 
 bitflags! {
+    pub struct MmapProt: usize {
+        const PROT_NONE     =   0;
+        const PROT_READ     =   1;
+        const PROT_WRITE    =   2;
+        const PROT_EXEC     =   4;
+    }
+}
+
+bitflags! {
     pub struct MmapFlags: usize {
-        const MAP_FILE = 0;
-        const MAP_SHARED= 0x01;
-        const MAP_PRIVATE = 0x02;
-        const MAP_FIXED = 0x10;
-        const MAP_ANONYMOUS = 0x20;
+        const MAP_SHARED            =   0x01;
+        const MAP_PRIVATE           =   0x02;
+        const MAP_SHARED_VALIDATE   =   0x03;
+        const MAP_TYPE              =   0x0f;
+        const MAP_FIXED             =   0x10;
+        const MAP_ANONYMOUS         =   0x20;
+        const MAP_NORESERVE         =   0x4000;
+        const MAP_GROWSDOWN         =   0x0100;
+        const MAP_DENYWRITE         =   0x0800;
+        const MAP_EXECUTABLE        =   0x1000;
+        const MAP_LOCKED            =   0x2000;
+        const MAP_POPULATE          =   0x8000;
+        const MAP_NONBLOCK          =   0x10000;
+        const MAP_STACK             =   0x20000;
+        const MAP_HUGETLB           =   0x40000;
+        const MAP_SYNC              =   0x80000;
+        const MAP_FIXED_NOREPLACE   =   0x100000;
+        const MAP_FILE              =   0;
     }
 }
 

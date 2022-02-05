@@ -10,7 +10,7 @@ use crate::config::*;
 use crate::fs::{FileClass, FileDescripter, Stdin, Stdout};
 use crate::mm::VirtPageNum;
 use crate::mm::{
-    translated_refmut, MapPermission, MemorySet, MmapArea, PhysPageNum, VirtAddr, KERNEL_SPACE,
+    translated_refmut, MapPermission, MmapProt, MmapFlags, MemorySet, MmapArea, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
 use crate::task::current_user_token;
 use crate::timer::get_time_ms;
@@ -50,7 +50,6 @@ pub struct TaskControlBlockInner {
     pub heap_pt: usize,
     pub current_path: String,
     pub siginfo: SigInfo,
-    pub trapcx_backup: TrapContext,
     pub pgid: usize,
     pub rusage: Rusage,
     pub clock: ProcClock,
@@ -158,7 +157,9 @@ impl TaskControlBlockInner {
         self.current_path.clone()
     }
     pub fn add_signal(&mut self, signal: Signals) {
-        self.siginfo.signal_pending.push(signal);
+        if self.siginfo.signal_pending.iter().find(|&&x| x == signal).is_none() {
+            self.siginfo.signal_pending.push(signal);
+        }
     }
     pub fn update_process_time_before_trap(&mut self) {
         let now = TimeVal::now();
@@ -272,13 +273,6 @@ impl TaskControlBlock {
                 heap_pt: user_heap,
                 current_path: String::from("/"),
                 siginfo: SigInfo::new(),
-                trapcx_backup: TrapContext::app_init_context(
-                    entry_point,
-                    user_sp,
-                    KERNEL_SPACE.lock().token(),
-                    kernel_stack_top,
-                    trap_handler as usize,
-                ),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
             }),
@@ -509,7 +503,6 @@ impl TaskControlBlock {
                 current_path: parent_inner.current_path.clone(),
                 sigmask: Signals::empty(),
                 siginfo: parent_inner.siginfo.clone(),
-                trapcx_backup: parent_inner.get_trap_cx().clone(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
             }),
@@ -571,7 +564,6 @@ impl TaskControlBlock {
         }
         new_pt
     }
-
     /// 建立从文件到内存的映射
     pub fn mmap(
         &self,
@@ -583,8 +575,8 @@ impl TaskControlBlock {
         offset: usize, // 文件位移
     ) -> usize {
         info!(
-            "[mmap] start:{:X}; len:{:X}; prot:{:X}; flags:{:X}; fd:{:X}; offset:{:X}",
-            start, len, prot, flags, fd, offset
+            "[mmap] start:{:X}; len:{:X}; prot:{:?}; flags:{:?}; fd:{:}; offset:{:X}",
+            start, len, MmapProt::from_bits(prot).unwrap(), MmapFlags::from_bits(flags).unwrap(), fd as isize, offset
         );
         if start % PAGE_SIZE != 0 {
             panic!("[mmap] start not aligned.");

@@ -10,10 +10,12 @@ use crate::task::{
     suspend_current_and_run_next, Rusage,
 };
 use crate::timer::{get_time, get_time_ms, TimeVal};
+use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
+use core::ops::Add;
 use core::ptr::null;
 use log::{debug, error, info, trace, warn};
 
@@ -412,8 +414,7 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
     let token = current_user_token();
-    let sig_act = &*translated_ref(token, act as *const SigAction);
-    sigaction(signum, sig_act, oldact);
+    sigaction(signum, act, oldact);
     info!(
         "[sys_sigaction] signum:{:?}; act:{:?}, oldact:{:?}",
         signum, act, oldact
@@ -436,13 +437,14 @@ pub fn sys_sigprocmask(how: usize, set: *mut usize, oldset: *mut usize) -> isize
 pub fn sys_sigreturn() -> isize{
     // mark not processing signal handler
     let current_task = current_task().unwrap();
-    info!("sys_sigreturn()(pid: {})", current_task.pid.0);
+    info!("[sys_sigreturn] pid: {}", current_task.pid.0);
     let mut inner = current_task.acquire_inner_lock();
     assert_eq!(inner.siginfo.is_signal_execute, true);
     inner.siginfo.is_signal_execute = false;
     // restore trap_cx
     let trap_cx = inner.get_trap_cx();
-    *trap_cx = inner.trapcx_backup.clone();
+    let sp = trap_cx.x[2];
+    *trap_cx = translated_ref(inner.get_user_token(), sp as *mut TrapContext).clone();
     return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
 }
 
