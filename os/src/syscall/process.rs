@@ -8,7 +8,7 @@ use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next, Rusage,
 };
-use crate::timer::{get_time, get_time_ms, TimeVal};
+use crate::timer::{get_time, get_time_ms, TimeVal, ITimerVal};
 use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -111,6 +111,28 @@ pub fn sys_nano_sleep(
     }
 
     0
+}
+
+pub fn sys_settimer(
+    which: usize,
+    new_value: *const ITimerVal,
+    old_value: *mut ITimerVal,
+) -> isize {
+    match which {
+        0..=2 => {
+            let task = current_task().unwrap();
+            let mut inner = task.acquire_inner_lock();
+            let token = inner.get_user_token();
+            if old_value as usize != 0 {
+                *translated_refmut(token, old_value) = inner.timer[which];
+            }
+            if new_value as usize != 0 {
+                inner.timer[which] = *translated_ref(token, new_value);
+            }
+            0
+        }
+        _ => -1
+    }
 }
 
 pub fn sys_get_time_of_day(

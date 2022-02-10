@@ -162,7 +162,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         _ => "unknown",
     }
 }
-use crate::{fs::IoVec, timer::TimeSpec};
+use crate::{fs::IoVec, timer::{TimeSpec, ITimerVal}};
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![124, 260, 63, 64, 66, 73].contains(&syscall_id) {
@@ -234,6 +234,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_NANOSLEEP => sys_nano_sleep(
             args[0] as *const crate::timer::TimeSpec,
             args[1] as *mut crate::timer::TimeSpec,
+        ),
+        SYSCALL_SETITIMER => sys_settimer(
+            args[0],
+            args[1] as *const ITimerVal,
+            args[2] as *mut ITimerVal,
         ),
         SYSCALL_GET_TIME => sys_get_time(),
         SYSCALL_GETRUSAGE => sys_getrusage(args[0] as isize, args[1] as *mut u8),

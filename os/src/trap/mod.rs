@@ -47,14 +47,15 @@ pub fn enable_timer_interrupt() {
 #[no_mangle]
 pub fn trap_handler() -> ! {
     set_kernel_trap_entry();
+    {
+        let task = current_task().unwrap();
+        let mut inner = task.acquire_inner_lock();
+        inner.update_process_times_enter_trap();
+    }
     let scause = scause::read();
     let stval = stval::read();
     match scause.cause() {
         Trap::Exception(Exception::UserEnvCall) => {
-            // let task = current_task().unwrap();
-            // let mut inner = task.acquire_inner_lock();
-            // inner.update_process_time_before_trap();
-            // drop(inner);
             // jump to next instruction anyway
             let mut cx = current_trap_cx();
             cx.sepc += 4;
@@ -101,7 +102,11 @@ pub fn trap_handler() -> ! {
             );
         }
     }
-    //println!("before trap_return");
+    {
+        let task = current_task().unwrap();
+        let mut inner = task.acquire_inner_lock();
+        inner.update_process_times_leave_trap(scause.cause());
+    }
     trap_return();
 }
 
@@ -112,10 +117,6 @@ pub fn trap_return() -> ! {
     let trap_cx_ptr = TRAP_CONTEXT;
     let user_satp = current_user_token();
     let restore_va = __restore as usize - __alltraps as usize + TRAMPOLINE;
-    // let task = current_task().unwrap();
-    // let mut inner = task.acquire_inner_lock();
-    // inner.update_process_time_after_trap();
-    // drop(inner);
     unsafe {
         llvm_asm!("fence.i" :::: "volatile");
         llvm_asm!("jr $0" :: "r"(restore_va), "{a0}"(trap_cx_ptr), "{a1}"(user_satp) :: "volatile");

@@ -2,6 +2,7 @@ use core::ops::{Sub, Add};
 
 use crate::config::CLOCK_FREQ;
 use crate::sbi::set_timer;
+use crate::task::{current_task, Signals};
 use riscv::register::time;
 
 const TICKS_PER_SEC: usize = 100;
@@ -133,4 +134,18 @@ impl Sub for TimeVal {
 pub struct TimeZone {
     pub tz_minute_west: u32,
     pub tz_dst_time: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ITimerVal {
+    pub it_interval: TimeVal,
+    pub it_value: TimeVal,
+}
+impl ITimerVal {
+    pub fn new() -> Self {
+        Self {
+            it_interval: TimeVal::new(),
+            it_value: TimeVal:: new(),
+        }
+    }
 }

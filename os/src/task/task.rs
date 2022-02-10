@@ -12,8 +12,7 @@ use crate::mm::VirtPageNum;
 use crate::mm::{
     translated_refmut, MapPermission, MmapProt, MmapFlags, MemorySet, MmapArea, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
-use crate::task::current_user_token;
-use crate::timer::get_time_ms;
+use crate::timer::ITimerVal;
 use crate::trap::{trap_handler, TrapContext};
 use crate::timer::TimeVal;
 use alloc::string::String;
@@ -22,7 +21,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::__Deref;
 use log::{debug, error, info, trace, warn};
-use riscv::register::mcause::Trap;
+use riscv::register::{
+    scause::{self, Exception, Interrupt, Trap},
+};
 use spin::{Mutex, MutexGuard};
 
 pub struct TaskControlBlock {
@@ -53,17 +54,18 @@ pub struct TaskControlBlockInner {
     pub pgid: usize,
     pub rusage: Rusage,
     pub clock: ProcClock,
+    pub timer: [ITimerVal; 3],
 }
 
 pub struct ProcClock{
-    last_enter_u_mode: TimeVal,
-    last_enter_s_mode: TimeVal,
+    pub last_enter_u_mode: TimeVal,
+    pub last_enter_s_mode: TimeVal,
 }
 
 impl ProcClock{
     pub fn new() -> Self{
         let now = TimeVal::now();
-        Self{
+        Self {
             last_enter_u_mode: now,
             last_enter_s_mode: now,
         }
@@ -161,18 +163,50 @@ impl TaskControlBlockInner {
             self.siginfo.signal_pending.push(signal);
         }
     }
-    pub fn update_process_time_before_trap(&mut self) {
+    pub fn update_process_times_enter_trap(&mut self) {
         let now = TimeVal::now();
-        self.rusage.ru_utime = self.rusage.ru_utime + now - self.clock.last_enter_u_mode;
         self.clock.last_enter_s_mode = now;
+        let diff = now - self.clock.last_enter_u_mode;
+        self.rusage.ru_utime = self.rusage.ru_utime + diff;
+        self.update_itimer_virtual_if_exists(diff);
+        self.update_itimer_prof_if_exists(diff);
     }
-    pub fn update_process_time_after_trap(&mut self) {
+    pub fn update_process_times_leave_trap(&mut self, scause: Trap) {
         let now = TimeVal::now();
-        self.rusage.ru_stime = self.rusage.ru_stime + now - self.clock.last_enter_s_mode;
+        self.update_itimer_real_if_exists(now - self.clock.last_enter_u_mode);
+        if scause != Trap::Interrupt(Interrupt::SupervisorTimer) {
+            let diff = now - self.clock.last_enter_s_mode;
+            self.rusage.ru_stime = self.rusage.ru_stime + diff;
+            self.update_itimer_prof_if_exists(diff);
+        }
         self.clock.last_enter_u_mode = now;
     }
-    pub fn update_process_time_after_switch(&mut self) {
-        self.clock = ProcClock::new();
+    pub fn update_itimer_real_if_exists(&mut self, diff:TimeVal){
+        if !self.timer[0].it_value.is_zero(){
+            self.timer[0].it_value = self.timer[0].it_value - diff;
+            if self.timer[0].it_value.is_zero() {
+                self.add_signal(Signals::SIGALRM);
+                self.timer[0].it_value = self.timer[0].it_interval;
+            }
+        }
+    }
+    pub fn update_itimer_virtual_if_exists(&mut self, diff:TimeVal){
+        if !self.timer[1].it_value.is_zero(){
+            self.timer[1].it_value = self.timer[1].it_value - diff;
+            if self.timer[1].it_value.is_zero() {
+                self.add_signal(Signals::SIGVTALRM);
+                self.timer[1].it_value = self.timer[1].it_interval;
+            }
+        }
+    }
+    pub fn update_itimer_prof_if_exists(&mut self, diff:TimeVal){
+        if !self.timer[2].it_value.is_zero(){
+            self.timer[2].it_value = self.timer[2].it_value - diff;
+            if self.timer[2].it_value.is_zero() {
+                self.add_signal(Signals::SIGPROF);
+                self.timer[2].it_value = self.timer[2].it_interval;
+            }
+        }
     }
 }
 
@@ -275,6 +309,7 @@ impl TaskControlBlock {
                 siginfo: SigInfo::new(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
+                timer: [ITimerVal::new(); 3],
             }),
         };
         // prepare TrapContext in user space
@@ -505,6 +540,7 @@ impl TaskControlBlock {
                 siginfo: parent_inner.siginfo.clone(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
+                timer: [ITimerVal::new(); 3],
             }),
         });
         // add child
