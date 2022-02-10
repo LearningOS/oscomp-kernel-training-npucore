@@ -173,9 +173,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         260,
         63,
         64,
-        66,
-        73,
-        SYSCALL_GETPPID, /*sys_getpgid*/
+        SYSCALL_GETDENTS64,
+        SYSCALL_WRITEV,
+        SYSCALL_PPOLL,
+        SYSCALL_GETPPID,
+        SYSCALL_CLOCK_GETTIME,
     ]
     .contains(&syscall_id)
     {
@@ -278,6 +280,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         SYSCALL_MPROTECT => sys_mprotect(args[0] as usize, args[1] as usize, args[2] as isize),
+        // test
+        /* SYSCALL_PSELECT6 => sys_crosselect(
+         *     args[0] as usize,
+         *     args[1] as *mut u8,
+         *     args[2] as *mut u8,
+         *     args[3] as *mut u8,
+         *     args[4] as *mut usize,
+         * ), */
         // ultraos api
         /* SYSCALL_PSELECT6 => sys_ultrapselect(
          *     args[0] as usize,
