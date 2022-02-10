@@ -9,7 +9,7 @@ pub mod stdio;
 
 use crate::mm::UserBuffer;
 use alloc::sync::Arc;
-pub use poll::{ppoll, PollFd};
+pub use poll::{ppoll, pselect, FdSet, PollFd};
 
 #[derive(Clone)]
 pub struct FileDescripter {

@@ -28,9 +28,11 @@ impl TaskManager {
     }
     pub fn wake(&mut self, task: Arc<TaskControlBlock>) {
         let pid = task.getpid();
-        let pair = self.wait_queue.iter().enumerate().find(|(_, task)| {
-            task.getpid() == pid
-        });
+        let pair = self
+            .wait_queue
+            .iter()
+            .enumerate()
+            .find(|(_, task)| task.getpid() == pid);
         if let Some((idx, _)) = pair {
             let task = self.wait_queue.remove(idx).unwrap();
             self.ready_queue.push_back(task);

@@ -1,7 +1,7 @@
 use core::borrow::Borrow;
 use core::borrow::BorrowMut;
-use core::mem::ManuallyDrop;
 use core::fmt::{self, Debug, Formatter};
+use core::mem::ManuallyDrop;
 
 use super::signal::*;
 use super::TaskContext;
@@ -10,12 +10,13 @@ use crate::config::*;
 use crate::fs::{FileClass, FileDescripter, Stdin, Stdout};
 use crate::mm::VirtPageNum;
 use crate::mm::{
-    translated_refmut, MapPermission, MmapProt, MmapFlags, MemorySet, MmapArea, PhysPageNum, VirtAddr, KERNEL_SPACE,
+    translated_refmut, MapPermission, MemorySet, MmapArea, MmapFlags, MmapProt, PhysPageNum,
+    VirtAddr, KERNEL_SPACE,
 };
 use crate::task::current_user_token;
 use crate::timer::get_time_ms;
-use crate::trap::{trap_handler, TrapContext};
 use crate::timer::TimeVal;
+use crate::trap::{trap_handler, TrapContext};
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
@@ -55,77 +56,74 @@ pub struct TaskControlBlockInner {
     pub clock: ProcClock,
 }
 
-pub struct ProcClock{
+pub struct ProcClock {
     last_enter_u_mode: TimeVal,
     last_enter_s_mode: TimeVal,
 }
 
-impl ProcClock{
-    pub fn new() -> Self{
+impl ProcClock {
+    pub fn new() -> Self {
         let now = TimeVal::now();
-        Self{
+        Self {
             last_enter_u_mode: now,
             last_enter_s_mode: now,
         }
     }
 }
 
-pub struct Rusage{
-    ru_utime   :TimeVal,      /* user CPU time used */
-    ru_stime   :TimeVal,      /* system CPU time used */
-    ru_maxrss  :isize  ,      // NOT IMPLEMENTED /* maximum resident set size */
-    ru_ixrss   :isize  ,      // NOT IMPLEMENTED /* integral shared memory size */
-    ru_idrss   :isize   ,     // NOT IMPLEMENTED /* integral unshared data size */
-    ru_isrss   :isize  ,      // NOT IMPLEMENTED /* integral unshared stack size */
-    ru_minflt  :isize  ,      // NOT IMPLEMENTED /* page reclaims (soft page faults) */
-    ru_majflt  :isize  ,      // NOT IMPLEMENTED /* page faults (hard page faults) */
-    ru_nswap   :isize  ,      // NOT IMPLEMENTED /* swaps */
-    ru_inblock :isize  ,      // NOT IMPLEMENTED /* block input operations */
-    ru_oublock :isize  ,      // NOT IMPLEMENTED /* block output operations */
-    ru_msgsnd  :isize  ,      // NOT IMPLEMENTED /* IPC messages sent */
-    ru_msgrcv  :isize  ,      // NOT IMPLEMENTED /* IPC messages received */
-    ru_nsignals:isize  ,      // NOT IMPLEMENTED /* signals received */
-    ru_nvcsw   :isize  ,      // NOT IMPLEMENTED /* voluntary context switches */
-    ru_nivcsw  :isize  ,      // NOT IMPLEMENTED /* involuntary context switches */
+pub struct Rusage {
+    ru_utime: TimeVal,  /* user CPU time used */
+    ru_stime: TimeVal,  /* system CPU time used */
+    ru_maxrss: isize,   // NOT IMPLEMENTED /* maximum resident set size */
+    ru_ixrss: isize,    // NOT IMPLEMENTED /* integral shared memory size */
+    ru_idrss: isize,    // NOT IMPLEMENTED /* integral unshared data size */
+    ru_isrss: isize,    // NOT IMPLEMENTED /* integral unshared stack size */
+    ru_minflt: isize,   // NOT IMPLEMENTED /* page reclaims (soft page faults) */
+    ru_majflt: isize,   // NOT IMPLEMENTED /* page faults (hard page faults) */
+    ru_nswap: isize,    // NOT IMPLEMENTED /* swaps */
+    ru_inblock: isize,  // NOT IMPLEMENTED /* block input operations */
+    ru_oublock: isize,  // NOT IMPLEMENTED /* block output operations */
+    ru_msgsnd: isize,   // NOT IMPLEMENTED /* IPC messages sent */
+    ru_msgrcv: isize,   // NOT IMPLEMENTED /* IPC messages received */
+    ru_nsignals: isize, // NOT IMPLEMENTED /* signals received */
+    ru_nvcsw: isize,    // NOT IMPLEMENTED /* voluntary context switches */
+    ru_nivcsw: isize,   // NOT IMPLEMENTED /* involuntary context switches */
 }
 
-impl Rusage{
-    pub fn new() -> Self{
-        Self{
-            ru_utime   :TimeVal::new(),
-            ru_stime   :TimeVal::new(),
-            ru_maxrss  :0,
-            ru_ixrss   :0,
-            ru_idrss   :0,
-            ru_isrss   :0,
-            ru_minflt  :0,
-            ru_majflt  :0,
-            ru_nswap   :0,
-            ru_inblock :0,
-            ru_oublock :0,
-            ru_msgsnd  :0,
-            ru_msgrcv  :0,
-            ru_nsignals:0,
-            ru_nvcsw   :0,
-            ru_nivcsw  :0,
+impl Rusage {
+    pub fn new() -> Self {
+        Self {
+            ru_utime: TimeVal::new(),
+            ru_stime: TimeVal::new(),
+            ru_maxrss: 0,
+            ru_ixrss: 0,
+            ru_idrss: 0,
+            ru_isrss: 0,
+            ru_minflt: 0,
+            ru_majflt: 0,
+            ru_nswap: 0,
+            ru_inblock: 0,
+            ru_oublock: 0,
+            ru_msgsnd: 0,
+            ru_msgrcv: 0,
+            ru_nsignals: 0,
+            ru_nvcsw: 0,
+            ru_nivcsw: 0,
         }
     }
 
     pub fn as_bytes(&self) -> &[u8] {
         let size = core::mem::size_of::<Self>();
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const _ as usize as *const u8,
-                size,
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const _ as usize as *const u8, size) }
     }
-
 }
 
 impl Debug for Rusage {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!("(ru_utime:{:?}, ru_stime:{:?})", self.ru_utime, self.ru_stime))
+        f.write_fmt(format_args!(
+            "(ru_utime:{:?}, ru_stime:{:?})",
+            self.ru_utime, self.ru_stime
+        ))
     }
 }
 
@@ -157,7 +155,13 @@ impl TaskControlBlockInner {
         self.current_path.clone()
     }
     pub fn add_signal(&mut self, signal: Signals) {
-        if self.siginfo.signal_pending.iter().find(|&&x| x == signal).is_none() {
+        if self
+            .siginfo
+            .signal_pending
+            .iter()
+            .find(|&&x| x == signal)
+            .is_none()
+        {
             self.siginfo.signal_pending.push(signal);
         }
     }
@@ -576,7 +580,12 @@ impl TaskControlBlock {
     ) -> usize {
         info!(
             "[mmap] start:{:X}; len:{:X}; prot:{:?}; flags:{:?}; fd:{:}; offset:{:X}",
-            start, len, MmapProt::from_bits(prot).unwrap(), MmapFlags::from_bits(flags).unwrap(), fd as isize, offset
+            start,
+            len,
+            MmapProt::from_bits(prot).unwrap(),
+            MmapFlags::from_bits(flags).unwrap(),
+            fd as isize,
+            offset
         );
         if start % PAGE_SIZE != 0 {
             panic!("[mmap] start not aligned.");

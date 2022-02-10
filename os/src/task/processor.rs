@@ -75,7 +75,11 @@ pub fn take_current_task() -> Option<Arc<TaskControlBlock>> {
 pub fn current_task() -> Option<Arc<TaskControlBlock>> {
     PROCESSOR.current()
 }
-
+/// Get current user token.
+/// # Prerequisite
+/// The task must NOT be locked before use.
+/// However, the task lock will be released after the call,
+/// leaving the task UNLOCKED.
 pub fn current_user_token() -> usize {
     let task = current_task().unwrap();
     let token = task.acquire_inner_lock().get_user_token();

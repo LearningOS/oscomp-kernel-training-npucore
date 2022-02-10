@@ -793,11 +793,14 @@ impl MmapArea {
         Self {
             fd: another.fd,
             area: MapArea {
-                vpn_range: VPNRange::new(another.area.vpn_range.get_start(), another.area.vpn_range.get_end()),
+                vpn_range: VPNRange::new(
+                    another.area.vpn_range.get_start(),
+                    another.area.vpn_range.get_end(),
+                ),
                 data_frames: BTreeMap::new(),
                 map_type: another.area.map_type,
                 map_perm: another.area.map_perm,
-            }
+            },
         }
     }
     pub fn map_file(

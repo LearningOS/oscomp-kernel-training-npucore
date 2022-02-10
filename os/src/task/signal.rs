@@ -1,17 +1,17 @@
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
+use core::fmt::{self, Binary, Debug, Formatter};
 use log::info;
 use riscv::register::{
     mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
     sie, stval, stvec,
 };
-use core::fmt::{self, Debug, Formatter, Binary};
 
-use crate::mm::{translated_refmut, translated_ref};
-use crate::task::{current_trap_cx, exit_current_and_run_next};
 use crate::config::*;
-use crate::trap::{__call_sigreturn, __alltraps, TrapContext};
+use crate::mm::{translated_ref, translated_refmut};
+use crate::task::{current_trap_cx, exit_current_and_run_next};
+use crate::trap::{TrapContext, __alltraps, __call_sigreturn};
 
 use super::{current_task, current_user_token};
 
@@ -62,43 +62,16 @@ bitflags! {
     }
 }
 
-impl Signals{
-    pub fn to_signum(&self) -> Option<usize>{
-        match self {
-            &Signals::SIGHUP        => Some( 1),
-            &Signals::SIGINT		=> Some( 2),
-            &Signals::SIGQUIT	    => Some( 3),
-            &Signals::SIGILL		=> Some( 4),
-            &Signals::SIGTRAP	    => Some( 5),
-            &Signals::SIGABRT	    => Some( 6),
-            &Signals::SIGIOT		=> Some( 6),
-            &Signals::SIGBUS		=> Some( 7),
-            &Signals::SIGFPE		=> Some( 8),
-            &Signals::SIGKILL	    => Some( 9),
-            &Signals::SIGUSR1	    => Some(10),
-            &Signals::SIGSEGV	    => Some(11),
-            &Signals::SIGUSR2	    => Some(12),
-            &Signals::SIGPIPE	    => Some(13),
-            &Signals::SIGALRM	    => Some(14),
-            &Signals::SIGTERM	    => Some(15),
-            &Signals::SIGSTKFLT     => Some(16),
-            &Signals::SIGCHLD	    => Some(17),
-            &Signals::SIGCONT	    => Some(18),
-            &Signals::SIGSTOP	    => Some(19),
-            &Signals::SIGTSTP	    => Some(20),
-            &Signals::SIGTTIN	    => Some(21),
-            &Signals::SIGTTOU	    => Some(22),
-            &Signals::SIGURG        => Some(23),
-            &Signals::SIGXCPU	    => Some(24),
-            &Signals::SIGXFSZ	    => Some(25),
-            &Signals::SIGVTALRM     => Some(26),
-            &Signals::SIGPROF	    => Some(27),
-            &Signals::SIGWINCH      => Some(28),
-            &Signals::SIGIO		    => Some(29),
-            &Signals::SIGPWR        => Some(30),
-            &Signals::SIGSYS        => Some(31),
-            _                       => None,
+impl Signals {
+    pub fn to_signum(&self) -> Option<usize> {
+        if self.bits().count_ones() == 1 {
+            Some(self.bits().trailing_zeros() as usize + 1)
+        } else {
+            None
         }
+    }
+    pub fn last_signal(&self) -> usize {
+        1 << (self.bits().trailing_zeros() as usize)
     }
 }
 
@@ -128,11 +101,21 @@ bitflags! {
 
 #[derive(Clone)]
 #[repr(C)]
+// sigset_t   sa_mask;//保存的是当进程在处理信号的时候，收到的信号
+// int        sa_flags;//SA_SIGINFO，OS在处理信号的时候，调用的就是sa_sigaction函数指针当中
+// //保存的值0，在处理信号的时候，调用sa_handler保存的函数
+
 pub struct SigAction {
+    /// 有的平台上是个union:
+    /// void     (*sa_handler)(int);//函数指针，保存了内核对信号的处理方式
+    /// void     (*sa_sigaction)(int, siginfo_t *, void *);//
     pub sa_handler: usize,
     //pub sa_sigaction: SaFlags,
-    pub sa_flags: SaFlags,
+    /// 执行的时候需要阻塞的信号,另外除非SA_NODEFER定义,否则也需要阻塞本次触发的信号
     pub sa_mask: Signals,
+    /// 指定本次信号行为的标识
+    pub sa_flags: SaFlags,
+    // void     (*sa_restorer)(void); NOT USED BY LINUX/POSIX!
 }
 
 impl SigAction {
@@ -148,12 +131,6 @@ impl SigAction {
         self.sa_handler == 0 && self.sa_flags.is_empty() && self.sa_mask.is_empty()
     }
 }
-// void     (*sa_handler)(int);//函数指针，保存了内核对信号的处理方式
-// void     (*sa_sigaction)(int, siginfo_t *, void *);//
-// sigset_t   sa_mask;//保存的是当进程在处理信号的时候，收到的信号
-// int        sa_flags;//SA_SIGINFO，OS在处理信号的时候，调用的就是sa_sigaction函数指针当中
-// //保存的值0，在处理信号的时候，调用sa_handler保存的函数
-// void     (*sa_restorer)(void);
 #[derive(Clone)]
 pub struct SigInfo {
     pub is_signal_execute: bool, // is process now executing in signal handler
@@ -195,7 +172,7 @@ pub fn sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
     if let Some(task) = task {
         let mut inner = task.acquire_inner_lock();
         // Copy the old to the oldset.
-        let key = Signals::from_bits(1 << (signum-1));
+        let key = Signals::from_bits(1 << (signum - 1));
         match key {
             Some(Signals::SIGKILL) | Some(Signals::SIGSTOP) | None => -1,
             Some(key) => {
@@ -203,39 +180,37 @@ pub fn sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
                     if oldact as usize != 0 {
                         *translated_refmut(token, oldact as *mut SigAction) = act;
                     }
-                }
-                else {
-                    if oldact as usize != 0{
+                } else {
+                    if oldact as usize != 0 {
                         *translated_refmut(token, oldact as *mut SigAction) = SigAction::new();
                     }
                 }
                 if act as usize != 0 {
                     let act = translated_ref(token, act as *const SigAction);
                     let mut sigaction_new = SigAction {
-                        sa_handler:act.sa_handler,
-                        sa_mask:act.sa_mask.difference(Signals::SIGSTOP | Signals::SIGKILL),
-                        sa_flags:act.sa_flags,
+                        sa_handler: act.sa_handler,
+                        sa_mask: act.sa_mask.difference(Signals::SIGSTOP | Signals::SIGKILL),
+                        sa_flags: act.sa_flags,
                     };
                     // push to PCB, ignore mask and flags now
                     if !(act.sa_handler == SIG_DFL || act.sa_handler == SIG_IGN) {
                         inner.siginfo.signal_handler.insert(key, sigaction_new);
                     };
-                    log::debug!("{:?}",inner.siginfo);
+                    log::debug!("{:?}", inner.siginfo);
                 }
                 0
             }
         }
-    }
-    else {
+    } else {
         -1
     }
 }
 /// WARNING, this function currently *ignore* sigmask.
-pub fn do_signal(){
+pub fn do_signal() {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
     if inner.siginfo.is_signal_execute {
-        return;    // avoid nested signal handler call
+        return; // avoid nested signal handler call
     }
     let mut exception_signal: Option<Signals> = None;
     while let Some(signal) = inner.siginfo.signal_pending.pop() {
@@ -245,24 +220,34 @@ pub fn do_signal(){
             log::info!("{:?} handler found", signal);
             {
                 let trap_cx = inner.get_trap_cx();
-                let sp = unsafe {(trap_cx.x[2] as *mut TrapContext).sub(1)};
+                let sp = unsafe { (trap_cx.x[2] as *mut TrapContext).sub(1) };
                 if (sp as usize) < USER_STACK_TOP {
-                    trap_cx.sepc = usize::MAX;    // we don't have enough space on user stack, return a bad address to kill this program
+                    trap_cx.sepc = usize::MAX; // we don't have enough space on user stack, return a bad address to kill this program
+                } else {
+                    *translated_refmut(inner.get_user_token(), sp as *mut TrapContext) =
+                        trap_cx.clone(); // restore context on user stack
+                    trap_cx.set_sp(sp as usize); // update sp, because we pushed trapcontext into stack
+                    trap_cx.x[10] = signal.to_signum().unwrap(); // a0 <= signum, parameter.
+                    trap_cx.x[1] = SIGNAL_TRAMPOLINE; // ra <= __call_sigreturn, when handler ret, we will go to __call_sigreturn
+                    trap_cx.sepc = act.sa_handler; // recover pc with addr of handler
                 }
-                else {
-                    *translated_refmut(inner.get_user_token(), sp as *mut TrapContext) = trap_cx.clone(); // restore context on user stack
-                    trap_cx.set_sp(sp as usize);    // update sp, because we pushed trapcontext into stack
-                    trap_cx.x[10] = signal.to_signum().unwrap();    // a0 <= signum, parameter.
-                    trap_cx.x[1] = SIGNAL_TRAMPOLINE;    // ra <= __call_sigreturn, when handler ret, we will go to __call_sigreturn
-                    trap_cx.sepc = act.sa_handler;    // recover pc with addr of handler
-                }
-                info!("Ready to handle {:?}, signum={:?}, hanler=0x{:X} (ra=0x{:X}, sp=0x{:X})", signal, signal.to_signum().unwrap(), act.sa_handler, trap_cx.x[1], trap_cx.x[2]);   
+                info!(
+                    "Ready to handle {:?}, signum={:?}, hanler=0x{:X} (ra=0x{:X}, sp=0x{:X})",
+                    signal,
+                    signal.to_signum().unwrap(),
+                    act.sa_handler,
+                    trap_cx.x[1],
+                    trap_cx.x[2]
+                );
             }
         }
         // action not found
         else {
             log::warn!("{:?} handler not found", signal);
-            if signal == Signals::SIGCHLD || signal == Signals::SIGURG || signal == Signals::SIGWINCH {
+            if signal == Signals::SIGCHLD
+                || signal == Signals::SIGURG
+                || signal == Signals::SIGWINCH
+            {
                 log::warn!("Ingore signal {:?}", signal);
                 continue;
             }
@@ -289,8 +274,7 @@ pub fn do_signal(){
             );
             // page fault exit code
             exit_current_and_run_next(-2);
-        }
-        else {
+        } else {
             log::info!("Use default handler for {:?}", signal);
             exit_current_and_run_next(signal.to_signum().unwrap() as i32);
         }
@@ -303,7 +287,9 @@ pub fn sigprocmask(how: usize, set: Option<Signals>, old: *mut Signals) -> isize
 
         // Copy the old to the oldset.
         if old as usize != 0 {
-            *translated_refmut(inner.get_user_token(), old) = inner.sigmask; // fix deadlock here
+            unsafe {
+                *old = inner.sigmask; // fix deadlock here
+            }
         }
 
         // Assign the sigmask.

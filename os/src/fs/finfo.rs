@@ -108,11 +108,11 @@ pub struct Kstat {
     st_nlink: u32, /* Number of hard links */
     st_uid: u32,
     st_gid: u32,
-    st_rdev :u64,   /* Device ID (if special file) */
-    __pad :u64,
+    st_rdev: u64, /* Device ID (if special file) */
+    __pad: u64,
     pub st_size: i64,
     st_blksize: u32,
-    __pad2 :i32,
+    __pad2: i32,
     st_blocks: u64,
     st_atime_sec: i64,
     st_atime_nsec: i64,
@@ -131,11 +131,11 @@ impl Kstat {
             st_nlink: 0,
             st_uid: 0,
             st_gid: 0,
-            st_rdev :0,
-            __pad :0,
+            st_rdev: 0,
+            __pad: 0,
             st_size: 0,
             st_blksize: 512,
-            __pad2 :0,
+            __pad2: 0,
             st_blocks: 0,
             st_atime_sec: 0,
             st_atime_nsec: 0,
@@ -154,11 +154,11 @@ impl Kstat {
             st_nlink: 1,
             st_uid: 0,
             st_gid: 0,
-            st_rdev :0x0000000400000040,
-            __pad :0,
+            st_rdev: 0x0000000400000040,
+            __pad: 0,
             st_size: 0,
             st_blksize: 512,
-            __pad2 :0,
+            __pad2: 0,
             st_blocks: 0,
             st_atime_sec: 0,
             st_atime_nsec: 0,
@@ -199,11 +199,11 @@ impl Kstat {
             st_nlink,
             st_uid: 0,
             st_gid: 0,
-            st_rdev :0,
-            __pad :0,
+            st_rdev: 0,
+            __pad: 0,
             st_size,
             st_blksize: 512,
-            __pad2 :0,
+            __pad2: 0,
             st_blocks,
             st_atime_sec,
             st_atime_nsec: 0,
@@ -347,67 +347,3 @@ impl NewStat {
         unsafe { core::slice::from_raw_parts_mut(self as *mut _ as usize as *mut u8, size) }
     }
 }
-
-#[repr(C)]
-pub struct FdSet {
-    fd_list: [u64; 16],
-}
-
-impl FdSet {
-    pub fn new() -> Self {
-        Self { fd_list: [0; 16] }
-    }
-
-    fn check_fd(fd: usize) -> bool {
-        if fd < 1024 {
-            return true;
-        } else {
-            return false;
-        }
-    }
-
-    pub fn set_fd(&mut self, fd: usize) {
-        if Self::check_fd(fd) {
-            let index = fd >> 8; // fd/64
-            let offset = fd - (index << 8); // fd%64
-            self.fd_list[index] |= 1 << offset;
-        }
-    }
-
-    pub fn clear_fd(&mut self, fd: usize) {
-        if Self::check_fd(fd) {
-            let index = fd >> 8;
-            let offset = fd - (index << 8);
-            self.fd_list[index] &= (0 << offset) & 0xFFFFFFFFFFFFFFFF;
-        }
-    }
-
-    pub fn clear_all(&mut self) {
-        for i in 0..16 {
-            self.fd_list[i] = 0;
-        }
-    }
-
-    pub fn count(&mut self) -> usize {
-        let fd_vec = self.get_fd_vec();
-        fd_vec.len()
-    }
-
-    pub fn get_fd_vec(&self) -> Vec<usize> {
-        let mut fd_v = Vec::new();
-        for i in 0..16 {
-            let mut tmp = self.fd_list[i];
-            for off in 0..64 {
-                let fd_bit = tmp & 1;
-                if fd_bit == 1 {
-                    fd_v.push((i << 8) + off); // index*64 + offset
-                }
-                tmp = tmp >> 1;
-            }
-        }
-        fd_v
-    }
-}
-
-use crate::lang_items::Bytes;
-impl Bytes<FdSet> for FdSet {}

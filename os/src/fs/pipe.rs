@@ -155,12 +155,16 @@ impl File for Pipe {
     }
     fn write(&self, buf: UserBuffer) -> usize {
         //log::info!("[pipe.write] attempt to write...");
+        log::warn!("[pipe.write] attempted wr");
         assert_eq!(self.writable(), true);
         let mut buf_iter = buf.into_iter();
         let mut write_size = 0usize;
         loop {
+            log::warn!("[pipe.write]attempted lock");
             let mut ring_buffer = self.buffer.lock();
+            log::warn!("[pipe.write]attempted lock done.");
             let loop_write = ring_buffer.available_write();
+            log::warn!("[pipe.write]size avail:{}", loop_write);
             //log::info!("[pipe.write] Lock acquired...");
             if loop_write == 0 {
                 drop(ring_buffer);
@@ -187,6 +191,7 @@ impl File for Pipe {
     fn r_ready(&self) -> bool {
         let ring_buffer = self.buffer.lock();
         let loop_read = ring_buffer.available_read();
+        log::warn!("r_ready: h{},t{}", ring_buffer.head, ring_buffer.tail);
         loop_read > 0
     }
 

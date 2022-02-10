@@ -162,10 +162,23 @@ pub fn syscall_name(id: usize) -> &'static str {
         _ => "unknown",
     }
 }
-use crate::{fs::IoVec, timer::TimeSpec};
+use crate::{
+    fs::{FdSet, IoVec},
+    timer::TimeSpec,
+};
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
-    if ![124, 260, 63, 64, 66, 73].contains(&syscall_id) {
+    if ![
+        124,
+        260,
+        63,
+        64,
+        66,
+        73,
+        SYSCALL_GETPPID, /*sys_getpgid*/
+    ]
+    .contains(&syscall_id)
+    {
         info!(
             "[syscall] pid: {}, syscall_id: {} ({}), \nargs: {:?}",
             sys_getpid(),
@@ -265,15 +278,22 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         SYSCALL_MPROTECT => sys_mprotect(args[0] as usize, args[1] as usize, args[2] as isize),
-        // SYSCALL_PSELECT6=> {
-        //     unsafe {
-        //         //llvm_asm!("sfence.vma" :::: "volatile");
-        //     }
-        //     sys_pselect(
-        //     args[0] as usize, args[1] as *mut u8, 
-        //     args[2] as *mut u8, args[3] as *mut u8, 
-        //     args[4] as *mut usize
-        // )},
+        // ultraos api
+        /* SYSCALL_PSELECT6 => sys_ultrapselect(
+         *     args[0] as usize,
+         *     args[1] as *mut u8,
+         *     args[2] as *mut u8,
+         *     args[3] as *mut u8,
+         *     args[4] as *mut usize,
+         * ), */
+        SYSCALL_PSELECT6 => sys_mypselect(
+            args[0] as usize,
+            args[1] as *mut FdSet,
+            args[2] as *mut FdSet,
+            args[3] as *mut FdSet,
+            args[4] as *const TimeSpec,
+            args[5] as *const crate::task::Signals,
+        ),
         SYSCALL_PPOLL => sys_ppoll(
             args[0] as usize,
             args[1] as usize,

@@ -1,15 +1,22 @@
-use crate::fs::{ch_dir, list_files, make_pipe, open, DiskInodeType, OpenFlags, PollFd};
+use crate::fs::{ch_dir, list_files, make_pipe, open, pselect, DiskInodeType, OpenFlags, PollFd};
 use crate::fs::{
     ppoll, Dirent, FdSet, File, FileClass, FileDescripter, IoVec, IoVecs, Kstat, NewStat, NullZero,
     MNT_TABLE, TTY,
 };
+use crate::lang_items::Bytes;
 use crate::mm::{
-    copy_from_user, translated_byte_buffer, translated_refmut, translated_str, UserBuffer,
+    copy_from_user, translated_byte_buffer, translated_ref, translated_refmut, translated_str,
+    UserBuffer,
 };
 use crate::task::FdTable;
 use crate::task::{current_task, current_user_token};
+use crate::timer::{TimeSpec, TimeVal};
+use crate::{move_ptr_to_opt, ptr_to_opt_ref, ptr_to_opt_ref_mut};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::mem::size_of;
+use core::ptr::{null, null_mut};
+use core::slice::from_raw_parts_mut;
 use log::{debug, error, info, trace, warn};
 
 const AT_FDCWD: isize = -100;
@@ -197,6 +204,219 @@ pub fn sys_readv(fd: usize, iov: *const IoVec, iovcnt: usize) -> isize {
     }
 }
 
+pub fn sys_ultrapselect(
+    nfds: usize,
+    readfds: *mut u8,
+    writefds: *mut u8,
+    exceptfds: *mut u8,
+    timeout: *mut usize,
+) -> isize {
+    let task = current_task().unwrap();
+    let token = current_user_token();
+
+    let mut r_ready_count = 0;
+    let mut w_ready_count = 0;
+    let mut e_ready_count = 0;
+
+    let mut timer_interval = crate::timer::TimeVal::new();
+    unsafe {
+        let sec = translated_ref(token, timeout);
+        let usec = translated_ref(token, timeout.add(1));
+        timer_interval.tv_sec = *sec as u32;
+        timer_interval.tv_usec = *usec as u32;
+    }
+    let mut timer = timer_interval + crate::timer::TimeVal::now();
+
+    let mut time_up = false;
+    let mut r_has_nready = false;
+    let mut w_has_nready = false;
+    let mut r_all_ready = false;
+    let mut w_all_ready = false;
+
+    let mut rfd_vec = Vec::new();
+    let mut wfd_vec = Vec::new();
+
+    let mut rfd_set = FdSet::empty();
+    let mut wfd_set = FdSet::empty();
+
+    let mut ubuf_rfds = {
+        if readfds as usize != 0 {
+            UserBuffer::new(translated_byte_buffer(token, readfds, size_of::<FdSet>()))
+        } else {
+            UserBuffer::empty()
+        }
+    };
+    ubuf_rfds.read(rfd_set.as_bytes_mut());
+
+    let mut ubuf_wfds = {
+        if writefds as usize != 0 {
+            UserBuffer::new(translated_byte_buffer(token, writefds, size_of::<FdSet>()))
+        } else {
+            UserBuffer::empty()
+        }
+    };
+    ubuf_wfds.read(wfd_set.as_bytes_mut());
+
+    let mut ubuf_efds = {
+        if exceptfds as usize != 0 {
+            UserBuffer::new(translated_byte_buffer(token, exceptfds, size_of::<FdSet>()))
+        } else {
+            UserBuffer::empty()
+        }
+    };
+
+    drop(task);
+    while !time_up {
+        /* handle read fd set */
+
+        let task = current_task().unwrap();
+        let inner = task.acquire_inner_lock();
+        let fd_table = &inner.fd_table;
+        if readfds as usize != 0 && !r_all_ready {
+            //let mut ubuf_rfds = UserBuffer::new(
+            //    translated_byte_buffer(token, readfds, size_of::<FdSet>())
+            //);
+
+            if rfd_vec.len() == 0 {
+                rfd_vec = rfd_set.get_fd_vec();
+                if rfd_vec[rfd_vec.len() - 1] >= nfds {
+                    return -1; // invalid fd
+                }
+            }
+
+            for i in 0..rfd_vec.len() {
+                let fd = rfd_vec[i];
+                if fd == 1024 {
+                    continue;
+                }
+                if fd > fd_table.len() || fd_table[fd].is_none() {
+                    return -1; // invalid fd
+                }
+                let fdescript = fd_table[fd].as_ref().unwrap();
+                match &fdescript.fclass {
+                    FileClass::Abstr(file) => {
+                        if file.r_ready() {
+                            r_ready_count += 1;
+                            rfd_set.set(fd);
+                            // marked for being ready
+                            rfd_vec[i] = 1024;
+                        } else {
+                            rfd_set.clr(fd);
+                            r_has_nready = true;
+                        }
+                    }
+                    FileClass::File(file) => {
+                        if file.r_ready() {
+                            r_ready_count += 1;
+                            rfd_set.set(fd);
+                            rfd_vec[i] = 1024;
+                        } else {
+                            rfd_set.clr(fd);
+                            r_has_nready = true;
+                        }
+                    }
+                }
+            }
+            if !r_has_nready {
+                r_all_ready = true;
+                ubuf_rfds.write(rfd_set.as_bytes());
+            }
+        }
+
+        /* handle write fd set */
+        if writefds as usize != 0 && !w_all_ready {
+            //let mut ubuf_wfds = UserBuffer::new(
+            //    translated_byte_buffer(token, writefds, size_of::<FdSet>())
+            //);
+            //let mut wfd_set = FdSet::new();
+            //ubuf_wfds.read(wfd_set.as_bytes_mut());
+
+            if wfd_vec.len() == 0 {
+                wfd_vec = wfd_set.get_fd_vec();
+                if wfd_vec[wfd_vec.len() - 1] >= nfds {
+                    return -1; // invalid fd
+                }
+            }
+
+            for i in 0..wfd_vec.len() {
+                let fd = wfd_vec[i];
+                if fd == 1024 {
+                    continue;
+                }
+                if fd > fd_table.len() || fd_table[fd].is_none() {
+                    return -1; // invalid fd
+                }
+                let fdescript = fd_table[fd].as_ref().unwrap();
+                match &fdescript.fclass {
+                    FileClass::Abstr(file) => {
+                        if file.w_ready() {
+                            w_ready_count += 1;
+                            wfd_set.set(fd);
+                            wfd_vec[i] = 1024;
+                        } else {
+                            wfd_set.clr(fd);
+                            w_has_nready = true;
+                        }
+                    }
+                    FileClass::File(file) => {
+                        if file.w_ready() {
+                            w_ready_count += 1;
+                            wfd_set.set(fd);
+                            wfd_vec[i] = 1024;
+                        } else {
+                            wfd_set.clr(fd);
+                            w_has_nready = true;
+                        }
+                    }
+                }
+            }
+            if !w_has_nready {
+                w_all_ready = true;
+                ubuf_wfds.write(wfd_set.as_bytes());
+            }
+        }
+
+        /* Cannot handle exceptfds for now */
+        if exceptfds as usize != 0 {
+            //let mut ubuf_efds = UserBuffer::new(
+            //    translated_byte_buffer(token, exceptfds, size_of::<FdSet>())
+            //);
+            let mut efd_set = FdSet::empty();
+            ubuf_efds.read(efd_set.as_bytes_mut());
+            e_ready_count = efd_set.set_num() as isize;
+            efd_set.clr_all();
+            ubuf_efds.write(efd_set.as_bytes());
+        }
+
+        // return anyway
+        //return r_ready_count + w_ready_count + e_ready_count;
+        // if there are some fds not ready, just wait until time up
+        if r_has_nready || w_has_nready {
+            r_has_nready = false;
+            w_has_nready = false;
+            //println!("timer = {}", timer );
+            let time_remain = TimeVal::now() - timer;
+            if time_remain.is_zero() {
+                // not reach timer (now < timer)
+                drop(fd_table);
+                drop(inner);
+                drop(task);
+                crate::task::suspend_current_and_run_next();
+            } else {
+                time_up = true;
+                ubuf_rfds.write(rfd_set.as_bytes());
+                ubuf_wfds.write(wfd_set.as_bytes());
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    let task = current_task().unwrap();
+    /*    gdb_println!(SYSCALL_ENABLE, "sys_pselect( nfds: {}, readfds: {:?}, writefds: {:?}, exceptfds: {:?}, timeout: {:?}) = {}, pid-{}",
+    nfds, rfd_vec, wfd_vec, rfd_vec, timer_interval, r_ready_count + w_ready_count + e_ready_count, task.pid.0);*/
+    return r_ready_count + w_ready_count + e_ready_count;
+}
 pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
     let token = current_user_token();
     let task = current_task().unwrap();
@@ -485,7 +705,7 @@ pub fn sys_fstat(fd: isize, buf: *mut u8) -> isize {
                     return 0;
                 }
                 _ => {
-                    let kstat=Kstat::new_abstract();
+                    let kstat = Kstat::new_abstract();
                     userbuf.write(kstat.as_bytes());
                     info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size);
                     return 0; //warning
@@ -618,7 +838,16 @@ pub fn sys_ioctl(fd: usize, cmd: u32, arg: usize) -> isize {
     }
 }
 pub fn sys_ppoll(poll_fd: usize, nfds: usize, time_spec: usize, sigmask: usize) -> isize {
-    ppoll(poll_fd, nfds, time_spec, sigmask)
+    let token = current_user_token();
+    let sig = if sigmask != 0 {
+        let j = *translated_ref(token, unsafe {
+            sigmask as *const crate::task::signal::Signals
+        });
+        Some(j)
+    } else {
+        None
+    };
+    ppoll(poll_fd, nfds, time_spec, sig)
 }
 pub fn sys_mkdir(dirfd: isize, path: *const u8, mode: u32) -> isize {
     let token = current_user_token();
@@ -731,4 +960,26 @@ fn dup_inc(old_fd: usize, new_fd: usize, fd_table: &mut FdTable) -> isize {
     }
     fd_table[act_fd] = Some(fd_table[old_fd].as_ref().unwrap().clone());
     act_fd as isize
+}
+
+pub fn sys_mypselect(
+    nfds: usize,
+    read_fds: *mut FdSet,
+    write_fds: *mut FdSet,
+    exception_fds: *mut FdSet,
+    timeout: *const TimeSpec,
+    sigmask: *const crate::task::signal::Signals,
+) -> isize {
+    if nfds < 0 {
+        return -1;
+    }
+    let token = current_user_token();
+    pselect(
+        nfds,
+        ptr_to_opt_ref_mut!(token, read_fds),
+        ptr_to_opt_ref_mut!(token, write_fds),
+        ptr_to_opt_ref_mut!(token, exception_fds),
+        ptr_to_opt_ref!(token, timeout),
+        ptr_to_opt_ref!(token, sigmask),
+    )
 }

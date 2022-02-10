@@ -3,12 +3,12 @@ use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
     translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer,
 };
-use crate::task::{signal::*, block_current_and_run_next};
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next, Rusage,
 };
-use crate::timer::{get_time, get_time_ms, TimeVal};
+use crate::task::{block_current_and_run_next, signal::*};
+use crate::timer::{get_time, get_time_ms, TimeSpec, TimeVal};
 use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -71,45 +71,33 @@ pub fn sys_nano_sleep(
     rreq: *const crate::timer::TimeSpec,
     rrem: *mut crate::timer::TimeSpec,
 ) -> isize {
+    let start = TimeSpec::now();
     if rreq as usize == 0 {
         return -1;
     }
-    let req = *translated_ref(current_user_token(), rreq);
-    let mut rem = *translated_ref(current_user_token(), rrem);
-    if req.tv_nsec != 0 {
-        let start = crate::timer::get_time_ns();
-        let mut i = (crate::timer::get_time_ns() - start) as i32;
+    let token = current_user_token();
+    let req = *translated_ref(token, rreq);
+    let trg = req + start;
+    if rrem as usize == 0 {
+        let mut diff = TimeSpec::new();
         loop {
-            if i < req.tv_nsec {
-                i = (crate::timer::get_time_ns() - start) as i32;
-                // debug!("[sys_nano_sleep] delta={}", i);
-                if rrem as usize != 0 {
-                    rem.tv_nsec = i;
-                    rem.tv_sec = i / 1_000_000_000;
-                }
+            diff = TimeSpec::now() - start;
+            if diff.to_ns() != 0 {
                 suspend_current_and_run_next();
             } else {
                 break;
             }
         }
     } else {
-        let start = crate::timer::get_time_sec();
-        let mut i = (crate::timer::get_time_sec() - start) as i32;
         loop {
-            if i < req.tv_sec {
-                i = (crate::timer::get_time_sec() - start) as i32;
-                // debug!("[sys_nano_sleep] delta={}", i);
-                if rrem as usize != 0 {
-                    rem.tv_sec = i;
-                    rem.tv_nsec = i * 1000_000_000;
-                }
+            *translated_refmut(token, rrem) = trg - TimeSpec::now();
+            if translated_ref(token, rrem).to_ns() != 0 {
                 suspend_current_and_run_next();
             } else {
                 break;
             }
         }
     }
-
     0
 }
 
@@ -149,7 +137,7 @@ pub fn sys_getppid() -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let ppid = inner.parent.as_ref().unwrap().upgrade().unwrap().pid.0;
-    info!("[sys_getppid] ppid:{}", ppid);
+    //info!("[sys_getppid] ppid:{}", ppid);
     ppid as isize
 }
 
@@ -424,18 +412,29 @@ pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isiz
 }
 // Warning, we don't support this syscall in fact
 // The same as above
-
+/// Note: code translation should be done in syscall rather than the call handler as the handler may be reused by kernel code which use kernel structs
 pub fn sys_sigprocmask(how: usize, set: *mut usize, oldset: *mut usize) -> isize {
     let token = current_user_token();
     let sig_set = Signals::from_bits(*translated_ref(token, set));
+    drop(token);
     info!(
         "[sys_sigprocmask] how:{:?}; set:{:?}, oldset:{:?}",
         how, set, oldset
     );
-    sigprocmask(how, sig_set, oldset as *mut Signals)
+    let mut old = Signals::empty();
+
+    let i = sigprocmask(how, sig_set, &mut old as *mut Signals);
+
+    if let Some(task) = current_task() {
+        let mut inner = task.acquire_inner_lock();
+        if oldset as usize != 0 {
+            *translated_refmut(inner.get_user_token(), oldset) = old.bits();
+        }
+    }
+    i
 }
 
-pub fn sys_sigreturn() -> isize{
+pub fn sys_sigreturn() -> isize {
     // mark not processing signal handler
     let current_task = current_task().unwrap();
     info!("[sys_sigreturn] pid: {}", current_task.pid.0);
@@ -452,7 +451,11 @@ pub fn sys_sigreturn() -> isize{
 pub fn sys_getrusage(who: isize, usage: *mut u8) -> isize {
     let task = current_task().unwrap();
     let token = current_user_token();
-    let mut userbuf = UserBuffer::new(translated_byte_buffer(token, usage, core::mem::size_of::<Rusage>()));
+    let mut userbuf = UserBuffer::new(translated_byte_buffer(
+        token,
+        usage,
+        core::mem::size_of::<Rusage>(),
+    ));
     let rusage = &task.acquire_inner_lock().rusage;
     userbuf.write(rusage.as_bytes());
     info!("[sys_getrusage] who: {}, usage: {:?}", who, rusage);
