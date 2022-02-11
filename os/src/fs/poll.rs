@@ -241,9 +241,7 @@ pub fn pselect(
     }
      */
     let mut trg = crate::timer::TimeSpec::now();
-    if let Some(_) = exception_fds {
-        log::warn!("[pselect] timeout {:?}", timeout.unwrap());
-    }
+    log::warn!("[pselect] Hi!");
     if let Some(_) = timeout {
         trg = *timeout.unwrap() + trg;
         log::warn!("[pselect] timeout {:?}", timeout.unwrap());
@@ -264,35 +262,32 @@ pub fn pselect(
         None => {}
     }
     let mut ret = 2048;
-    let mut r_type = 0;
     loop {
         let task = current_task().unwrap();
         let inner = task.acquire_inner_lock();
         let fd_table = &inner.fd_table;
         ret = 2048;
-        for i in 0..nfds {
-            macro_rules! do_chk {
-                ($f:ident,$func:ident,$r:literal) => {
-                    if !$f.$func() {
-                        ret = 0;
-                        r_type = $r;
-                        break;
-                    } else {
-                    }
-                };
-            }
-            macro_rules! chk_fds {
-                ($fds:ident,$func:ident,$r:literal) => {
-                    if let Some(ref j) = $fds {
+        macro_rules! do_chk {
+            ($f:ident,$func:ident) => {
+                if !$f.$func() {
+                    ret = 0;
+                    break;
+                }
+            };
+        }
+        macro_rules! chk_fds {
+            ($fds:ident,$func:ident) => {
+                if let Some(ref j) = $fds {
+                    for i in 0..nfds {
                         if j.is_set(i) {
                             log::warn!("[myselect] i:{}", i);
                             if let Some(k) = fd_table[i].as_ref() {
                                 match &k.fclass {
                                     super::FileClass::Abstr(file) => {
-                                        do_chk!(file, $func, $r);
+                                        do_chk!(file, $func);
                                     }
                                     super::FileClass::File(file) => {
-                                        do_chk!(file, $func, $r);
+                                        do_chk!(file, $func);
                                     }
                                 }
                             } else {
@@ -301,27 +296,25 @@ pub fn pselect(
                             }
                         }
                     }
-                };
-            }
-            chk_fds!(read_fds, r_ready, 1);
-            chk_fds!(write_fds, w_ready, 2);
+                }
+            };
         }
+        chk_fds!(read_fds, r_ready);
+        chk_fds!(write_fds, w_ready);
         if ret == 2048 {
+            //The SUPPORTED fds are all ready since the ret was NOT assigned.
             ret = 0;
-            log::trace!("fds are all ready now.");
-            ret += if let Some(i) = read_fds {
+            log::warn!("fds are all ready now.");
+            ret += if let Some(ref i) = read_fds {
                 i.set_num()
             } else {
                 0
             };
-            ret += if let Some(i) = write_fds {
+            ret += if let Some(ref i) = write_fds {
                 i.set_num()
             } else {
                 0
             };
-            if let Some(i) = exception_fds {
-                *i = FdSet::empty();
-            }
             break;
         }
         ret = 0;
@@ -339,7 +332,7 @@ pub fn pselect(
                         };
                     }
                     macro_rules! chk_fds_end {
-                        ($fds:ident,$func:ident,$r:literal) => {
+                        ($fds:ident,$func:ident) => {
                             if let Some(j) = $fds {
                                 for i in 0..nfds {
                                     if j.is_set(i) {
@@ -362,8 +355,8 @@ pub fn pselect(
                             }
                         };
                     }
-                    chk_fds_end!(read_fds, r_ready, 1);
-                    //chk_fds!(write_fds, w_ready, 2);
+                    chk_fds_end!(read_fds, r_ready);
+                    chk_fds_end!(write_fds, w_ready);
                     break;
                 }
             }
@@ -374,11 +367,27 @@ pub fn pselect(
         drop(task);
         suspend_current_and_run_next();
     }
-
+    if exception_fds.is_some() {
+        match &timeout {
+            Some(_) => {
+                if let Some(i) = exception_fds {
+                    *i = FdSet::empty();
+                }
+                loop {
+                    if (trg - TimeSpec::now()).to_ns() == 0 {
+                        break;
+                    } else {
+                        suspend_current_and_run_next();
+                    }
+                }
+            }
+            None => loop {},
+        }
+    }
     if has_mask {
         sigprocmask(SIG_SETMASK, Some(oldsig), null_mut::<Signals>());
     }
-    log::trace!("[pselect] quiting pselect. {}", ret);
+    log::warn!("[pselect] quiting pselect. {}", ret);
     // look up according to TimeVal
     ret as isize
 }
