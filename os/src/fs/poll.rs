@@ -315,6 +315,9 @@ pub fn pselect(
             } else {
                 0
             };
+            // 我们曾把exception赋值放在这里,但当时
+	    // 似乎有个race:要么
+	    // 另外,这里if let 不加ref会导致move, 不知道有没有更好的办法不ref也不move却能
             break;
         }
         ret = 0;
@@ -367,6 +370,7 @@ pub fn pselect(
         drop(task);
         suspend_current_and_run_next();
     }
+    // 这个问题: 由于exception_fds检查未支持,必须在最后
     if exception_fds.is_some() {
         match &timeout {
             Some(_) => {
