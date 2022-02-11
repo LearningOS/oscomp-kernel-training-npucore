@@ -128,12 +128,13 @@ impl TimeSpec {
     }
 }
 
+/// *CAUTION* tv_sec & tv_usec should be usize.
 #[derive(Clone, Copy, Debug)]
 pub struct TimeVal {
     /// seconds
-    pub tv_sec: u32,
+    pub tv_sec: usize,
     /// microseconds
-    pub tv_usec: u32,
+    pub tv_usec: usize,
 }
 impl TimeVal {
     pub fn new() -> Self {
@@ -144,26 +145,26 @@ impl TimeVal {
     }
     pub fn from_tick(tick: usize) -> Self {
         Self {
-            tv_sec: (tick / CLOCK_FREQ) as u32,
-            tv_usec: ((tick % CLOCK_FREQ) * USEC_PER_SEC / CLOCK_FREQ) as u32,
+            tv_sec: tick / CLOCK_FREQ,
+            tv_usec: (tick % CLOCK_FREQ) * USEC_PER_SEC / CLOCK_FREQ,
         }
     }
     pub fn from_s(s: usize) -> Self {
         Self {
-            tv_sec: s as u32,
+            tv_sec: s,
             tv_usec: 0,
         }
     }
     pub fn from_ms(ms: usize) -> Self {
         Self {
-            tv_sec: (ms / MSEC_PER_SEC) as u32,
-            tv_usec: ((ms % MSEC_PER_SEC) * USEC_PER_MSEC) as u32,
+            tv_sec: ms / MSEC_PER_SEC,
+            tv_usec: (ms % MSEC_PER_SEC) * USEC_PER_MSEC,
         }
     }
     pub fn from_us(us: usize) -> Self {
         Self {
-            tv_sec: (us / USEC_PER_SEC) as u32,
-            tv_usec: (us % USEC_PER_SEC) as u32,
+            tv_sec: us / USEC_PER_SEC,
+            tv_usec: us % USEC_PER_SEC,
         }
     }
     pub fn to_us(&self) -> usize {
@@ -183,8 +184,8 @@ impl Add for TimeVal {
     fn add(self, other: Self) -> Self {
         let mut sec = self.tv_sec + other.tv_sec;
         let mut usec = self.tv_usec + other.tv_usec;
-        sec += usec / USEC_PER_SEC as u32;
-        usec %= USEC_PER_SEC as u32;
+        sec += usec / USEC_PER_SEC;
+        usec %= USEC_PER_SEC;
         Self {
             tv_sec: sec,
             tv_usec: usec,
@@ -210,4 +211,18 @@ impl Sub for TimeVal {
 pub struct TimeZone {
     pub tz_minute_west: u32,
     pub tz_dst_time: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ITimerVal {
+    pub it_interval: TimeVal,
+    pub it_value: TimeVal,
+}
+impl ITimerVal {
+    pub fn new() -> Self {
+        Self {
+            it_interval: TimeVal::new(),
+            it_value: TimeVal:: new(),
+        }
+    }
 }

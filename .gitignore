@@ -20,6 +20,9 @@ os/user/
 # for virt_root
 user/virt_root/
 
+# developing, should be invisible in main branch
+os/src/fs/fatfs/*
+
 # unsorted
 os/src/link_app.S
 os/last-*

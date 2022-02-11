@@ -236,8 +236,8 @@ pub fn sys_crossselect1(
     unsafe {
         let sec = translated_ref(token, timeout);
         let usec = translated_ref(token, timeout.add(1));
-        timer_interval.tv_sec = *sec as u32;
-        timer_interval.tv_usec = *usec as u32;
+        timer_interval.tv_sec = *sec;
+        timer_interval.tv_usec = *usec;
     }
     log::info!("timeout {:?}", timer_interval);
     let mut timer = timer_interval + crate::timer::TimeVal::now();
