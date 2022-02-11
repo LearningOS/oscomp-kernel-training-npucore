@@ -156,15 +156,7 @@ impl TaskControlBlockInner {
         self.current_path.clone()
     }
     pub fn add_signal(&mut self, signal: Signals) {
-        if self
-            .siginfo
-            .signal_pending
-            .iter()
-            .find(|&&x| x == signal)
-            .is_none()
-        {
-            self.siginfo.signal_pending.push(signal);
-        }
+        self.siginfo.signal_pending.insert(signal);
     }
     pub fn update_process_times_enter_trap(&mut self) {
         let now = TimeVal::now();

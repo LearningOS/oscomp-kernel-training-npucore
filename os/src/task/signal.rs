@@ -66,12 +66,18 @@ impl Signals {
     pub fn to_signum(&self) -> Option<usize> {
         if self.bits().count_ones() == 1 {
             Some(self.bits().trailing_zeros() as usize + 1)
-        } else {
+        }
+        else {
             None
         }
     }
-    pub fn last_signal(&self) -> usize {
-        1 << (self.bits().trailing_zeros() as usize)
+    pub fn peek_front(&self) -> Option<Signals> {
+        if self.is_empty() {
+            None
+        }
+        else {
+            Signals::from_bits(1 << (self.bits().trailing_zeros() as usize))
+        }
     }
 }
 
@@ -134,7 +140,7 @@ impl SigAction {
 #[derive(Clone)]
 pub struct SigInfo {
     pub is_signal_execute: bool, // is process now executing in signal handler
-    pub signal_pending: BinaryHeap<Signals>,
+    pub signal_pending: Signals,
     pub signal_handler: BTreeMap<Signals, SigAction>,
 }
 
@@ -142,7 +148,7 @@ impl SigInfo {
     pub fn new() -> Self {
         Self {
             is_signal_execute: false,
-            signal_pending: BinaryHeap::new(),
+            signal_pending: Signals::empty(),
             signal_handler: BTreeMap::new(),
         }
     }
@@ -213,7 +219,8 @@ pub fn do_signal() {
         return; // avoid nested signal handler call
     }
     let mut exception_signal: Option<Signals> = None;
-    while let Some(signal) = inner.siginfo.signal_pending.pop() {
+    while let Some(signal) = inner.siginfo.signal_pending.difference(inner.sigmask).peek_front() {
+        inner.siginfo.signal_pending.remove(signal);
         inner.siginfo.is_signal_execute = true;
         log::info!("Pop signal {:?} from pending queue", signal);
         if let Some(act) = inner.siginfo.signal_handler.get(&signal) {
