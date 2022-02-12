@@ -63,6 +63,7 @@ impl File for TtyINode {
 
     fn ioctl(&self, cmd: u32, arg: usize) -> isize {
         //println!("ioctl: cmd={}; arg={:X}", cmd, arg);
+        let token = crate::task::current_user_token();
         let cmd = cmd as usize;
         match cmd {
             TIOCGPGRP => {
@@ -74,7 +75,7 @@ impl File for TtyINode {
             TIOCSPGRP => {
                 //let fpgid = unsafe { *(arg as *const i32) };
                 let mut argp: i32 = 0;
-                copy_from_user(&mut argp as *mut i32, arg, 4);
+                copy_from_user(token, arg as *const i32, &mut argp as *mut i32);
                 *self.foreground_pgid.write() = argp;
                 0
             }
@@ -93,8 +94,7 @@ impl File for TtyINode {
             }
             TCSETS => {
                 let mut termios = Termios::default();
-                let size = size_of::<Termios>();
-                copy_from_user(&mut termios as *mut Termios, arg, size);
+                copy_from_user(token, arg as *const Termios, &mut termios as *mut Termios);
                 *self.termios.write() = termios;
                 0
             }

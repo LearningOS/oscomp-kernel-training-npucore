@@ -239,31 +239,30 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
 
 pub struct UserBuffer {
     pub buffers: Vec<&'static mut [u8]>,
+    pub len: usize,
 }
 
 impl UserBuffer {
     pub fn clear(&mut self) {
-        for sub_buff in self.buffers.iter_mut() {
-            let sblen = (*sub_buff).len();
-            for j in 0..sblen {
-                (*sub_buff)[j] = 0;
-            }
-        }
+        self.buffers.iter_mut().for_each(|buffer| {
+            buffer.fill(0);
+        })
     }
-    pub fn write(&mut self, buff: &[u8]) -> usize {
-        let len = self.len().min(buff.len());
-        let mut current = 0;
-        for sub_buff in self.buffers.iter_mut() {
-            let sblen = (*sub_buff).len();
-            for j in 0..sblen {
-                (*sub_buff)[j] = buff[current];
-                current += 1;
-                if current == len {
-                    return len;
-                }
+    pub fn write(&mut self, src: &[u8]) -> usize {
+        let mut start = 0;
+        let src_len = src.len();
+        for buffer in self.buffers.iter_mut() {
+            let end = start + buffer.len();
+            if end > src_len {
+                &buffer[..src_len - start].copy_from_slice(&src[start..]);
+                return src_len;
             }
+            else {
+                buffer.copy_from_slice(&src[start..end]);
+            }
+            start = end;
         }
-        return len;
+        self.len
     }
     pub fn read_as_vec(&self, vec: &mut Vec<u8>, vlen: usize) -> usize {
         let len = self.len();
@@ -280,39 +279,39 @@ impl UserBuffer {
         }
         return len;
     }
-    // 将UserBuffer的数据读入一个Buffer，返回读取长度
-    pub fn read(&self, buff: &mut [u8]) -> usize {
-        let len = self.len().min(buff.len());
-        let mut current = 0;
-        for sub_buff in self.buffers.iter() {
-            let sblen = (*sub_buff).len();
-            for j in 0..sblen {
-                buff[current] = (*sub_buff)[j];
-                current += 1;
-                if current == len {
-                    return len;
-                }
+    pub fn read(&self, dst: &mut [u8]) -> usize {
+        let mut start = 0;
+        let dst_len = dst.len();
+        for buffer in self.buffers.iter() {
+            let end = start + buffer.len();
+            if end > dst_len {
+                &dst[start..].copy_from_slice(&buffer[..dst_len - start]);
+                return dst_len;
             }
+            else {
+                dst[start..end].copy_from_slice(buffer);
+            }
+            start = end;
         }
-        return len;
+        self.len
     }
 
     pub fn new(buffers: Vec<&'static mut [u8]>) -> Self {
-        Self { buffers }
+        Self {
+            len: buffers.iter().map(|buffer| buffer.len()).sum(),
+            buffers,
+        }
     }
 
     pub fn empty() -> Self {
         Self {
             buffers: Vec::new(),
+            len: 0,
         }
     }
 
     pub fn len(&self) -> usize {
-        let mut total: usize = 0;
-        for b in self.buffers.iter() {
-            total += b.len();
-        }
-        total
+        self.len
     }
 
     pub fn write_at(&mut self, offset: usize, buff: &[u8]) -> isize {
@@ -358,15 +357,6 @@ impl UserBuffer {
         //}
         0
     }
-    /* pub fn get_nth_struct<T>(&self, n: usize) -> T {
-     *     let mut ret: T;
-     *     let offset = n * core::mem::size_of::<T>(); //size rounded to byte
-     *     let bitpos = offset & 0b111;
-     *     let start = offset >> 3;
-     * 	if core::mem::sizeof::<T>()<4
-     *     //ret = T read in size_of(T) at an offset of n*size_of(T)
-     *     ret
-     * } */
 }
 
 impl IntoIterator for UserBuffer {
@@ -405,13 +395,14 @@ impl Iterator for UserBufferIterator {
     }
 }
 
-/* 从用户空间复制数据到指定地址 */
-pub fn copy_from_user<T>(dst: *mut T, src: usize, size: usize) {
-    let token = crate::task::current_user_token();
-    // translated_ 实际上完成了地址合法检测
-    let buf = UserBuffer::new(translated_byte_buffer(token, src as *const u8, size));
-    let mut dst_bytes = trans_to_bytes_mut(dst);
-    buf.read(dst_bytes);
+pub fn copy_from_user<T>(token: usize, src: *const T, dst: *mut T) {
+    let size = core::mem::size_of::<T>();
+    // if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
+    //     unsafe { *dst = *translated_ref(token, src) };
+    // }
+    // else {
+        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size)).read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
+    // }
 }
 
 pub fn translated_array_copy<T>(token: usize, ptr: *mut T, len: usize) -> Vec<T>
@@ -450,7 +441,7 @@ fn trans_to_bytes<T>(ptr: *const T) -> &'static [u8] {
     unsafe { core::slice::from_raw_parts(ptr as usize as *const u8, size) }
 }
 
-fn trans_to_bytes_mut<T>(ptr: *const T) -> &'static mut [u8] {
-    let size = core::mem::size_of::<T>();
-    unsafe { core::slice::from_raw_parts_mut(ptr as usize as *mut u8, size) }
-}
+// fn trans_to_bytes_mut<T>(ptr: *const T) -> &'static mut [u8] {
+//     let size = core::mem::size_of::<T>();
+//     unsafe { core::slice::from_raw_parts_mut(ptr as usize as *mut u8, size) }
+// }

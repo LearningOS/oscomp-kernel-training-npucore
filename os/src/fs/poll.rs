@@ -82,12 +82,15 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: Option<Si
             revents: 0,
         },
     );
-    //    println!("poll_fd:{:?}, Hi!", poll_fd);
-    copy_from_user(&mut poll_fd[0], poll_fd_p, nfds * 8);
-    //return 1;
-    //poll_fd.len()
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
+    let token = inner.get_user_token();
+    //    println!("poll_fd:{:?}, Hi!", poll_fd);
+    for i in 0..nfds {
+        copy_from_user(token, poll_fd_p as *const PollFd, &mut poll_fd[i]);
+    }
+    //return 1;
+    //poll_fd.len()
     if poll_fd.len() != 0 {
         loop {
             let mut i = 0;

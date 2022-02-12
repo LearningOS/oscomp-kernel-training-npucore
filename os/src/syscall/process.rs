@@ -117,7 +117,7 @@ pub fn sys_setitimer(
             if new_value as usize != 0 {
                 inner.timer[which] = *translated_ref(token, new_value);
             }
-            info!("[sys_setitimer] which: {}, new_value: {:?}, old_value: {:?}", which, inner.timer[which], *translated_refmut(token, old_value));
+            info!("[sys_setitimer] which: {}, new_value: {:?}, old_value: {:?}", which, &inner.timer[which], translated_ref(token, old_value));
             0
         }
         _ => -1
@@ -471,16 +471,14 @@ pub fn sys_sigreturn() -> isize {
     return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
 }
 
-pub fn sys_getrusage(who: isize, usage: *mut u8) -> isize {
+pub fn sys_getrusage(who: isize, usage: *mut Rusage) -> isize {
+    if who != 0 {
+        panic!("[sys_getrusage] who is not RUSAGE_SELF.");
+    }
     let task = current_task().unwrap();
-    let token = current_user_token();
-    let mut userbuf = UserBuffer::new(translated_byte_buffer(
-        token,
-        usage,
-        core::mem::size_of::<Rusage>(),
-    ));
-    let rusage = &task.acquire_inner_lock().rusage;
-    userbuf.write(rusage.as_bytes());
-    info!("[sys_getrusage] who: {}, usage: {:?}", who, rusage);
+    let inner = task.acquire_inner_lock();
+    let token = inner.get_user_token();
+    *translated_refmut(token, usage) = inner.rusage;
+    info!("[sys_getrusage] who: RUSAGE_SELF, usage: {:?}", &inner.rusage);
     0
 }

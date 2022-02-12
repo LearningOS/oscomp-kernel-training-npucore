@@ -72,6 +72,7 @@ impl ProcClock {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Rusage {
     ru_utime: TimeVal,  /* user CPU time used */
     ru_stime: TimeVal,  /* system CPU time used */
@@ -111,11 +112,6 @@ impl Rusage {
             ru_nvcsw: 0,
             ru_nivcsw: 0,
         }
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        let size = core::mem::size_of::<Self>();
-        unsafe { core::slice::from_raw_parts(self as *const _ as usize as *const u8, size) }
     }
 }
 

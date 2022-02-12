@@ -164,7 +164,7 @@ pub fn syscall_name(id: usize) -> &'static str {
 }
 use crate::{
     fs::{FdSet, IoVec},
-    timer::{TimeSpec, ITimerVal},
+    timer::{TimeSpec, ITimerVal}, task::Rusage,
 };
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
@@ -256,7 +256,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as *mut ITimerVal,
         ),
         SYSCALL_GET_TIME => sys_get_time(),
-        SYSCALL_GETRUSAGE => sys_getrusage(args[0] as isize, args[1] as *mut u8),
+        SYSCALL_GETRUSAGE => sys_getrusage(args[0] as isize, args[1] as *mut Rusage),
         SYSCALL_GET_TIME_OF_DAY => sys_get_time_of_day(
             args[0] as *mut crate::timer::TimeVal,
             args[1] as *mut crate::timer::TimeZone,
