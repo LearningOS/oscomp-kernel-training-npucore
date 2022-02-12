@@ -1,7 +1,7 @@
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
 use core::fmt::{self, Binary, Debug, Formatter};
-use log::info;
+use log::{trace, info, debug, warn, error};
 use riscv::register::{
     mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
@@ -9,7 +9,7 @@ use riscv::register::{
 };
 
 use crate::config::*;
-use crate::mm::{translated_ref, translated_refmut};
+use crate::mm::{translated_ref, translated_refmut, copy_to_user, copy_from_user};
 use crate::task::{current_trap_cx, exit_current_and_run_next};
 use crate::trap::{TrapContext, __alltraps, __call_sigreturn};
 
@@ -105,7 +105,7 @@ bitflags! {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 #[repr(C)]
 // sigset_t   sa_mask;//保存的是当进程在处理信号的时候，收到的信号
 // int        sa_flags;//SA_SIGINFO，OS在处理信号的时候，调用的就是sa_sigaction函数指针当中
@@ -117,10 +117,10 @@ pub struct SigAction {
     /// void     (*sa_sigaction)(int, siginfo_t *, void *);//
     pub sa_handler: usize,
     //pub sa_sigaction: SaFlags,
-    /// 执行的时候需要阻塞的信号,另外除非SA_NODEFER定义,否则也需要阻塞本次触发的信号
-    pub sa_mask: Signals,
     /// 指定本次信号行为的标识
     pub sa_flags: SaFlags,
+    /// 执行的时候需要阻塞的信号,另外除非SA_NODEFER定义,否则也需要阻塞本次触发的信号
+    pub sa_mask: Signals,
     // void     (*sa_restorer)(void); NOT USED BY LINUX/POSIX!
 }
 
@@ -157,7 +157,7 @@ impl SigInfo {
 impl Debug for SigInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
-            "( is_signal_execute:{}, signal_pending:{:?}, signal_handler:{:?})",
+            "[ is_signal_execute: {}, signal_pending: ({:?}), signal_handler: ({:?}) ]",
             self.is_signal_execute, self.signal_pending, self.signal_handler
         ))
     }
@@ -166,43 +166,42 @@ impl Debug for SigInfo {
 impl Debug for SigAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
-            "( sa_handler:0x{:X}, sa_mask:{:?}, sa_flags:{:?})",
+            "[ sa_handler: 0x{:X}, sa_mask: ({:?}), sa_flags: ({:?}) ]",
             self.sa_handler, self.sa_mask, self.sa_flags
         ))
     }
 }
 
-pub fn sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
+pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -> isize {
     let task = current_task();
     let token = current_user_token();
     if let Some(task) = task {
         let mut inner = task.acquire_inner_lock();
         // Copy the old to the oldset.
         let key = Signals::from_bits(1 << (signum - 1));
+        trace!("[sigaction] signal: {:?}", key);
         match key {
             Some(Signals::SIGKILL) | Some(Signals::SIGSTOP) | None => -1,
             Some(key) => {
-                if let Some(act) = inner.siginfo.signal_handler.remove(&key) {
-                    if oldact as usize != 0 {
-                        *translated_refmut(token, oldact as *mut SigAction) = act;
+                if oldact as usize != 0 {
+                    if let Some(sigact) = inner.siginfo.signal_handler.remove(&key) {
+                        copy_to_user(token, &sigact, oldact);
+                        trace!("[sigaction] *oldact: {:?}", sigact);
                     }
-                } else {
-                    if oldact as usize != 0 {
-                        *translated_refmut(token, oldact as *mut SigAction) = SigAction::new();
+                    else {
+                        copy_to_user(token, &SigAction::new(), oldact);
+                        trace!("[sigaction] *oldact: not found");
                     }
                 }
                 if act as usize != 0 {
-                    let act = translated_ref(token, act as *const SigAction);
-                    let mut sigaction_new = SigAction {
-                        sa_handler: act.sa_handler,
-                        sa_mask: act.sa_mask.difference(Signals::SIGSTOP | Signals::SIGKILL),
-                        sa_flags: act.sa_flags,
-                    };
+                    let sigact = &mut SigAction::new();
+                    copy_from_user(token, act, sigact);
+                    sigact.sa_mask.remove(Signals::SIGSTOP | Signals::SIGKILL);
                     // push to PCB, ignore mask and flags now
-                    if !(act.sa_handler == SIG_DFL || act.sa_handler == SIG_IGN) {
-                        inner.siginfo.signal_handler.insert(key, sigaction_new);
+                    if !(sigact.sa_handler == SIG_DFL || sigact.sa_handler == SIG_IGN) {
+                        inner.siginfo.signal_handler.insert(key, *sigact);
                     };
-                    log::debug!("{:?}", inner.siginfo);
+                    trace!("[sigaction] *act: {:?}", sigact);
                 }
                 0
             }
@@ -211,7 +210,7 @@ pub fn sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
         -1
     }
 }
-/// WARNING, this function currently *ignore* sigmask.
+
 pub fn do_signal() {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
@@ -221,25 +220,23 @@ pub fn do_signal() {
     let mut exception_signal: Option<Signals> = None;
     while let Some(signal) = inner.siginfo.signal_pending.difference(inner.sigmask).peek_front() {
         inner.siginfo.signal_pending.remove(signal);
+        trace!("[do signal] signal: {:?}, pending: {:?}, sigmask: {:?}", signal, inner.siginfo.signal_pending, inner.sigmask);
         inner.siginfo.is_signal_execute = true;
-        log::info!("Pop signal {:?} from pending queue", signal);
         if let Some(act) = inner.siginfo.signal_handler.get(&signal) {
-            log::info!("{:?} handler found", signal);
             {
                 let trap_cx = inner.get_trap_cx();
                 let sp = unsafe { (trap_cx.x[2] as *mut TrapContext).sub(1) };
                 if (sp as usize) < USER_STACK_TOP {
                     trap_cx.sepc = usize::MAX; // we don't have enough space on user stack, return a bad address to kill this program
                 } else {
-                    *translated_refmut(inner.get_user_token(), sp as *mut TrapContext) =
-                        trap_cx.clone(); // restore context on user stack
+                    copy_to_user(inner.get_user_token(), trap_cx, sp as *mut TrapContext); // restore context on user stack
                     trap_cx.set_sp(sp as usize); // update sp, because we pushed trapcontext into stack
                     trap_cx.x[10] = signal.to_signum().unwrap(); // a0 <= signum, parameter.
                     trap_cx.x[1] = SIGNAL_TRAMPOLINE; // ra <= __call_sigreturn, when handler ret, we will go to __call_sigreturn
                     trap_cx.sepc = act.sa_handler; // recover pc with addr of handler
                 }
-                info!(
-                    "Ready to handle {:?}, signum={:?}, hanler=0x{:X} (ra=0x{:X}, sp=0x{:X})",
+                trace!(
+                    "[do_signal] signal: {:?}, signum: {:?}, handler: 0x{:X} (ra: 0x{:X}, sp: 0x{:X})",
                     signal,
                     signal.to_signum().unwrap(),
                     act.sa_handler,
@@ -250,12 +247,11 @@ pub fn do_signal() {
         }
         // action not found
         else {
-            log::warn!("{:?} handler not found", signal);
             if signal == Signals::SIGCHLD
                 || signal == Signals::SIGURG
                 || signal == Signals::SIGWINCH
             {
-                log::warn!("Ingore signal {:?}", signal);
+                trace!("[do_signal] Ignore {:?}", signal);
                 continue;
             }
             if signal == Signals::SIGCONT {
@@ -270,7 +266,7 @@ pub fn do_signal() {
     }
     if let Some(signal) = exception_signal {
         if signal == Signals::SIGSEGV {
-            log::info!("Use default handler for SIGSEGV");
+            warn!("[do_signal] Use default handler for SIGSEGV");
             let scause = scause::read();
             let stval = stval::read();
             println!(
@@ -282,48 +278,48 @@ pub fn do_signal() {
             // page fault exit code
             exit_current_and_run_next(-2);
         } else {
-            log::info!("Use default handler for {:?}", signal);
+            warn!("[do_signal] Use default handler for {:?}", signal);
             exit_current_and_run_next(signal.to_signum().unwrap() as i32);
         }
     }
 }
 
-pub fn sigprocmask(how: usize, set: Option<Signals>, old: *mut Signals) -> isize {
-    if let Some(task) = current_task() {
-        let mut inner = task.acquire_inner_lock();
-
-        // Copy the old to the oldset.
-        if old as usize != 0 {
-            unsafe {
-                *old = inner.sigmask; // fix deadlock here
-            }
-        }
-
-        // Assign the sigmask.
-        if let Some(s) = set {
-            let i = match how {
-                SIG_BLOCK => {
-                    inner.sigmask = inner.sigmask.union(s);
-                    0
-                } /*add the signals not yet blocked in the given set to the mask.*/
-                SIG_UNBLOCK => {
-                    inner.sigmask = inner.sigmask.difference(s);
-                    0
-                } /*remove the blocked signals in the set from the sigmask. NOTE: unblocking a signal not blocked is allowed. */
-                SIG_SETMASK => {
-                    inner.sigmask = s;
-                    0
-                } /*set the signal mask to what we see.*/
-                _ => -1, // "how" variable NOT recognized
-            };
-            inner.sigmask = inner
-                .sigmask
-                .difference(Signals::SIGKILL | Signals::SIGSTOP);
-            i
-        } else {
-            0
-        }
+pub fn sigprocmask(how: usize, set: *const Signals, oldset: *mut Signals) -> isize {
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    let token = inner.get_user_token();
+    // Copy the old to the oldset.
+    if oldset as usize != 0 {
+        *translated_refmut(token, oldset) = inner.sigmask;
+        trace!("[sigprocmask] *oldset: ({:?})", inner.sigmask);
+    }
+    // Assign the sigmask.
+    if set as usize != 0 {
+        let s = *translated_ref(token, set);
+        trace!("[sigprocmask] *set: ({:?})", s);
+        let ret = match how {
+            SIG_BLOCK => {
+                inner.sigmask = inner.sigmask.union(s);
+                trace!("[sigprocmask] how: SIG_BLOCK");
+                0
+            } /*add the signals not yet blocked in the given set to the mask.*/
+            SIG_UNBLOCK => {
+                inner.sigmask = inner.sigmask.difference(s);
+                trace!("[sigprocmask] how: SIG_UNBLOCK");
+                0
+            } /*remove the blocked signals in the set from the sigmask. NOTE: unblocking a signal not blocked is allowed. */
+            SIG_SETMASK => {
+                inner.sigmask = s;
+                trace!("[sigprocmask] how: SIG_SETMASK");
+                0
+            } /*set the signal mask to what we see.*/
+            _ => -1, // "how" variable NOT recognized
+        };
+        inner.sigmask = inner
+            .sigmask
+            .difference(Signals::SIGKILL | Signals::SIGSTOP);
+        ret
     } else {
-        -1
+        0
     }
 }

@@ -395,14 +395,24 @@ impl Iterator for UserBufferIterator {
     }
 }
 
-pub fn copy_from_user<T>(token: usize, src: *const T, dst: *mut T) {
+pub fn copy_from_user<T:'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
-    // if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
-    //     unsafe { *dst = *translated_ref(token, src) };
-    // }
-    // else {
+    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
+        unsafe { *dst = *translated_ref(token, src) };
+    }
+    else {
         UserBuffer::new(translated_byte_buffer(token, src as *const u8, size)).read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
-    // }
+    }
+}
+
+pub fn copy_to_user<T:'static + Copy>(token: usize, src: *const T, dst: *mut T) {
+    let size = core::mem::size_of::<T>();
+    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
+        unsafe { *translated_refmut(token, dst) = *src };
+    }
+    else {
+        UserBuffer::new(translated_byte_buffer(token, dst as *const u8, size)).write(unsafe { core::slice::from_raw_parts_mut(src as *mut u8, size) });
+    }
 }
 
 pub fn translated_array_copy<T>(token: usize, ptr: *mut T, len: usize) -> Vec<T>
@@ -428,18 +438,11 @@ where
     ref_array
 }
 
-/* 从指定地址复制数据到用户空间 */
-pub fn copy_to_user<T>(dst: usize, src: *const T, size: usize) {
-    let token = crate::task::current_user_token();
-    let mut buf = UserBuffer::new(translated_byte_buffer(token, dst as *const u8, size));
-    let src_bytes = trans_to_bytes(src);
-    buf.write(src_bytes);
-}
 
-fn trans_to_bytes<T>(ptr: *const T) -> &'static [u8] {
-    let size = core::mem::size_of::<T>();
-    unsafe { core::slice::from_raw_parts(ptr as usize as *const u8, size) }
-}
+// fn trans_to_bytes<T>(ptr: *const T) -> &'static [u8] {
+//     let size = core::mem::size_of::<T>();
+//     unsafe { core::slice::from_raw_parts(ptr as usize as *const u8, size) }
+// }
 
 // fn trans_to_bytes_mut<T>(ptr: *const T) -> &'static mut [u8] {
 //     let size = core::mem::size_of::<T>();

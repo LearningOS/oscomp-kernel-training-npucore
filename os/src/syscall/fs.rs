@@ -803,16 +803,7 @@ pub fn sys_ioctl(fd: usize, cmd: u32, arg: usize) -> isize {
     }
 }
 pub fn sys_ppoll(poll_fd: usize, nfds: usize, time_spec: usize, sigmask: usize) -> isize {
-    let token = current_user_token();
-    let sig = if sigmask != 0 {
-        let j = *translated_ref(token, unsafe {
-            sigmask as *const crate::task::signal::Signals
-        });
-        Some(j)
-    } else {
-        None
-    };
-    ppoll(poll_fd, nfds, time_spec, sig)
+    ppoll(poll_fd, nfds, time_spec, sigmask as *const crate::task::Signals)
 }
 pub fn sys_mkdir(dirfd: isize, path: *const u8, mode: u32) -> isize {
     let token = current_user_token();
@@ -945,6 +936,6 @@ pub fn sys_mypselect(
         ptr_to_opt_ref_mut!(token, write_fds),
         ptr_to_opt_ref_mut!(token, exception_fds),
         ptr_to_opt_ref!(token, timeout),
-        ptr_to_opt_ref!(token, sigmask),
+        sigmask,
     )
 }

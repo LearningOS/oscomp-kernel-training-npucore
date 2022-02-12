@@ -69,7 +69,7 @@ impl File for TtyINode {
             TIOCGPGRP => {
                 //let argp = arg as *mut i32; // pid_t
                 let argp = *self.foreground_pgid.read();
-                copy_to_user(arg, &argp as *const i32, 4);
+                copy_to_user(token, &argp as *const i32, arg as *mut i32);
                 0
             }
             TIOCSPGRP => {
@@ -83,13 +83,13 @@ impl File for TtyINode {
                 let winsize = Winsize::default();
                 let size = size_of::<Winsize>();
                 //println!("size = {}", size);
-                copy_to_user(arg, &winsize as *const Winsize, size);
+                copy_to_user(token, &winsize as *const Winsize, arg as *mut Winsize);
                 0
             }
             TCGETS => {
                 let termois = *self.termios.read();
                 let size = size_of::<Termios>();
-                copy_to_user(arg, &termois as *const Termios, size);
+                copy_to_user(token, &termois as *const Termios, arg as *mut Termios);
                 0
             }
             TCSETS => {

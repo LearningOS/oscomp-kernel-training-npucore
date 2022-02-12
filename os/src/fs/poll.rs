@@ -56,20 +56,16 @@ impl PollFd {
     /* fn get_inode(&self) -> OSInode {} */
 }
 pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
-    ppoll(poll_fd, nfds, time_spec, None)
+    ppoll(poll_fd, nfds, time_spec, null::<Signals>())
 }
 ///
-pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: Option<Signals>) -> isize {
-    /*the sigmask is so far ignored */
+pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Signals) -> isize {
     /*support only POLLIN for currently*/
-    let mut oldsig = Signals::empty();
+    let mut oldsig = &mut Signals::empty();
     let mut has_mask = false;
-    match sigmask {
-        Some(_) => {
-            has_mask = true;
-            sigprocmask(SIG_SETMASK, sigmask, &mut oldsig as *mut Signals);
-        }
-        None => {}
+    if sigmask as usize != 0 {
+        has_mask = true;
+        sigprocmask(SIG_SETMASK, sigmask, oldsig);
     }
     let mut done: isize = 0;
     let mut no_abs: bool = true;
@@ -126,7 +122,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: Option<Si
             }
             if no_abs || done != 0 {
                 if has_mask {
-                    sigprocmask(SIG_SETMASK, Some(oldsig), null_mut::<Signals>());
+                    sigprocmask(SIG_SETMASK, oldsig, null_mut::<Signals>());
                 }
                 break done;
             }
@@ -235,7 +231,7 @@ pub fn pselect(
     If timeout is NULL (no timeout), select() can block indefinitely.
      */
     timeout: Option<&TimeSpec>,
-    sigmask: Option<&Signals>,
+    sigmask: *const Signals,
 ) -> isize {
     /*
         // this piece of code should be in sys_pselect instead of being here.
@@ -251,18 +247,15 @@ pub fn pselect(
     }
     let mut done = false;
     let start = crate::timer::get_time_sec();
-    let mut oldsig = Signals::empty();
+    let oldsig = &mut Signals::empty();
     let mut has_mask = false;
-    match sigmask {
-        Some(_) => {
-            has_mask = true;
-            sigprocmask(
-                SIG_SETMASK,
-                Some(sigmask.unwrap().clone()),
-                &mut oldsig as *mut Signals,
-            );
-        }
-        None => {}
+    if sigmask as usize != 0 {
+        has_mask = true;
+        sigprocmask(
+            SIG_SETMASK,
+            sigmask,
+            oldsig,
+        );
     }
     let mut ret = 2048;
     loop {
@@ -392,7 +385,7 @@ pub fn pselect(
         }
     }
     if has_mask {
-        sigprocmask(SIG_SETMASK, Some(oldsig), null_mut::<Signals>());
+        sigprocmask(SIG_SETMASK, oldsig, null_mut::<Signals>());
     }
     log::warn!("[pselect] quiting pselect. {}", ret);
     // look up according to TimeVal

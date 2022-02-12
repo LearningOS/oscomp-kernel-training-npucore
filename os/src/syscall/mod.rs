@@ -164,7 +164,7 @@ pub fn syscall_name(id: usize) -> &'static str {
 }
 use crate::{
     fs::{FdSet, IoVec},
-    timer::{TimeSpec, ITimerVal}, task::Rusage,
+    timer::{TimeSpec, ITimerVal}, task::{Rusage, SigAction},
 };
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
@@ -236,14 +236,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0] as usize, args[1] as *mut u64),
         SYSCALL_YIELD => sys_yield(),
         SYSCALL_SIGACTION => sys_sigaction(
-            args[0] as isize,
-            args[1] as *mut usize,
-            args[2] as *mut usize,
+            args[0] as usize,
+            args[1] as usize,
+            args[2] as usize,
         ),
         SYSCALL_SIGPROCMASK => sys_sigprocmask(
             args[0] as usize,
-            args[1] as *mut usize,
-            args[2] as *mut usize,
+            args[1] as usize,
+            args[2] as usize,
         ),
         SYSCALL_SIGRETURN => sys_sigreturn(),
         SYSCALL_NANOSLEEP => sys_nano_sleep(

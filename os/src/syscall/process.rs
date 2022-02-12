@@ -1,14 +1,14 @@
 use crate::config::{CLOCK_FREQ, MEMORY_END, PAGE_SIZE};
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
-    translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer,
+    translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user, copy_to_user,
 };
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next, Rusage,
 };
 use crate::task::{block_current_and_run_next, signal::*};
-use crate::timer::{get_time, get_time_ms, TimeSpec, TimeVal, ITimerVal};
+use crate::timer::{get_time, get_time_ms, TimeSpec, TimeVal, ITimerVal, TimeZone};
 use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -68,34 +68,36 @@ pub fn sys_yield() -> isize {
 }
 
 pub fn sys_nano_sleep(
-    rreq: *const crate::timer::TimeSpec,
-    rrem: *mut crate::timer::TimeSpec,
+    req: *const TimeSpec,
+    rem: *mut TimeSpec,
 ) -> isize {
-    let start = TimeSpec::now();
-    if rreq as usize == 0 {
+    if req as usize == 0 {
         return -1;
     }
     let token = current_user_token();
-    let req = *translated_ref(token, rreq);
-    let trg = req + start;
-    if rrem as usize == 0 {
-        let mut diff = TimeSpec::new();
-        loop {
-            diff = TimeSpec::now() - start;
-            if diff.to_ns() != 0 {
-                suspend_current_and_run_next();
-            } else {
-                break;
-            }
+    let start = TimeSpec::now();
+    let len = &mut TimeSpec::new();
+    copy_from_user(token, req, len);
+    let end = start + *len;
+    if rem as usize == 0 {
+        while !(end - TimeSpec::now()).is_zero() {
+            suspend_current_and_run_next();
         }
-    } else {
-        loop {
-            *translated_refmut(token, rrem) = trg - TimeSpec::now();
-            if translated_ref(token, rrem).to_ns() != 0 {
+    }
+    else {
+        let task = current_task().unwrap();
+        let mut remain = end - TimeSpec::now();
+        while !remain.is_zero() {
+            let inner = task.acquire_inner_lock();
+            if inner.siginfo.signal_pending.difference(inner.sigmask).is_empty() {
                 suspend_current_and_run_next();
-            } else {
-                break;
             }
+            else {
+                // this will ensure that *rem > 0
+                copy_to_user(token, &remain, rem);
+                return -1;
+            }
+            remain = end - TimeSpec::now();
         }
     }
     0
@@ -106,18 +108,20 @@ pub fn sys_setitimer(
     new_value: *const ITimerVal,
     old_value: *mut ITimerVal,
 ) -> isize {
+    info!("[sys_setitimer] which: {}, new_value: {:?}, old_value: {:?}", which, new_value, old_value);
     match which {
         0..=2 => {
             let task = current_task().unwrap();
             let mut inner = task.acquire_inner_lock();
             let token = inner.get_user_token();
             if old_value as usize != 0 {
-                *translated_refmut(token, old_value) = inner.timer[which];
+                copy_to_user(token, &inner.timer[which], old_value);
+                trace!("[sys_setitimer] *old_value: {:?}", inner.timer[which]);
             }
             if new_value as usize != 0 {
-                inner.timer[which] = *translated_ref(token, new_value);
+                copy_from_user(token, new_value, &mut inner.timer[which]);
+                trace!("[sys_setitimer] *new_value: {:?}", inner.timer[which]);
             }
-            info!("[sys_setitimer] which: {}, new_value: {:?}, old_value: {:?}", which, &inner.timer[which], translated_ref(token, old_value));
             0
         }
         _ => -1
@@ -125,13 +129,13 @@ pub fn sys_setitimer(
 }
 
 pub fn sys_get_time_of_day(
-    time_val: *mut crate::timer::TimeVal,
-    time_zone: *mut crate::timer::TimeZone,
+    time_val: *mut TimeVal,
+    time_zone: *mut TimeZone,
 ) -> isize {
     // Timezone is currently NOT supported.
-    let mut ans = crate::timer::TimeVal::now();
+    let ans = &TimeVal::now();
     if time_val as usize != 0 {
-        *translated_refmut(current_user_token(), time_val) = ans;
+        copy_to_user(current_user_token(), ans, time_val);
     }
     0
 }
@@ -421,40 +425,22 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     0
 }
 
-// Warning, we don't support this syscall in fact
-// It just a stub.
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
-pub fn sys_sigaction(signum: isize, act: *mut usize, oldact: *mut usize) -> isize {
-    let token = current_user_token();
-    sigaction(signum, act, oldact);
+pub fn sys_sigaction(signum: usize, act: usize, oldact: usize) -> isize {
     info!(
-        "[sys_sigaction] signum:{:?}; act:{:?}, oldact:{:?}",
+        "[sys_sigaction] signum: {:?}, act: {:X}, oldact: {:X}",
         signum, act, oldact
     );
-    0
+    sigaction(signum, act as *const SigAction, oldact as *mut SigAction)
 }
-// Warning, we don't support this syscall in fact
-// The same as above
+
 /// Note: code translation should be done in syscall rather than the call handler as the handler may be reused by kernel code which use kernel structs
-pub fn sys_sigprocmask(how: usize, set: *mut usize, oldset: *mut usize) -> isize {
-    let token = current_user_token();
-    let sig_set = Signals::from_bits(*translated_ref(token, set));
-    drop(token);
+pub fn sys_sigprocmask(how: usize, set: usize, oldset: usize) -> isize {
     info!(
-        "[sys_sigprocmask] how:{:?}; set:{:?}, oldset:{:?}",
+        "[sys_sigprocmask] how: {:?}; set: {:X}, oldset: {:X}",
         how, set, oldset
     );
-    let mut old = Signals::empty();
-
-    let i = sigprocmask(how, sig_set, &mut old as *mut Signals);
-
-    if let Some(task) = current_task() {
-        let mut inner = task.acquire_inner_lock();
-        if oldset as usize != 0 {
-            *translated_refmut(inner.get_user_token(), oldset) = old.bits();
-        }
-    }
-    i
+    sigprocmask(how, set as *const Signals, oldset as *mut Signals)
 }
 
 pub fn sys_sigreturn() -> isize {
@@ -467,18 +453,18 @@ pub fn sys_sigreturn() -> isize {
     // restore trap_cx
     let trap_cx = inner.get_trap_cx();
     let sp = trap_cx.x[2];
-    *trap_cx = translated_ref(inner.get_user_token(), sp as *mut TrapContext).clone();
+    copy_from_user(inner.get_user_token(), sp as *const TrapContext, trap_cx);
     return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
 }
 
 pub fn sys_getrusage(who: isize, usage: *mut Rusage) -> isize {
     if who != 0 {
-        panic!("[sys_getrusage] who is not RUSAGE_SELF.");
+        panic!("[sys_getrusage] parameter 'who' is not RUSAGE_SELF.");
     }
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
-    *translated_refmut(token, usage) = inner.rusage;
-    info!("[sys_getrusage] who: RUSAGE_SELF, usage: {:?}", &inner.rusage);
+    copy_to_user(token, &inner.rusage, usage);
+    info!("[sys_getrusage] who: RUSAGE_SELF, usage: {:?}", inner.rusage);
     0
 }
