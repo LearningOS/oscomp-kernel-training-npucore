@@ -87,9 +87,14 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
     }
     //return 1;
     //poll_fd.len()
+    drop(token);
+    drop(inner);
+    drop(task);
     if poll_fd.len() != 0 {
         loop {
             let mut i = 0;
+            let task = current_task().unwrap();
+            let inner = task.acquire_inner_lock();
             //
             while i != poll_fd.len() {
                 let j = {
@@ -125,6 +130,10 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                     sigprocmask(SIG_SETMASK, oldsig, null_mut::<Signals>());
                 }
                 break done;
+            } else {
+                drop(inner);
+                drop(task);
+                suspend_current_and_run_next();
             }
         }
     } else {
@@ -251,11 +260,7 @@ pub fn pselect(
     let mut has_mask = false;
     if sigmask as usize != 0 {
         has_mask = true;
-        sigprocmask(
-            SIG_SETMASK,
-            sigmask,
-            oldsig,
-        );
+        sigprocmask(SIG_SETMASK, sigmask, oldsig);
     }
     let mut ret = 2048;
     loop {
@@ -264,7 +269,7 @@ pub fn pselect(
         let fd_table = &inner.fd_table;
         ret = 2048;
         macro_rules! do_chk {
-            ($f:ident,$func:ident) => {
+            ($f:ident,$func:ident,$fds:ident,$i:ident) => {
                 if !$f.$func() {
                     ret = 0;
                     break;
@@ -272,18 +277,18 @@ pub fn pselect(
             };
         }
         macro_rules! chk_fds {
-            ($fds:ident,$func:ident) => {
-                if let Some(ref j) = $fds {
+            ($fds:ident,$func:ident,$chk_func:ident,$($ref_info:ident)?) => {
+                if let Some($($ref_info)? j) = $fds {
                     for i in 0..nfds {
                         if j.is_set(i) {
                             log::warn!("[myselect] i:{}", i);
                             if let Some(k) = fd_table[i].as_ref() {
                                 match &k.fclass {
                                     super::FileClass::Abstr(file) => {
-                                        do_chk!(file, $func);
+                                        $chk_func!(file, $func,j,i);
                                     }
                                     super::FileClass::File(file) => {
-                                        do_chk!(file, $func);
+                                        $chk_func!(file, $func,j,i);
                                     }
                                 }
                             } else {
@@ -295,8 +300,8 @@ pub fn pselect(
                 }
             };
         }
-        chk_fds!(read_fds, r_ready);
-        chk_fds!(write_fds, w_ready);
+        chk_fds!(read_fds, r_ready, do_chk, ref);
+        chk_fds!(write_fds, w_ready, do_chk, ref);
         if ret == 2048 {
             //The SUPPORTED fds are all ready since the ret was NOT assigned.
             ret = 0;
@@ -312,8 +317,8 @@ pub fn pselect(
                 0
             };
             // 我们曾把exception赋值放在这里,但当时
-	    // 似乎有个race:要么
-	    // 另外,这里if let 不加ref会导致move, 不知道有没有更好的办法不ref也不move却能
+            // 似乎有个race:要么
+            // 另外,这里if let 不加ref会导致move, 不知道有没有更好的办法不ref也不move却能
             break;
         }
         ret = 0;
@@ -330,32 +335,8 @@ pub fn pselect(
                             }
                         };
                     }
-                    macro_rules! chk_fds_end {
-                        ($fds:ident,$func:ident) => {
-                            if let Some(j) = $fds {
-                                for i in 0..nfds {
-                                    if j.is_set(i) {
-                                        //log::debug!("[myselect] i:{}", i);
-                                        if let Some(k) = fd_table[i].as_ref() {
-                                            match &k.fclass {
-                                                super::FileClass::Abstr(file) => {
-                                                    do_chk_end!(file, $func, j, i);
-                                                }
-                                                super::FileClass::File(file) => {
-                                                    do_chk_end!(file, $func, j, i);
-                                                }
-                                            }
-                                        } else {
-                                            log::error!("[myselect] quiting with -1!");
-                                            return -1;
-                                        }
-                                    }
-                                }
-                            }
-                        };
-                    }
-                    chk_fds_end!(read_fds, r_ready);
-                    chk_fds_end!(write_fds, w_ready);
+                    chk_fds!(read_fds, r_ready, do_chk_end,);
+                    chk_fds!(write_fds, w_ready, do_chk_end,);
                     break;
                 }
             }
