@@ -3,7 +3,7 @@ use crate::mm::{
     frame_alloc, frame_dealloc, kernel_token, FrameTracker, PageTable, PhysAddr, PhysPageNum,
     StepByOne, VirtAddr,
 };
-use alloc::vec::Vec;
+use alloc::{vec::Vec, sync::Arc};
 use lazy_static::*;
 use spin::Mutex;
 use virtio_drivers::{VirtIOBlk, VirtIOHeader};
@@ -14,7 +14,7 @@ const VIRTIO0: usize = 0x10001000;
 pub struct VirtIOBlock(Mutex<VirtIOBlk<'static>>);
 
 lazy_static! {
-    static ref QUEUE_FRAMES: Mutex<Vec<FrameTracker>> = Mutex::new(Vec::new());
+    static ref QUEUE_FRAMES: Mutex<Vec<Arc<FrameTracker>>> = Mutex::new(Vec::new());
 }
 
 impl BlockDevice for VirtIOBlock {

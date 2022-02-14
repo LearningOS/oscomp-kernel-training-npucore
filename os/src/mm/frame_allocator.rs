@@ -1,6 +1,6 @@
 use super::{PhysAddr, PhysPageNum};
 use crate::config::MEMORY_END;
-use alloc::vec::Vec;
+use alloc::{vec::Vec, sync::Arc};
 use core::fmt::{self, Debug, Formatter};
 use lazy_static::*;
 use spin::Mutex;
@@ -51,6 +51,9 @@ impl StackFrameAllocator {
         self.end = r.0;
         println!("last {} Physical Frames.", self.end - self.current);
     }
+    pub fn unallocated_frames(&mut self) -> usize {
+        self.recycled.len() + self.end - self.current
+    }
 }
 impl FrameAllocator for StackFrameAllocator {
     fn new() -> Self {
@@ -100,20 +103,24 @@ pub fn init_frame_allocator() {
     );
 }
 
-pub fn frame_alloc() -> Option<FrameTracker> {
+pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     FRAME_ALLOCATOR
         .lock()
         .alloc()
-        .map(|ppn| FrameTracker::new(ppn))
+        .map(|ppn| Arc::new(FrameTracker::new(ppn)))
 }
 
 pub fn frame_dealloc(ppn: PhysPageNum) {
     FRAME_ALLOCATOR.lock().dealloc(ppn);
 }
 
+pub fn unallocated_frames() -> usize {
+    FRAME_ALLOCATOR.lock().unallocated_frames()
+}
+
 #[allow(unused)]
 pub fn frame_allocator_test() {
-    let mut v: Vec<FrameTracker> = Vec::new();
+    let mut v: Vec<Arc<FrameTracker>> = Vec::new();
     for i in 0..5 {
         let frame = frame_alloc().unwrap();
         println!("{:?}", frame);

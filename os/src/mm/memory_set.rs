@@ -594,15 +594,21 @@ impl MemorySet {
         memory_set.map_signaltrampoline();
         // copy data sections/trap_context/user_stack
         for area in user_space.areas.iter() {
-            let new_area = MapArea::from_another(area);
-            memory_set.push(new_area, None);
-            // copy data from another space
-            for vpn in area.vpn_range {
-                let src_ppn = user_space.translate(vpn).unwrap().ppn();
-                let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
-                dst_ppn
-                    .get_bytes_array()
-                    .copy_from_slice(src_ppn.get_bytes_array());
+            if area.map_perm.contains(MapPermission::W) {
+                let new_area = MapArea::from_another(area);
+                memory_set.push(new_area, None);
+                // copy data from another space
+                for vpn in area.vpn_range {
+                    let src_ppn = user_space.translate(vpn).unwrap().ppn();
+                    let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
+                    dst_ppn
+                        .get_bytes_array()
+                        .copy_from_slice(src_ppn.get_bytes_array());
+                }
+            } else {
+                let mut new_area = area.clone();
+                new_area.map_shared(&mut memory_set.page_table, &user_space.page_table);
+                memory_set.areas.push(new_area);
             }
         }
         for area in user_space.heap_areas.iter() {
@@ -651,9 +657,10 @@ impl MemorySet {
     }
 }
 
+#[derive(Clone)]
 pub struct MapArea {
     vpn_range: VPNRange,
-    data_frames: BTreeMap<VirtPageNum, FrameTracker>,
+    data_frames: BTreeMap<VirtPageNum, Arc<FrameTracker>>,
     map_type: MapType,
     map_perm: MapPermission,
 }
@@ -668,10 +675,10 @@ impl MapArea {
         let start_vpn: VirtPageNum = start_va.floor();
         let end_vpn: VirtPageNum = end_va.ceil();
         trace!(
-            "[MapArea new] start_vpn:{:X}; end_vpn:{:X}; map_perm:{:b}",
+            "[MapArea new] start_vpn:{:X}; end_vpn:{:X}; map_perm:{:?}",
             start_vpn.0,
             end_vpn.0,
-            map_perm.bits()
+            map_perm
         );
         Self {
             vpn_range: VPNRange::new(start_vpn, end_vpn),
@@ -724,6 +731,18 @@ impl MapArea {
     pub fn map(&mut self, page_table: &mut PageTable) -> Result {
         for vpn in self.vpn_range {
             if let Err(_) = self.map_one(page_table, vpn) {
+                return Err(core::fmt::Error);
+            }
+        }
+        Ok(())
+    }
+    pub fn map_shared(&mut self, page_table: &mut PageTable, another: &PageTable) -> Result {
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        for vpn in self.vpn_range {
+            let ppn = another.translate(vpn).unwrap().ppn();
+            if !page_table.is_mapped(vpn) {
+                page_table.map(vpn, ppn, pte_flags);
+            } else {
                 return Err(core::fmt::Error);
             }
         }

@@ -229,9 +229,10 @@ pub fn sys_brk(brk_addr: usize) -> isize {
 }
 
 pub fn sys_fork() -> isize {
-    info!("[sys_fork]");
     let current_task = current_task().unwrap();
+    let before_fork = crate::mm::unallocated_frames();
     let new_task = current_task.fork();
+    let after_fork = crate::mm::unallocated_frames();
     let new_pid = new_task.pid.0;
     // modify trap context of new_task, because it returns immediately after switching
     let trap_cx = new_task.acquire_inner_lock().get_trap_cx();
@@ -240,6 +241,7 @@ pub fn sys_fork() -> isize {
     trap_cx.x[10] = 0;
     // add new task to scheduler
     add_task(new_task);
+    debug!("[sys_fork] consumed frames: {}, last frames: {}", before_fork - after_fork, after_fork);
     new_pid as isize
 }
 
@@ -273,6 +275,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
             let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
             let start: usize = MEMORY_END;
             debug!("[sys_exec] File size: {} bytes", len);
+            let before_read = crate::mm::unallocated_frames();
             crate::mm::KERNEL_SPACE.lock().alloc(
                 start,
                 lrnd,
@@ -287,16 +290,18 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
 
             //remember to UNMAP here!
             // return argc because cx.x[10] will be covered with it later
-
-            info!("[sys_exec] read_all() DONE.");
+            let after_read = crate::mm::unallocated_frames();
+            debug!("[sys_exec] read_all() DONE. consumed frames:{}, last frames:{}", before_read - after_read, after_read);
             let task = current_task().unwrap();
             let argc = args_vec.len();
             info!("[sys_exec] argc = {}", argc);
+            let before_exec = crate::mm::unallocated_frames();
             unsafe {
                 let all_data = core::slice::from_raw_parts(start as *const u8, len);
                 task.exec(all_data, args_vec);
             }
-            info!("[sys_exec] exec() DONE.");
+            let after_exec = crate::mm::unallocated_frames();
+            debug!("[sys_exec] exec() DONE. consumed frames:{}, last frames:{}", (before_exec - after_exec) as isize, after_exec);
 
             //remember to UNMAP here!
             // return argc because cx.x[10] will be covered with it later
