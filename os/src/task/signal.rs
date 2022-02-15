@@ -247,6 +247,7 @@ pub fn do_signal() {
         }
         // action not found
         else {
+            inner.siginfo.is_signal_execute = false;
             if signal == Signals::SIGCHLD
                 || signal == Signals::SIGURG
                 || signal == Signals::SIGWINCH
