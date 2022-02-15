@@ -114,23 +114,17 @@ pub fn exit_current_and_run_next(exit_code: i32) {
 lazy_static! {
     pub static ref INITPROC: Arc<TaskControlBlock> = Arc::new({
         let inode = open("/", "initproc", OpenFlags::RDONLY, DiskInodeType::File).unwrap();
+        let start: usize = crate::config::MMAP_BASE;
         let len = inode.get_size();
-        let j: usize = len % crate::config::PAGE_SIZE;
-        let lrnd = if j == 0 {
-            len
-        } else {
-            len - j + crate::config::PAGE_SIZE
-        };
-        let start: usize = crate::config::MEMORY_END * 4;
-        crate::mm::KERNEL_SPACE.lock().alloc(
-            start,
-            lrnd,
-            (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
+        crate::mm::KERNEL_SPACE.lock().insert_framed_area(
+            start.into(),
+            (start + len).into(),
+            crate::mm::MapPermission::R | crate::mm::MapPermission::W,
         );
         unsafe {
-            let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
-            let v = inode.read_into(&mut buf);
-            TaskControlBlock::new(buf)
+            let mut buffer = core::slice::from_raw_parts_mut(start as *mut u8, len);
+            inode.read_into(&mut buffer);
+            TaskControlBlock::new(buffer)
         }
     });
 }

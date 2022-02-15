@@ -89,43 +89,32 @@ impl MemorySet {
     //     }
     //     return len as i32;
     // }
-    pub fn alloc(
-        &mut self,
-        mut start: usize, // 开始地址
-        len: usize,       // 内存映射长度
-        prot: usize,      // 保护位标志
-    ) -> i32 {
-        info!("[alloc] trying to alloc start area beg. with {}.", start);
-        if len == 0 {
-            return 0;
-        }
-        if (prot & 0x7 == 0) || (prot & !0x7 != 0) || len > 0x1_000_000_000 {
-            return -1;
-        }
-        let mut chk = MapPermission::R | MapPermission::W | MapPermission::X;
-        let mut per: u8 = prot as u8;
-        per = chk.bits() & per;
-        chk = !chk;
-        if (prot & (chk.bits() as usize)) != 0 {
-            return -1;
-        }
-        if let Some(i) = MapPermission::from_bits(per) {
-            let m: MapArea = MapArea::new(start.into(), (len + start).into(), MapType::Framed, i, None);
-            debug!("[alloc] start with:{}", m.vpn_range.get_start().0);
-            if let Ok(_) = self.push(m, None) {
-                unsafe {
-                    llvm_asm!("sfence.vma" :::: "volatile");
-                }
-                return ((((start + len) - 1 + PAGE_SIZE) / PAGE_SIZE - start / PAGE_SIZE)
-                    * PAGE_SIZE) as i32;
-            //this was the size
-            } else {
-                return -1;
-            }
-        } else {
-            return -1;
-        }
-    }
+    // pub fn alloc(
+    //     &mut self,
+    //     start: usize,
+    //     len: usize,
+    //     prot: MapPermission,
+    // ) -> Result {
+    //     info!("[alloc] start: {}, len: {}, prot: {:?}", start, len, prot);
+    //     if len == 0 || len > 0x1_000_000_000 {
+    //         return Err(core::fmt::Error);
+    //     }
+    //     let area = MapArea::new(
+    //         start.into(), 
+    //         (start + len).into(), 
+    //         MapType::Framed, 
+    //         prot, 
+    //         None,
+    //     );
+    //     self.push(area, None)
+    //     if let Ok(_) = self.push(m, None) {
+    //         return ((((start + len) - 1 + PAGE_SIZE) / PAGE_SIZE - start / PAGE_SIZE)
+    //             * PAGE_SIZE) as i32;
+    //     //this was the size
+    //     } else {
+    //         return -1;
+    //     }
+    // }
     /// 建立从文件到内存的映射
     // pub fn mmap(
     //     &mut self,
@@ -272,8 +261,12 @@ impl MemorySet {
                 info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
                 Ok(())
             } else {
-                info!("[do_page_fault] addr: {:?}, solution: copy on write", addr);
-                area.copy_on_write(&mut self.page_table, vpn)
+                if area.map_perm.contains(MapPermission::W) {
+                    info!("[do_page_fault] addr: {:?}, solution: copy on write", addr);
+                    area.copy_on_write(&mut self.page_table, vpn)
+                } else {
+                    Err(core::fmt::Error)
+                }
             }
         } else {
             error!("[do_page_fault] addr: {:?}, result: bad addr", addr);
@@ -503,17 +496,22 @@ impl MemorySet {
                 if ph_flags.is_execute() {
                     map_perm |= MapPermission::X;
                 }
-                let map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm, None);
+                let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm, None);
                 max_end_vpn = map_area.vpn_range.get_end();
-                if offset == 0 {
+                if offset == 0 && ph.file_size() != 0 {
                     head_va = start_va.into();
-                    memory_set.push(
-                        map_area,
-                        Some(
-                            &elf.input
-                                [ph.offset() as usize..(ph.offset() + ph.file_size()) as usize],
-                        ),
-                    );
+                    let kernel_start_vpn = (VirtAddr::from(MMAP_BASE + (ph.offset() as usize))).floor();
+                    assert_eq!(ph.offset() % 0x1000, 0);
+                    assert_eq!(VirtAddr::from(ph.file_size() as usize).ceil().0, map_area.vpn_range.get_end().0 - map_area.vpn_range.get_start().0);
+                    map_area.map_kernel_shared(&mut memory_set.page_table, kernel_start_vpn);
+                    memory_set.areas.push(map_area);
+                    // memory_set.push(
+                    //     map_area,
+                    //     Some(
+                    //         &elf.input
+                    //             [ph.offset() as usize..(ph.offset() + ph.file_size()) as usize],
+                    //     ),
+                    // );
                 } else {
                     memory_set.push_with_offset(
                         map_area,
@@ -738,6 +736,32 @@ impl MapArea {
         }
         Ok(())
     }
+    pub fn map_kernel_shared(&mut self, page_table: &mut PageTable, kernel_start_vpn: VirtPageNum) -> Result {
+        let kernel_space = KERNEL_SPACE.lock();
+        let kernel_page_table = &kernel_space.page_table;
+        let kernel_area = kernel_space.areas.last().unwrap();
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        let mut src_vpn = kernel_start_vpn;
+        for vpn in self.vpn_range {
+            if let Some(pte) = kernel_page_table.translate(src_vpn) {
+                let ppn = pte.ppn();
+                if !page_table.is_mapped(vpn) {
+                    let frame = kernel_area.data_frames.get(&src_vpn).unwrap();
+                    self.data_frames.insert(vpn, frame.clone());
+                    assert_eq!(ppn, frame.ppn);
+                    page_table.map(vpn, ppn, pte_flags);
+                } else {
+                    error!("[map_kernel_shared] user vpn already mapped!");
+                    return Err(core::fmt::Error);
+                }
+            } else {
+                error!("[map_kernel_shared] kernel vpn invalid!");
+                return Err(core::fmt::Error);
+            }
+            src_vpn = (src_vpn.0 + 1).into();
+        }
+        Ok(())
+    }
     pub fn unmap(&mut self, page_table: &mut PageTable) -> Result {
         for vpn in self.vpn_range {
             if let Err(_) = self.unmap_one(page_table, vpn) {
@@ -916,6 +940,7 @@ pub fn mmap(
         );
 
         if !flags.contains(MapFlags::MAP_ANONYMOUS) {
+            warn!("[mmap] Non-Anony call haven't been support yet!");
             if fd >= inner.fd_table.len() {
                 return usize::MAX;
             }

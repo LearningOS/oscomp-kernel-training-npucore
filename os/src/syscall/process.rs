@@ -1,4 +1,4 @@
-use crate::config::{CLOCK_FREQ, MEMORY_END, PAGE_SIZE};
+use crate::config::{CLOCK_FREQ, PAGE_SIZE, MMAP_BASE};
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
     translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user, copy_to_user, MapPermission, MapFlags, mmap, munmap, sbrk,
@@ -267,34 +267,27 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
         Some(app_inode) => {
             drop(inner);
             let len = app_inode.get_size();
-            let j: usize = len % PAGE_SIZE;
-            let lrnd = if j == 0 { len } else { len - j + PAGE_SIZE };
-            let start: usize = MEMORY_END;
             debug!("[sys_exec] File size: {} bytes", len);
+            let start: usize = MMAP_BASE;
             let before_read = crate::mm::unallocated_frames();
-            crate::mm::KERNEL_SPACE.lock().alloc(
-                start,
-                lrnd,
-                (crate::mm::MapPermission::R | crate::mm::MapPermission::W).bits() as usize,
+            crate::mm::KERNEL_SPACE.lock().insert_framed_area(
+                start.into(),
+                (start + len).into(),
+                MapPermission::R | MapPermission::W,
             );
-
-            /*read into all data*/
             unsafe {
-                let mut buf = core::slice::from_raw_parts_mut(start as *mut u8, lrnd);
-                app_inode.read_into(&mut buf);
+                app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
             }
-
-            //remember to UNMAP here!
-            // return argc because cx.x[10] will be covered with it later
             let after_read = crate::mm::unallocated_frames();
+
+            // return argc because cx.x[10] will be covered with it later
             debug!("[sys_exec] read_all() DONE. consumed frames:{}, last frames:{}", before_read - after_read, after_read);
             let task = current_task().unwrap();
             let argc = args_vec.len();
             info!("[sys_exec] argc = {}", argc);
             let before_exec = crate::mm::unallocated_frames();
             unsafe {
-                let all_data = core::slice::from_raw_parts(start as *const u8, len);
-                task.exec(all_data, args_vec);
+                task.exec(core::slice::from_raw_parts(start as *const u8, len), args_vec);
             }
             let after_exec = crate::mm::unallocated_frames();
             debug!("[sys_exec] exec() DONE. consumed frames:{}, last frames:{}", (before_exec - after_exec) as isize, after_exec);
@@ -391,13 +384,14 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
 pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
     if (addr % PAGE_SIZE != 0) || (len % PAGE_SIZE != 0) {
         // Not align
-        warn!("sys_mprotect: not align");
+        warn!("[sys_mprotect] not align");
         return -1;
     }
     let task = current_task().unwrap();
     // let token = task.acquire_inner_lock().get_user_token();
     let memory_set = &mut task.acquire_inner_lock().memory_set;
     let start_vpn = addr / PAGE_SIZE;
+    warn!("[sys_mprotect] this syscall won't do anything!");
     for i in 0..(len / PAGE_SIZE) {
         // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
         // if memory_set.set_pte_flags(start_vpn.into(), MapPermission::from_bits((prot as u8) << 1).unwrap()) == -1 {
@@ -476,6 +470,6 @@ pub fn sys_getrusage(who: isize, usage: *mut Rusage) -> isize {
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
     copy_to_user(token, &inner.rusage, usage);
-    info!("[sys_getrusage] who: RUSAGE_SELF, usage: {:?}", inner.rusage);
+    //info!("[sys_getrusage] who: RUSAGE_SELF, usage: {:?}", inner.rusage);
     0
 }

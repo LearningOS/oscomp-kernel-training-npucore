@@ -281,7 +281,7 @@ pub fn pselect(
                 if let Some($($ref_info)? j) = $fds {
                     for i in 0..nfds {
                         if j.is_set(i) {
-                            log::warn!("[myselect] i:{}", i);
+                            //log::warn!("[myselect] i:{}", i);
                             if let Some(k) = fd_table[i].as_ref() {
                                 match &k.file {
                                     super::FileLike::Abstract(file) => {
@@ -325,7 +325,7 @@ pub fn pselect(
         match &timeout {
             None => {}
             Some(_) => {
-                log::trace!("{:?} to {:?}", trg, TimeSpec::now());
+                //log::trace!("{:?} to {:?}", trg, TimeSpec::now());
                 if (trg - TimeSpec::now()).to_ns() == 0 {
                     ret = 0;
                     macro_rules! do_chk_end {

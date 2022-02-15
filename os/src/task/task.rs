@@ -250,7 +250,6 @@ impl TaskControlBlock {
         crate::mm::KERNEL_SPACE
             .lock()
             .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor());
-
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -326,7 +325,6 @@ impl TaskControlBlock {
         crate::mm::KERNEL_SPACE
             .lock()
             .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor());
-
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
