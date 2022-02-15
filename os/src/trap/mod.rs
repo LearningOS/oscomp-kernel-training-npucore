@@ -1,8 +1,10 @@
 mod context;
 
 use core::borrow::BorrowMut;
+use core::fmt::Error;
 
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
+use crate::mm::{PhysPageNum, VirtPageNum, VirtAddr, MapPermission};
 use crate::syscall::syscall;
 use crate::task::{
     current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, current_task, do_signal, Signals,
@@ -76,8 +78,12 @@ pub fn trap_handler() -> ! {
         | Trap::Exception(Exception::LoadPageFault) => {
             let task = current_task().unwrap();
             let mut inner = task.acquire_inner_lock();
-            inner.add_signal(Signals::SIGSEGV);
-            log::debug!("{:?}",inner.siginfo);
+            let addr = VirtAddr::from(stval);
+            log::debug!("[page_fault] pid: {}, type: {:?}", task.pid.0, scause.cause());
+            if inner.memory_set.do_page_fault(addr).is_err() {
+                inner.add_signal(Signals::SIGSEGV);
+                log::debug!("{:?}",inner.siginfo);
+            }
         }
         Trap::Exception(Exception::IllegalInstruction) => {
             println!("[kernel] IllegalInstruction in application, continue.");

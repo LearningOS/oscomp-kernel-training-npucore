@@ -1,10 +1,11 @@
-use super::{frame_alloc, FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+use super::{frame_alloc, FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, MapPermission};
 use crate::task::{current_task, current_user_token};
 use alloc::{string::String, sync::Arc};
 use alloc::vec;
 use alloc::vec::Vec;
 use bitflags::*;
 use log::{debug, error, info, trace, warn};
+use core::fmt::Result;
 bitflags! {
     /// Page Table Entry flags
     pub struct PTEFlags: u8 {
@@ -58,8 +59,8 @@ impl PageTableEntry {
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
-    pub fn set_pte_flags(&mut self, flags: usize) {
-        self.bits = (self.bits & !(0b1110 as usize)) | (flags & (0b1110 as usize));
+    pub fn set_permission(&mut self, flags: MapPermission) {
+        self.bits = (self.bits & 0xffff_ffff_ffff_ffe1) | (flags.bits() as usize)
     }
 }
 
@@ -132,6 +133,23 @@ impl PageTable {
         }
         result
     }
+    fn find_pte_refmut(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+        let idxs = vpn.indexes();
+        let mut ppn = self.root_ppn;
+        let mut result: Option<&mut PageTableEntry> = None;
+        for i in 0..3 {
+            let pte = &mut ppn.get_pte_array()[idxs[i]];
+            if !pte.is_valid() {
+                return None;
+            }
+            if i == 2 {
+                result = Some(pte);
+                break;
+            }
+            ppn = pte.ppn();
+        }
+        result
+    }
     #[allow(unused)]
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
         let pte = self.find_pte_create(vpn).unwrap();
@@ -155,25 +173,19 @@ impl PageTable {
             (aligned_pa_usize + offset).into()
         })
     }
+    pub fn translate_refmut(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
+        self.find_pte_refmut(vpn)
+    }
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
-    pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: usize) -> isize {
-        trace!("[set pte flags] vpn:{:X}", vpn.0);
-        let idxs = vpn.indexes();
-        let mut ppn = self.root_ppn;
-        for i in 0..3 {
-            let pte = &mut ppn.get_pte_array()[idxs[i]];
-            if !pte.is_valid() {
-                return -1;
-            }
-            if i == 2 {
-                pte.set_pte_flags(flags);
-                break;
-            }
-            ppn = pte.ppn();
+    pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result {
+        if let Some(pte) = self.find_pte_refmut(vpn) {
+            pte.set_permission(flags);
+            Ok(())
+        } else {
+            Err(core::fmt::Error)
         }
-        0
     }
 }
 

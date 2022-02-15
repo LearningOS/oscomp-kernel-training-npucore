@@ -7,10 +7,10 @@ use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
-use crate::fs::{FileClass, FileDescripter, Stdin, Stdout};
+use crate::fs::{FileLike, FileDescriptor, Stdin, Stdout};
 use crate::mm::VirtPageNum;
 use crate::mm::{
-    translated_refmut, MapPermission, MemorySet, MmapArea, MmapFlags, MmapProt, PhysPageNum,
+    translated_refmut, MapPermission, MemorySet, PhysPageNum,
     VirtAddr, KERNEL_SPACE,
 };
 use crate::timer::{TimeVal, ITimerVal};
@@ -34,7 +34,7 @@ pub struct TaskControlBlock {
     inner: Mutex<TaskControlBlockInner>,
 }
 
-pub type FdTable = Vec<Option<FileDescripter>>;
+pub type FdTable = Vec<Option<FileDescriptor>>;
 pub struct TaskControlBlockInner {
     pub sigmask: Signals,
     pub trap_cx_ppn: PhysPageNum,
@@ -278,19 +278,19 @@ impl TaskControlBlock {
                 exit_code: 0,
                 fd_table: vec![
                     // 0 -> stdin
-                    Some(FileDescripter::new(
+                    Some(FileDescriptor::new(
                         false,
-                        FileClass::Abstr(Arc::new(Stdin)),
+                        FileLike::Abstract(Arc::new(Stdin)),
                     )),
                     // 1 -> stdout
-                    Some(FileDescripter::new(
+                    Some(FileDescriptor::new(
                         false,
-                        FileClass::Abstr(Arc::new(Stdout)),
+                        FileLike::Abstract(Arc::new(Stdout)),
                     )),
                     // 2 -> stderr
-                    Some(FileDescripter::new(
+                    Some(FileDescriptor::new(
                         false,
-                        FileClass::Abstr(Arc::new(Stdout)),
+                        FileLike::Abstract(Arc::new(Stdout)),
                     )),
                 ],
                 address: ProcAddress::new(),
@@ -489,7 +489,7 @@ impl TaskControlBlock {
         // ---- hold parent PCB lock
         let mut parent_inner = self.acquire_inner_lock();
         // copy user space(include trap context)
-        let memory_set = MemorySet::from_existed_user(&parent_inner.memory_set);
+        let memory_set = MemorySet::from_existed_user(&mut parent_inner.memory_set);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -560,103 +560,6 @@ impl TaskControlBlock {
     pub fn getpgid(&self) -> usize {
         let inner = self.acquire_inner_lock();
         inner.pgid
-    }
-    pub fn sbrk(&self, increment: isize) -> usize {
-        let mut inner = self.acquire_inner_lock();
-        let old_pt: usize = inner.heap_pt;
-        let new_pt: usize = old_pt + increment as usize;
-        if increment > 0 {
-            let limit = inner.heap_bottom + USER_HEAP_SIZE;
-            if new_pt > limit {
-                warn!(
-                    "[sbrk] over the upperbond! upperbond = {:X} old_pt = {:X} new_pt = {:X} pid = {:X}",
-                    limit, old_pt, new_pt, self.pid.0
-                );
-                return old_pt;
-            }
-            inner.memory_set.insert_heap_area(
-                old_pt.into(),
-                new_pt.into(),
-                MapPermission::R | MapPermission::W | MapPermission::U,
-            );
-            inner.heap_pt = new_pt;
-        } else {
-            if new_pt < inner.heap_bottom {
-                warn!("[sbrk] over the lowerbond! lowerbond = {:X} old_pt = {:X} new_pt = {:X} pid = {:X}",
-                inner.heap_bottom, old_pt, new_pt, self.pid.0
-            );
-                return old_pt;
-            }
-            inner.heap_pt = new_pt;
-        }
-        new_pt
-    }
-    /// 建立从文件到内存的映射
-    pub fn mmap(
-        &self,
-        start: usize,  // 开始地址
-        len: usize,    // 内存映射长度
-        prot: usize,   // 保护位标志
-        flags: usize,  // 映射方式
-        fd: usize,     // 被映射文件
-        offset: usize, // 文件位移
-    ) -> usize {
-        info!(
-            "[mmap] start:{:X}; len:{:X}; prot:{:?}; flags:{:?}; fd:{:}; offset:{:X}",
-            start,
-            len,
-            MmapProt::from_bits(prot).unwrap(),
-            MmapFlags::from_bits(flags).unwrap(),
-            fd as isize,
-            offset
-        );
-        if start % PAGE_SIZE != 0 {
-            panic!("[mmap] start not aligned.");
-        }
-        if (prot & !0x7 != 0) || len > 0x1_000_000_000 {
-            return -1isize as usize;
-        }
-        let len = if len == 0 { PAGE_SIZE } else { len };
-        let mut inner = self.acquire_inner_lock();
-        if start != 0 {
-            // "Start" va Already mapped
-            let mut startvpn = start / PAGE_SIZE;
-            while startvpn < (start + len) / PAGE_SIZE {
-                if inner
-                    .memory_set
-                    .set_pte_flags(startvpn.into(), ((prot << 1) | (1 << 4)) as usize)
-                    == -1
-                {
-                    panic!("mmap: start_va not mmaped");
-                }
-                startvpn += 1;
-            }
-            start
-        } else {
-            // "Start" va not mapped
-            let start_va = inner.memory_set.get_mmap_top();
-            let permission = MapPermission::from_bits(((prot << 1) | (1 << 4)) as u8).unwrap();
-            let fd_table = inner.fd_table.clone();
-            let token = inner.get_user_token();
-            inner.memory_set.insert_mmap_area(
-                start_va,
-                len,
-                permission,
-                flags,
-                fd as isize,
-                offset,
-                fd_table,
-                token,
-            );
-            start_va.0
-        }
-    }
-    pub fn munmap(&self, start: usize, len: usize) -> isize {
-        let mut inner = self.acquire_inner_lock();
-        inner
-            .memory_set
-            .remove_mmap_area_with_start_vpn(VirtAddr::from(start).into());
-        0
     }
 }
 

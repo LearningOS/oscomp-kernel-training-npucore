@@ -1,7 +1,7 @@
 use crate::config::{CLOCK_FREQ, MEMORY_END, PAGE_SIZE};
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
-    translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user, copy_to_user,
+    translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user, copy_to_user, MapPermission, MapFlags, mmap, munmap, sbrk,
 };
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
@@ -14,11 +14,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
-use core::ops::Add;
-use core::ptr::null;
 use log::{debug, error, info, trace, warn};
-
-use super::SYSCALL_EXEC;
 
 pub struct utsname {
     sysname: [u8; 65],
@@ -211,20 +207,20 @@ pub fn sys_gettid() -> isize {
 }
 
 pub fn sys_sbrk(increment: isize) -> isize {
-    current_task().unwrap().sbrk(increment) as isize
+    sbrk(increment) as isize
 }
 
 pub fn sys_brk(brk_addr: usize) -> isize {
     let mut new_addr = 0;
     if brk_addr == 0 {
-        new_addr = current_task().unwrap().sbrk(0);
+        new_addr = sbrk(0);
     } else {
-        let former_addr = current_task().unwrap().sbrk(0);
+        let former_addr = sbrk(0);
         let grow_size: isize = (brk_addr - former_addr) as isize;
-        new_addr = current_task().unwrap().sbrk(grow_size);
+        new_addr = sbrk(grow_size);
     }
 
-    info!("[sys_brk] brk_addr:{:X}; new_addr:{:X}", brk_addr, new_addr);
+    info!("[sys_brk] brk_addr: {:X}; new_addr: {:X}", brk_addr, new_addr);
     new_addr as isize
 }
 
@@ -373,16 +369,26 @@ pub fn sys_mmap(
     fd: usize,
     offset: usize,
 ) -> isize {
-    let task = current_task().unwrap();
-    task.mmap(start, len, prot, flags, fd, offset) as isize
+    let prot = MapPermission::from_bits(((prot as u8) << 1) | (1 << 4)).unwrap();
+    let flags = MapFlags::from_bits(flags).unwrap();
+    info!(
+        "[mmap] start:{:X}; len:{:X}; prot:{:?}; flags:{:?}; fd:{}; offset:{:X}",
+        start,
+        len,
+        prot,
+        flags,
+        fd as isize,
+        offset
+    );
+    mmap(start, len, prot, flags, fd, offset) as isize
 }
 
 pub fn sys_munmap(start: usize, len: usize) -> isize {
-    let task = current_task().unwrap();
-    task.munmap(start, len) as isize
+    
+    munmap(start, len) as isize
 }
 
-pub fn sys_mprotect(addr: usize, len: usize, prot: isize) -> isize {
+pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
     if (addr % PAGE_SIZE != 0) || (len % PAGE_SIZE != 0) {
         // Not align
         warn!("sys_mprotect: not align");
@@ -394,10 +400,10 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: isize) -> isize {
     let start_vpn = addr / PAGE_SIZE;
     for i in 0..(len / PAGE_SIZE) {
         // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
-        if memory_set.set_pte_flags(start_vpn.into(), (prot as usize) << 1) == -1 {
+        // if memory_set.set_pte_flags(start_vpn.into(), MapPermission::from_bits((prot as u8) << 1).unwrap()) == -1 {
             // if fail
-            panic!("sys_mprotect: No such pte");
-        }
+        //     panic!("sys_mprotect: No such pte");
+        // }
     }
     unsafe {
         llvm_asm!("sfence.vma" :::: "volatile");

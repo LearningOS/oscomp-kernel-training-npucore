@@ -220,7 +220,7 @@ pub fn do_signal() {
     let mut exception_signal: Option<Signals> = None;
     while let Some(signal) = inner.siginfo.signal_pending.difference(inner.sigmask).peek_front() {
         inner.siginfo.signal_pending.remove(signal);
-        trace!("[do signal] signal: {:?}, pending: {:?}, sigmask: {:?}", signal, inner.siginfo.signal_pending, inner.sigmask);
+        trace!("[do_signal] signal: {:?}, pending: {:?}, sigmask: {:?}", signal, inner.siginfo.signal_pending, inner.sigmask);
         inner.siginfo.is_signal_execute = true;
         if let Some(act) = inner.siginfo.signal_handler.get(&signal) {
             {

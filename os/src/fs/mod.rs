@@ -12,14 +12,14 @@ use alloc::sync::Arc;
 pub use poll::{ppoll, pselect, FdSet, PollFd};
 
 #[derive(Clone)]
-pub struct FileDescripter {
+pub struct FileDescriptor {
     cloexec: bool,
-    pub fclass: FileClass,
+    pub file: FileLike,
 }
 
-impl FileDescripter {
-    pub fn new(cloexec: bool, fclass: FileClass) -> Self {
-        Self { cloexec, fclass }
+impl FileDescriptor {
+    pub fn new(cloexec: bool, file: FileLike) -> Self {
+        Self { cloexec, file }
     }
 
     pub fn set_cloexec(&mut self, flag: bool) {
@@ -32,9 +32,9 @@ impl FileDescripter {
 }
 
 #[derive(Clone)]
-pub enum FileClass {
-    File(Arc<OSInode>),
-    Abstr(Arc<dyn File + Send + Sync>),
+pub enum FileLike {
+    Regular(Arc<OSInode>),
+    Abstract(Arc<dyn File + Send + Sync>),
 }
 
 pub trait File: Send + Sync {

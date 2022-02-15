@@ -284,7 +284,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_BRK => sys_brk(args[0]),
         SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
-        SYSCALL_MPROTECT => sys_mprotect(args[0] as usize, args[1] as usize, args[2] as isize),
+        SYSCALL_MPROTECT => sys_mprotect(args[0] as usize, args[1] as usize, args[2] as usize),
         // test
         /* SYSCALL_PSELECT6 => sys_crosselect(
          *     args[0] as usize,

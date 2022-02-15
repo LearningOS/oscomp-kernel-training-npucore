@@ -14,7 +14,7 @@ use crate::{
 };
 
 ///  A scheduling  scheme  whereby  the  local  process  periodically  checks  until  the  pre-specified events (for example, read, write) have occurred.
-use super::{FileDescripter, OSInode};
+use super::{FileDescriptor, OSInode};
 
 /* Event types that can be polled for.  These bits may be set in `events'
 to indicate the interesting event types; they will appear in `revents'
@@ -112,8 +112,8 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                         )
                     }
                 };
-                match j.unwrap().fclass {
-                    super::FileClass::Abstr(file) => {
+                match j.unwrap().file {
+                    super::FileLike::Abstract(file) => {
                         no_abs = false;
                         if (poll_fd[i].events as usize & POLLIN) != 0 && file.r_ready() {
                             poll_fd[i].revents = POLLIN as u16;
@@ -121,7 +121,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                             break;
                         }
                     }
-                    super::FileClass::File(file) => {}
+                    super::FileLike::Regular(file) => {}
                 };
                 i += 1;
             }
@@ -283,11 +283,11 @@ pub fn pselect(
                         if j.is_set(i) {
                             log::warn!("[myselect] i:{}", i);
                             if let Some(k) = fd_table[i].as_ref() {
-                                match &k.fclass {
-                                    super::FileClass::Abstr(file) => {
+                                match &k.file {
+                                    super::FileLike::Abstract(file) => {
                                         $chk_func!(file, $func,j,i);
                                     }
-                                    super::FileClass::File(file) => {
+                                    super::FileLike::Regular(file) => {
                                         $chk_func!(file, $func,j,i);
                                     }
                                 }
