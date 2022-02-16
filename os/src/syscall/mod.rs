@@ -170,7 +170,6 @@ use crate::{
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![
         124,
-        260,
         63,
         64,
         SYSCALL_GETDENTS64,
@@ -181,13 +180,13 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     ]
     .contains(&syscall_id)
     {
-        // info!(
-        //     "[syscall] pid: {}, syscall_id: {} ({}), \nargs: {:?}",
-        //     sys_getpid(),
-        //     syscall_name(syscall_id),
-        //     syscall_id,
-        //     args
-        // );
+        info!(
+            "[syscall] pid: {}, syscall_id: {} ({}), \nargs: {:?}",
+            sys_getpid(),
+            syscall_name(syscall_id),
+            syscall_id,
+            args
+        );
     }
     match syscall_id {
         SYSCALL_GETCWD => sys_getcwd(args[0] as *mut u8, args[1] as usize),
