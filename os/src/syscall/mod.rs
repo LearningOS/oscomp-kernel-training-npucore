@@ -78,13 +78,16 @@ const SYSCALL_RENAMEAT2: usize = 276;
 const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
 const SYSCALL_CLEAR: usize = 502;
+
 pub mod fs;
 mod process;
+mod errno;
 
 use alloc::string;
 use fs::*;
 use log::{debug, error, info, trace, warn};
 use process::*;
+
 pub fn syscall_name(id: usize) -> &'static str {
     match id {
         SYSCALL_DUP => "dup",

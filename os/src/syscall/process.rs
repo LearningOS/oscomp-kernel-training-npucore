@@ -3,6 +3,7 @@ use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
     translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user, copy_to_user, MapPermission, MapFlags, mmap, munmap, sbrk,
 };
+use crate::syscall::errno::ENOEXEC;
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next, Rusage,
@@ -287,7 +288,15 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
             info!("[sys_exec] argc = {}", argc);
             let before_exec = crate::mm::unallocated_frames();
             unsafe {
-                task.exec(core::slice::from_raw_parts(start as *const u8, len), args_vec);
+                let buffer = core::slice::from_raw_parts(start as *const u8, len);
+                if buffer[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
+                    task.exec(buffer, args_vec);
+                } else {
+                    crate::mm::KERNEL_SPACE
+                    .lock()
+                    .remove_area_with_start_vpn(crate::mm::VirtAddr::from(buffer.as_ptr() as usize).floor());
+                    return ENOEXEC;
+                }
             }
             let after_exec = crate::mm::unallocated_frames();
             debug!("[sys_exec] exec() DONE. consumed frames:{}, last frames:{}", (before_exec - after_exec) as isize, after_exec);
