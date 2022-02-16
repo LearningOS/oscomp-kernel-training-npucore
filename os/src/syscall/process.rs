@@ -334,13 +334,31 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
         // ++++ release child PCB lock
         if exit_code_ptr as usize != 0 {
             // this may NULL!!!
-            *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code;
+            *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code << 8;
         }
         found_pid as isize
     } else {
         drop(inner);
         block_current_and_run_next();
-        -2
+        let task = current_task().unwrap();
+        let mut inner = task.acquire_inner_lock();
+        let (idx, _) = inner.children.iter().enumerate().find(|(_, p)| {
+            // ++++ temporarily hold child PCB lock
+            p.acquire_inner_lock().is_zombie() && (pid == -1 || pid as usize == p.getpid())
+            // ++++ release child PCB lock
+        }).unwrap();
+        let child = inner.children.remove(idx);
+        // confirm that child will be deallocated after being removed from children list
+        assert_eq!(Arc::strong_count(&child), 1);
+        let found_pid = child.getpid();
+        // ++++ temporarily hold child lock
+        let exit_code = child.acquire_inner_lock().exit_code;
+        // ++++ release child PCB lock
+        if exit_code_ptr as usize != 0 {
+            // this may NULL!!!
+            *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code;
+        }
+        found_pid as isize
     }
     // ---- release current PCB lock automatically
 }
@@ -387,11 +405,12 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
         warn!("[sys_mprotect] not align");
         return -1;
     }
+    let prot = MapPermission::from_bits((prot << 1) as u8).unwrap();
+    warn!("[sys_mprotect] addr: {:X}, len: {:X}, prot: {:?}", addr, len, prot);
+    assert!(!prot.contains(MapPermission::W));
     let task = current_task().unwrap();
-    // let token = task.acquire_inner_lock().get_user_token();
     let memory_set = &mut task.acquire_inner_lock().memory_set;
     let start_vpn = addr / PAGE_SIZE;
-    warn!("[sys_mprotect] this syscall won't do anything!");
     for i in 0..(len / PAGE_SIZE) {
         // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
         // if memory_set.set_pte_flags(start_vpn.into(), MapPermission::from_bits((prot as u8) << 1).unwrap()) == -1 {
@@ -399,10 +418,7 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
         //     panic!("sys_mprotect: No such pte");
         // }
     }
-    unsafe {
-        llvm_asm!("sfence.vma" :::: "volatile");
-        llvm_asm!("fence.i" :::: "volatile");
-    }
+    // fence here if we have multi harts
     0
 }
 
@@ -453,8 +469,6 @@ pub fn sys_sigreturn() -> isize {
     let current_task = current_task().unwrap();
     info!("[sys_sigreturn] pid: {}", current_task.pid.0);
     let mut inner = current_task.acquire_inner_lock();
-    assert_eq!(inner.siginfo.is_signal_execute, true);
-    inner.siginfo.is_signal_execute = false;
     // restore trap_cx
     let trap_cx = inner.get_trap_cx();
     let sp = trap_cx.x[2];

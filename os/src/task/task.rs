@@ -15,6 +15,7 @@ use crate::mm::{
 };
 use crate::timer::{TimeVal, ITimerVal};
 use crate::trap::{trap_handler, TrapContext};
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
@@ -466,6 +467,8 @@ impl TaskControlBlock {
         inner.memory_set = memory_set;
         inner.heap_bottom = user_heap;
         inner.heap_pt = user_heap;
+        // flush signal handler
+        inner.siginfo.signal_handler = BTreeMap::new();
         // update trap_cx ppn
         inner.trap_cx_ppn = trap_cx_ppn;
         // initialize trap_cx

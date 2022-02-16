@@ -11,7 +11,7 @@ use riscv::register::{
 use crate::config::*;
 use crate::mm::{translated_ref, translated_refmut, copy_to_user, copy_from_user};
 use crate::task::{current_trap_cx, exit_current_and_run_next};
-use crate::trap::{TrapContext, __alltraps, __call_sigreturn};
+use crate::trap::{TrapContext};
 
 use super::{current_task, current_user_token};
 
@@ -139,7 +139,6 @@ impl SigAction {
 }
 #[derive(Clone)]
 pub struct SigInfo {
-    pub is_signal_execute: bool, // is process now executing in signal handler
     pub signal_pending: Signals,
     pub signal_handler: BTreeMap<Signals, SigAction>,
 }
@@ -147,7 +146,6 @@ pub struct SigInfo {
 impl SigInfo {
     pub fn new() -> Self {
         Self {
-            is_signal_execute: false,
             signal_pending: Signals::empty(),
             signal_handler: BTreeMap::new(),
         }
@@ -157,8 +155,8 @@ impl SigInfo {
 impl Debug for SigInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
-            "[ is_signal_execute: {}, signal_pending: ({:?}), signal_handler: ({:?}) ]",
-            self.is_signal_execute, self.signal_pending, self.signal_handler
+            "[ signal_pending: ({:?}), signal_handler: ({:?}) ]",
+            self.signal_pending, self.signal_handler
         ))
     }
 }
@@ -214,14 +212,10 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
 pub fn do_signal() {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    if inner.siginfo.is_signal_execute {
-        return; // avoid nested signal handler call
-    }
     let mut exception_signal: Option<Signals> = None;
     while let Some(signal) = inner.siginfo.signal_pending.difference(inner.sigmask).peek_front() {
         inner.siginfo.signal_pending.remove(signal);
         trace!("[do_signal] signal: {:?}, pending: {:?}, sigmask: {:?}", signal, inner.siginfo.signal_pending, inner.sigmask);
-        inner.siginfo.is_signal_execute = true;
         if let Some(act) = inner.siginfo.signal_handler.get(&signal) {
             {
                 let trap_cx = inner.get_trap_cx();
@@ -247,7 +241,6 @@ pub fn do_signal() {
         }
         // action not found
         else {
-            inner.siginfo.is_signal_execute = false;
             if signal == Signals::SIGCHLD
                 || signal == Signals::SIGURG
                 || signal == Signals::SIGWINCH
