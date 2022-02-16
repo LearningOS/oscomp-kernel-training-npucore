@@ -1,15 +1,16 @@
-use crate::config::{CLOCK_FREQ, PAGE_SIZE, MMAP_BASE};
+use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE};
 use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
-    translated_byte_buffer, translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user, copy_to_user, MapPermission, MapFlags, mmap, munmap, sbrk,
+    copy_from_user, copy_to_user, mmap, munmap, sbrk, translated_byte_buffer, translated_ref,
+    translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
 };
-use crate::syscall::errno::ENOEXEC;
+use crate::syscall::errno::*;
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
     suspend_current_and_run_next, Rusage,
 };
 use crate::task::{block_current_and_run_next, signal::*};
-use crate::timer::{get_time, get_time_ms, TimeSpec, TimeVal, ITimerVal, TimeZone};
+use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone};
 use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -64,10 +65,7 @@ pub fn sys_yield() -> isize {
     0
 }
 
-pub fn sys_nano_sleep(
-    req: *const TimeSpec,
-    rem: *mut TimeSpec,
-) -> isize {
+pub fn sys_nano_sleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
     if req as usize == 0 {
         return -1;
     }
@@ -80,16 +78,19 @@ pub fn sys_nano_sleep(
         while !(end - TimeSpec::now()).is_zero() {
             suspend_current_and_run_next();
         }
-    }
-    else {
+    } else {
         let task = current_task().unwrap();
         let mut remain = end - TimeSpec::now();
         while !remain.is_zero() {
             let inner = task.acquire_inner_lock();
-            if inner.siginfo.signal_pending.difference(inner.sigmask).is_empty() {
+            if inner
+                .siginfo
+                .signal_pending
+                .difference(inner.sigmask)
+                .is_empty()
+            {
                 suspend_current_and_run_next();
-            }
-            else {
+            } else {
                 // this will ensure that *rem > 0
                 copy_to_user(token, &remain, rem);
                 return -1;
@@ -105,7 +106,10 @@ pub fn sys_setitimer(
     new_value: *const ITimerVal,
     old_value: *mut ITimerVal,
 ) -> isize {
-    info!("[sys_setitimer] which: {}, new_value: {:?}, old_value: {:?}", which, new_value, old_value);
+    info!(
+        "[sys_setitimer] which: {}, new_value: {:?}, old_value: {:?}",
+        which, new_value, old_value
+    );
     match which {
         0..=2 => {
             let task = current_task().unwrap();
@@ -121,14 +125,11 @@ pub fn sys_setitimer(
             }
             0
         }
-        _ => -1
+        _ => -1,
     }
 }
 
-pub fn sys_get_time_of_day(
-    time_val: *mut TimeVal,
-    time_zone: *mut TimeZone,
-) -> isize {
+pub fn sys_get_time_of_day(time_val: *mut TimeVal, time_zone: *mut TimeZone) -> isize {
     // Timezone is currently NOT supported.
     let ans = &TimeVal::now();
     if time_val as usize != 0 {
@@ -221,7 +222,10 @@ pub fn sys_brk(brk_addr: usize) -> isize {
         new_addr = sbrk(grow_size);
     }
 
-    info!("[sys_brk] brk_addr: {:X}; new_addr: {:X}", brk_addr, new_addr);
+    info!(
+        "[sys_brk] brk_addr: {:X}; new_addr: {:X}",
+        brk_addr, new_addr
+    );
     new_addr as isize
 }
 
@@ -238,7 +242,11 @@ pub fn sys_fork() -> isize {
     trap_cx.x[10] = 0;
     // add new task to scheduler
     add_task(new_task);
-    debug!("[sys_fork] consumed frames: {}, last frames: {}", before_fork - after_fork, after_fork);
+    debug!(
+        "[sys_fork] consumed frames: {}, last frames: {}",
+        before_fork - after_fork,
+        after_fork
+    );
     new_pid as isize
 }
 
@@ -282,7 +290,11 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
             let after_read = crate::mm::unallocated_frames();
 
             // return argc because cx.x[10] will be covered with it later
-            debug!("[sys_exec] read_all() DONE. consumed frames:{}, last frames:{}", before_read - after_read, after_read);
+            debug!(
+                "[sys_exec] read_all() DONE. consumed frames:{}, last frames:{}",
+                before_read - after_read,
+                after_read
+            );
             let task = current_task().unwrap();
             let argc = args_vec.len();
             info!("[sys_exec] argc = {}", argc);
@@ -292,14 +304,18 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
                 if buffer[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
                     task.exec(buffer, args_vec);
                 } else {
-                    crate::mm::KERNEL_SPACE
-                    .lock()
-                    .remove_area_with_start_vpn(crate::mm::VirtAddr::from(buffer.as_ptr() as usize).floor());
+                    crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
+                        crate::mm::VirtAddr::from(buffer.as_ptr() as usize).floor(),
+                    );
                     return ENOEXEC;
                 }
             }
             let after_exec = crate::mm::unallocated_frames();
-            debug!("[sys_exec] exec() DONE. consumed frames:{}, last frames:{}", (before_exec - after_exec) as isize, after_exec);
+            debug!(
+                "[sys_exec] exec() DONE. consumed frames:{}, last frames:{}",
+                (before_exec - after_exec) as isize,
+                after_exec
+            );
 
             //remember to UNMAP here!
             // return argc because cx.x[10] will be covered with it later
@@ -311,65 +327,67 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
     0
 }
 
+bitflags! {
+    struct WaitOption: usize {
+        const WNOHANG    = 1;
+        const WSTOPPED   = 2;
+        const WEXITED    = 4;
+        const WCONTINUED = 8;
+        const WNOWAIT    = 0x1000000;
+    }
+}
 /// If there is not a child process whose pid is same as given, return -1.
 /// Else if there is a child process but it is still running, return -2.
-pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
+pub fn sys_waitpid(pid: isize, status: *mut i32, option: usize) -> isize {
+    let option = WaitOption::from_bits(option).unwrap();
+    info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
     let task = current_task().unwrap();
-    // find a child process
+    loop {
+        // find a child process
 
-    // ---- hold current PCB lock
-    let mut inner = task.acquire_inner_lock();
-    if inner
-        .children
-        .iter()
-        .find(|p| pid == -1 || pid as usize == p.getpid())
-        .is_none()
-    {
-        return -1;
-        // ---- release current PCB lock
-    }
-    let pair = inner.children.iter().enumerate().find(|(_, p)| {
-        // ++++ temporarily hold child PCB lock
-        p.acquire_inner_lock().is_zombie() && (pid == -1 || pid as usize == p.getpid())
-        // ++++ release child PCB lock
-    });
-    if let Some((idx, _)) = pair {
-        let child = inner.children.remove(idx);
-        // confirm that child will be deallocated after being removed from children list
-        assert_eq!(Arc::strong_count(&child), 1);
-        let found_pid = child.getpid();
-        // ++++ temporarily hold child lock
-        let exit_code = child.acquire_inner_lock().exit_code;
-        // ++++ release child PCB lock
-        if exit_code_ptr as usize != 0 {
-            // this may NULL!!!
-            *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code << 8;
-        }
-        found_pid as isize
-    } else {
-        drop(inner);
-        block_current_and_run_next();
-        let task = current_task().unwrap();
+        // ---- hold current PCB lock
         let mut inner = task.acquire_inner_lock();
-        let (idx, _) = inner.children.iter().enumerate().find(|(_, p)| {
+        if inner
+            .children
+            .iter()
+            .find(|p| pid == -1 || pid as usize == p.getpid())
+            .is_none()
+        {
+            return ECHILD;
+            // ---- release current PCB lock
+        }
+        inner
+            .children
+            .iter()
+            .filter(|p| pid == -1 || pid as usize == p.getpid())
+            .for_each(|p| info!("pid: {}, status: {:?}", p.pid.0, p.acquire_inner_lock().task_status));
+        let pair = inner.children.iter().enumerate().find(|(_, p)| {
             // ++++ temporarily hold child PCB lock
             p.acquire_inner_lock().is_zombie() && (pid == -1 || pid as usize == p.getpid())
             // ++++ release child PCB lock
-        }).unwrap();
-        let child = inner.children.remove(idx);
-        // confirm that child will be deallocated after being removed from children list
-        assert_eq!(Arc::strong_count(&child), 1);
-        let found_pid = child.getpid();
-        // ++++ temporarily hold child lock
-        let exit_code = child.acquire_inner_lock().exit_code;
-        // ++++ release child PCB lock
-        if exit_code_ptr as usize != 0 {
-            // this may NULL!!!
-            *translated_refmut(inner.memory_set.token(), exit_code_ptr) = exit_code;
+        });
+        if let Some((idx, _)) = pair {
+            let child = inner.children.remove(idx);
+            // confirm that child will be deallocated after being removed from children list
+            assert_eq!(Arc::strong_count(&child), 1);
+            let found_pid = child.getpid();
+            // ++++ temporarily hold child lock
+            let exit_code = child.acquire_inner_lock().exit_code;
+            // ++++ release child PCB lock
+            if status as usize != 0 {
+                // this may NULL!!!
+                *translated_refmut(inner.memory_set.token(), status) = (exit_code & 0xff) << 8;
+            }
+            return found_pid as isize
+        } else {
+            drop(inner);
+            if option.contains(WaitOption::WNOHANG) {
+                return SUCCESS;
+            } else {
+                block_current_and_run_next();
+            }
         }
-        found_pid as isize
     }
-    // ---- release current PCB lock automatically
 }
 
 pub fn sys_set_tid_address(tidptr: usize) -> isize {
@@ -393,18 +411,12 @@ pub fn sys_mmap(
     let flags = MapFlags::from_bits(flags).unwrap();
     info!(
         "[mmap] start:{:X}; len:{:X}; prot:{:?}; flags:{:?}; fd:{}; offset:{:X}",
-        start,
-        len,
-        prot,
-        flags,
-        fd as isize,
-        offset
+        start, len, prot, flags, fd as isize, offset
     );
     mmap(start, len, prot, flags, fd, offset) as isize
 }
 
 pub fn sys_munmap(start: usize, len: usize) -> isize {
-    
     munmap(start, len) as isize
 }
 
@@ -415,7 +427,10 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
         return -1;
     }
     let prot = MapPermission::from_bits((prot << 1) as u8).unwrap();
-    warn!("[sys_mprotect] addr: {:X}, len: {:X}, prot: {:?}", addr, len, prot);
+    warn!(
+        "[sys_mprotect] addr: {:X}, len: {:X}, prot: {:?}",
+        addr, len, prot
+    );
     assert!(!prot.contains(MapPermission::W));
     let task = current_task().unwrap();
     let memory_set = &mut task.acquire_inner_lock().memory_set;
@@ -423,7 +438,7 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
     for i in 0..(len / PAGE_SIZE) {
         // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
         // if memory_set.set_pte_flags(start_vpn.into(), MapPermission::from_bits((prot as u8) << 1).unwrap()) == -1 {
-            // if fail
+        // if fail
         //     panic!("sys_mprotect: No such pte");
         // }
     }

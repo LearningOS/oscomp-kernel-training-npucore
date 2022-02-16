@@ -172,9 +172,9 @@ use crate::{
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![
-        124,
-        63,
-        64,
+        SYSCALL_YIELD,
+        //SYSCALL_READ,
+        SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
         SYSCALL_WRITEV,
         SYSCALL_PPOLL,
@@ -275,7 +275,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             SYSCALL_EXECEV,
         ),
         SYSCALL_EXEC => sys_exec(args[0] as *const u8, args[1] as *const usize, SYSCALL_EXEC),
-        SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32),
+        SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32, args[2] as usize),
         SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0] as usize),
         SYSCALL_GETUID => sys_getuid(),
         SYSCALL_GETEUID => sys_geteuid(),
