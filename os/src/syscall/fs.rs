@@ -19,6 +19,8 @@ use core::ptr::{null, null_mut};
 use core::slice::from_raw_parts_mut;
 use log::{debug, error, info, trace, warn};
 
+use super::errno::*;
+
 const AT_FDCWD: isize = -100;
 pub const FD_LIMIT: usize = 128;
 
@@ -461,6 +463,7 @@ pub fn sys_pipe(pipe: *mut usize) -> isize {
     inner.fd_table[write_fd] = Some(FileDescriptor::new(false, FileLike::Abstract(pipe_write)));
     *translated_refmut(token, pipe) = read_fd as i32;
     *translated_refmut(token, unsafe { pipe.add(1) }) = write_fd as i32;
+    info!("[sys_pipe] read_fd: {}, write_fd: {}", read_fd, write_fd);
     0
 }
 
@@ -535,18 +538,28 @@ pub fn sys_getdents64(fd: isize, buf: *mut u8, len: usize) -> isize {
     }
 }
 
-pub fn sys_dup(fd: usize) -> isize {
+pub fn sys_dup(oldfd: usize) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    if fd >= inner.fd_table.len() {
-        return -1;
+    if oldfd >= inner.fd_table.len() || inner.fd_table[oldfd].is_none() {
+        return EBADF;
     }
-    if inner.fd_table[fd].is_none() {
-        return -1;
+    let newfd = inner.alloc_fd();
+    inner.fd_table[newfd] = Some(inner.fd_table[oldfd].as_ref().unwrap().clone());
+    newfd as isize
+}
+
+pub fn sys_dup3(oldfd: usize, newfd: usize, flags: usize) -> isize {
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    if oldfd >= inner.fd_table.len() || inner.fd_table[oldfd].is_none() {
+        return EBADF;
     }
-    let new_fd = inner.alloc_fd();
-    inner.fd_table[new_fd] = Some(inner.fd_table[fd].as_ref().unwrap().clone());
-    new_fd as isize
+    if oldfd == newfd {
+        return EINVAL;
+    }
+    inner.fd_table[newfd] = Some(inner.fd_table[oldfd].as_ref().unwrap().clone());
+    newfd as isize
 }
 
 // This syscall is not complete at all, only /read proc/self/exe

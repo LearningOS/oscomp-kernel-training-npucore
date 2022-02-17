@@ -1,7 +1,7 @@
-const SYSCALL_DUP: usize = 24; //23?
+const SYSCALL_DUP: usize = 23; //23?
 
 //const SYSCALL_DUP: usize = 23;
-//const SYSCALL_DUP3:usize = 24;
+const SYSCALL_DUP3:usize = 24;
 
 const SYSCALL_OPEN: usize = 506; //where?
 
@@ -91,6 +91,7 @@ use process::*;
 pub fn syscall_name(id: usize) -> &'static str {
     match id {
         SYSCALL_DUP => "dup",
+        SYSCALL_DUP3 => "dup3",
         SYSCALL_OPEN => "open",
         SYSCALL_GET_TIME => "get_time",
         SYSCALL_FORK => "fork",
@@ -173,7 +174,7 @@ use crate::{
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![
         SYSCALL_YIELD,
-        //SYSCALL_READ,
+        SYSCALL_READ,
         SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
         SYSCALL_WRITEV,
@@ -194,6 +195,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     match syscall_id {
         SYSCALL_GETCWD => sys_getcwd(args[0] as *mut u8, args[1] as usize),
         SYSCALL_DUP => sys_dup(args[0]),
+        SYSCALL_DUP3 => sys_dup3(args[0], args[1], args[2]),
         SYSCALL_FCNTL => fcntl(args[0], args[1] as u32, args[3]),
         SYSCALL_IOCTL => sys_ioctl(args[0], args[1] as u32, args[2]),
         SYSCALL_MKDIRAT => sys_mkdir(args[0] as isize, args[1] as *const u8, args[2] as u32),
