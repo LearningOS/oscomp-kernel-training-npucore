@@ -1,34 +1,19 @@
 TARGET := riscv64gc-unknown-none-elf
-APP_DIR := src/bin
-APPS := $(wildcard $(APP_DIR)/*.rs)
 TESTDIR := ./user_C_program/user
-RELEASE_DIR := target/$(TARGET)/release
-DEBUG_DIR := target/$(TARGET)/debug
-RELEASE_ELFS := $(patsubst $(APP_DIR)/%.rs, $(RELEASE_DIR)/%, $(APPS))
-DEBUG_ELFS := $(patsubst $(APP_DIR)/%.rs, $(DEBUG_DIR)/%, $(APPS))
 
-OBJDUMP := rust-objdump --arch-name=riscv64
-OBJCOPY := rust-objcopy --binary-architecture=riscv64
+build: c-user rust-user
 
-build: update debug
-
-# for "user_C_program"
-update:
+c-user:
 	cd ${TESTDIR} && make clean
 	cd ${TESTDIR} && make all
 	cp -r ${TESTDIR}/riscv64/ ./
 	rm -r ${TESTDIR}/riscv64
 
-# for "src"
-elf: $(APPS)
+rust-user: $(APPS)
 	rustup target add $(TARGET)
 	@cargo build --release
-	@cargo build
-
-debug: elf
-	@mkdir -p ../os/user && cp $(DEBUG_ELFS) ../os/user
 
 clean:
 	@cargo clean
 
-.PHONY: build elf debug clean
+.PHONY: build c-user rust-user clean

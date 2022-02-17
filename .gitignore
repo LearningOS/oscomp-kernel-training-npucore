@@ -17,9 +17,6 @@ user/target/
 # a copy of user programs debug build in "user/target/*"(for gdb)
 os/user/
 
-# for virt_root
-user/virt_root/
-
 # developing, should be invisible in main branch
 os/src/fs/fatfs/*
 
@@ -27,5 +24,4 @@ os/src/fs/fatfs/*
 os/src/link_app.S
 os/last-*
 tools/
-user/busybox_lua_testsuites/busybox_unstripped
 user/.ccls-cache/

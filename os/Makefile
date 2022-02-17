@@ -62,16 +62,13 @@ env:
 	rustup component add rust-src
 	rustup component add llvm-tools-preview
 
-#(rustup target list | grep "riscv64gc-unknown-none-elf (installed)") || rustup target add $(TARGET)
-#cargo install cargo-binutils
-
 # build all user programs
 user:
 	@cd ../user && make
-rust-user:
-	@cd ../user && make debug
 c-user:
-	@cd ../user && make update
+	@cd ../user && make c-user
+rust-user:
+	@cd ../user && make rust-user
 # dev/zero永远输出0
 sdcard:
 	@echo "Are you sure write to $(SDCARD) ? [y/N] " && read ans && [ $${ans:-N} = y ]
