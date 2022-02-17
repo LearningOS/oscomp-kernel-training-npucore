@@ -250,7 +250,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as usize,
         ),
         SYSCALL_SIGRETURN => sys_sigreturn(),
-        SYSCALL_NANOSLEEP => sys_nano_sleep(
+        SYSCALL_NANOSLEEP => sys_nanosleep(
             args[0] as *const crate::timer::TimeSpec,
             args[1] as *mut crate::timer::TimeSpec,
         ),

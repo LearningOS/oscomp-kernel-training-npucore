@@ -65,9 +65,9 @@ pub fn sys_yield() -> isize {
     0
 }
 
-pub fn sys_nano_sleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
+pub fn sys_nanosleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
     if req as usize == 0 {
-        return -1;
+        return EINVAL;
     }
     let token = current_user_token();
     let start = TimeSpec::now();
@@ -89,16 +89,17 @@ pub fn sys_nano_sleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
                 .difference(inner.sigmask)
                 .is_empty()
             {
+                drop(inner);
                 suspend_current_and_run_next();
             } else {
                 // this will ensure that *rem > 0
                 copy_to_user(token, &remain, rem);
-                return -1;
+                return EINTR;
             }
             remain = end - TimeSpec::now();
         }
     }
-    0
+    SUCCESS
 }
 
 pub fn sys_setitimer(
