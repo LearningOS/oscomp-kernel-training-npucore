@@ -21,6 +21,7 @@ os/user/
 os/src/fs/fatfs/*
 
 # unsorted
+os/output.txt
 os/src/link_app.S
 os/last-*
 tools/
