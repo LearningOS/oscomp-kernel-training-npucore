@@ -12,6 +12,7 @@ use crate::errno_exit;
 use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
 use crate::mm::VirtPageNum;
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::syscall::errno::ENOANO;
 use crate::syscall::errno::ENOEXEC;
 use crate::task::current_task;
 use crate::timer::{ITimerVal, TimeVal};
@@ -515,25 +516,30 @@ impl TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
-                trap_cx_ppn,
+                //inherited
                 pgid: parent_inner.pgid,
                 base_size: parent_inner.base_size,
-                task_cx_ptr: task_cx_ptr as usize,
-                task_status: TaskStatus::Ready,
-                memory_set,
-                parent: Some(Arc::downgrade(self)),
-                children: Vec::new(),
-                exit_code: 0,
-                fd_table: new_fd_table,
-                address: ProcAddress::new(),
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
+                //cloned(usu. still inherited)
                 current_path: parent_inner.current_path.clone(),
-                sigmask: Signals::empty(),
                 siginfo: parent_inner.siginfo.clone(),
+                //new/empty
+                parent: Some(Arc::downgrade(self)),
+                children: Vec::new(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
+                address: ProcAddress::new(),
                 timer: [ITimerVal::new(); 3],
+                sigmask: Signals::empty(),
+                //computed
+                fd_table: new_fd_table,
+                task_cx_ptr: task_cx_ptr as usize,
+                task_status: TaskStatus::Ready,
+                trap_cx_ppn,
+                memory_set,
+                //constants
+                exit_code: 0,
             }),
         });
         // add child
@@ -626,6 +632,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                 if buffer[0..4.min(buffer.len())] == [0x7f, 0x45, 0x4c, 0x46] {
                     task.exec(buffer, args_vec);
                 } else {
+                    //test sh
                     //if buffer[0..4] != [0x7f, 0x45, 0x4c, 0x46]
 
                     //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
@@ -639,9 +646,14 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                             .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
                         //assign_to_bin. not done.
                         path_bin = String::from_utf8_lossy(
-                            &buffer[2..if last.is_some() { last.unwrap() } else { 2 }],
+                            &buffer[2..if last.is_some() { last.unwrap() } else { 2 }], //what if it is #!
                         )
                         .to_string();
+                        if path_bin.is_empty() {
+                            unmap_exec_buf!(buffer);
+                            // #! must be followed by a path or at least a name
+                            return ENOEXEC;
+                        }
                         info!("path_bin:{}", path_bin);
                         //end of assign_to_bin
                         if path_bin == ("/bin/sh") {
@@ -649,27 +661,29 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                             args_vec.insert(0, String::from("sh"));
                             args_vec.insert(0, path.to_string());
                         } else {
-                            let mut it = path_bin.split(' ');
                             info!("[exec]path_bin!=/bin/sh");
-                            info!("");
-                            let mut v = Vec::new();
-                            *path = if let Some(i) = it.nth(0) {
-                                i.to_string()
-                            } else {
-                                v.push("sh".to_string());
-                                "/busybox".to_string()
-                            };
-                            for i in it {
-                                v.push(i.to_string());
+                            let cmd = path_bin.split(' ').collect::<Vec<_>>();
+                            //args_vec[0] = path.clone();
+                            *path = cmd[0].to_string();
+                            let mut bin_name = path[..]
+                                .split('/')
+                                .collect::<Vec<_>>()
+                                .last()
+                                .unwrap()
+                                .to_string();
+                            if cmd.len() > 1 {
+                                for j in (1..cmd.len()).rev() {
+                                    args_vec.insert(0, cmd[j].to_string());
+                                }
                             }
-                            v.append(args_vec);
-                            info!("[exec] updated args_vec:{:?},v:{:?}", args_vec, v);
-                            *args_vec = v;
+                            args_vec.insert(0, bin_name);
+                            info!("[exec] args_vec{:?}", args_vec);
                         }
                     } else {
+                        //completely no info, fall back to busybox.
                         *path = String::from("/busybox");
                         args_vec.insert(0, String::from("sh"));
-                        args_vec.insert(0, String::from("/busybox"));
+                        args_vec.insert(0, String::from("busybox"));
                     }
                     unmap_exec_buf!(buffer);
                     return crate::syscall::errno::ENOEXEC;
