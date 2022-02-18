@@ -16,6 +16,7 @@ use crate::syscall::errno::ENOEXEC;
 use crate::task::current_task;
 use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
+use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -630,21 +631,45 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
                     //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
                     //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
-                    let is_text: bool =
-                        buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8] || true;
-                    if is_text {
+                    let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8];
+                    info!("bin_given:{}", bin_given);
+                    if bin_given {
                         let last = buffer[0..85.min(buffer.len())]
                             .iter()
                             .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
                         //assign_to_bin. not done.
-                        path_bin = path_bin;
+                        path_bin = String::from_utf8_lossy(
+                            &buffer[2..if last.is_some() { last.unwrap() } else { 2 }],
+                        )
+                        .to_string();
+                        info!("path_bin:{}", path_bin);
                         //end of assign_to_bin
                         if path_bin == ("/bin/sh") {
                             *path = String::from("/busybox");
                             args_vec.insert(0, String::from("sh"));
-                            //args_vec.insert(0, path);
+                            args_vec.insert(0, path.to_string());
+                        } else {
+                            let mut it = path_bin.split(' ');
+                            info!("[exec]path_bin!=/bin/sh");
+                            info!("");
+                            let mut v = Vec::new();
+                            *path = if let Some(i) = it.nth(0) {
+                                i.to_string()
+                            } else {
+                                v.push("sh".to_string());
+                                "/busybox".to_string()
+                            };
+                            for i in it {
+                                v.push(i.to_string());
+                            }
+                            v.append(args_vec);
+                            info!("[exec] updated args_vec:{:?},v:{:?}", args_vec, v);
+                            *args_vec = v;
                         }
-                        args_vec.insert(0, path.to_string());
+                    } else {
+                        *path = String::from("/busybox");
+                        args_vec.insert(0, String::from("sh"));
+                        args_vec.insert(0, String::from("/busybox"));
                     }
                     unmap_exec_buf!(buffer);
                     return crate::syscall::errno::ENOEXEC;
