@@ -1,7 +1,7 @@
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
 use core::fmt::{self, Binary, Debug, Formatter};
-use log::{trace, info, debug, warn, error};
+use log::{debug, error, info, trace, warn};
 use riscv::register::{
     mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
@@ -9,9 +9,9 @@ use riscv::register::{
 };
 
 use crate::config::*;
-use crate::mm::{translated_ref, translated_refmut, copy_to_user, copy_from_user};
+use crate::mm::{copy_from_user, copy_to_user, translated_ref, translated_refmut};
 use crate::task::{current_trap_cx, exit_current_and_run_next};
-use crate::trap::{TrapContext};
+use crate::trap::TrapContext;
 
 use super::{current_task, current_user_token};
 
@@ -66,16 +66,14 @@ impl Signals {
     pub fn to_signum(&self) -> Option<usize> {
         if self.bits().count_ones() == 1 {
             Some(self.bits().trailing_zeros() as usize + 1)
-        }
-        else {
+        } else {
             None
         }
     }
     pub fn peek_front(&self) -> Option<Signals> {
         if self.is_empty() {
             None
-        }
-        else {
+        } else {
             Signals::from_bits(1 << (self.bits().trailing_zeros() as usize))
         }
     }
@@ -185,8 +183,7 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
                     if let Some(sigact) = inner.siginfo.signal_handler.remove(&key) {
                         copy_to_user(token, &sigact, oldact);
                         trace!("[sigaction] *oldact: {:?}", sigact);
-                    }
-                    else {
+                    } else {
                         copy_to_user(token, &SigAction::new(), oldact);
                         trace!("[sigaction] *oldact: not found");
                     }
@@ -213,9 +210,19 @@ pub fn do_signal() {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
     let mut exception_signal: Option<Signals> = None;
-    while let Some(signal) = inner.siginfo.signal_pending.difference(inner.sigmask).peek_front() {
+    while let Some(signal) = inner
+        .siginfo
+        .signal_pending
+        .difference(inner.sigmask)
+        .peek_front()
+    {
         inner.siginfo.signal_pending.remove(signal);
-        trace!("[do_signal] signal: {:?}, pending: {:?}, sigmask: {:?}", signal, inner.siginfo.signal_pending, inner.sigmask);
+        trace!(
+            "[do_signal] signal: {:?}, pending: {:?}, sigmask: {:?}",
+            signal,
+            inner.siginfo.signal_pending,
+            inner.sigmask
+        );
         if let Some(act) = inner.siginfo.signal_handler.get(&signal) {
             {
                 let trap_cx = inner.get_trap_cx();

@@ -13,7 +13,7 @@ use lazy_static::*;
 use manager::fetch_task;
 pub use signal::*;
 use switch::__switch;
-pub use task::{AuxHeader, FdTable, Rusage};
+pub use task::{exec, AuxHeader, FdTable, Rusage};
 use task::{TaskControlBlock, TaskStatus};
 
 pub use manager::{add_task, sleep_task, wake_task};

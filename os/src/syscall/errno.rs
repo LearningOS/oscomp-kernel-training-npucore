@@ -133,3 +133,16 @@ pub const EOWNERDEAD: isize = -130;
 pub const ENOTRECOVERABLE: isize = -131;
 pub const ERFKILL: isize = -132;
 pub const EHWPOISON: isize = -133;
+
+#[macro_export]
+macro_rules! set_errno {
+    ($errno:expr) => {};
+}
+
+#[macro_export]
+macro_rules! errno_exit {
+    ($errno:expr) => {
+	set_errno()!;
+        return expr;
+    };
+}

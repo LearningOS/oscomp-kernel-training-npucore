@@ -2,18 +2,18 @@ use core::borrow::Borrow;
 use core::borrow::BorrowMut;
 use core::fmt::{self, Debug, Formatter};
 use core::mem::ManuallyDrop;
+use core::str::FromStr;
 
 use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
-use crate::fs::{FileLike, FileDescriptor, Stdin, Stdout};
+use crate::errno_exit;
+use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
 use crate::mm::VirtPageNum;
-use crate::mm::{
-    translated_refmut, MapPermission, MemorySet, PhysPageNum,
-    VirtAddr, KERNEL_SPACE,
-};
-use crate::timer::{TimeVal, ITimerVal};
+use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::task::current_task;
+use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -22,9 +22,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::__Deref;
 use log::{debug, error, info, trace, warn};
-use riscv::register::{
-    scause::{self, Exception, Interrupt, Trap},
-};
+use riscv::register::scause::{self, Exception, Interrupt, Trap};
 use spin::{Mutex, MutexGuard};
 
 pub struct TaskControlBlock {
@@ -173,8 +171,8 @@ impl TaskControlBlockInner {
         }
         self.clock.last_enter_u_mode = now;
     }
-    pub fn update_itimer_real_if_exists(&mut self, diff:TimeVal){
-        if !self.timer[0].it_value.is_zero(){
+    pub fn update_itimer_real_if_exists(&mut self, diff: TimeVal) {
+        if !self.timer[0].it_value.is_zero() {
             self.timer[0].it_value = self.timer[0].it_value - diff;
             if self.timer[0].it_value.is_zero() {
                 self.add_signal(Signals::SIGALRM);
@@ -182,8 +180,8 @@ impl TaskControlBlockInner {
             }
         }
     }
-    pub fn update_itimer_virtual_if_exists(&mut self, diff:TimeVal){
-        if !self.timer[1].it_value.is_zero(){
+    pub fn update_itimer_virtual_if_exists(&mut self, diff: TimeVal) {
+        if !self.timer[1].it_value.is_zero() {
             self.timer[1].it_value = self.timer[1].it_value - diff;
             if self.timer[1].it_value.is_zero() {
                 self.add_signal(Signals::SIGVTALRM);
@@ -191,8 +189,8 @@ impl TaskControlBlockInner {
             }
         }
     }
-    pub fn update_itimer_prof_if_exists(&mut self, diff:TimeVal){
-        if !self.timer[2].it_value.is_zero(){
+    pub fn update_itimer_prof_if_exists(&mut self, diff: TimeVal) {
+        if !self.timer[2].it_value.is_zero() {
             self.timer[2].it_value = self.timer[2].it_value - diff;
             if self.timer[2].it_value.is_zero() {
                 self.add_signal(Signals::SIGPROF);
@@ -561,6 +559,95 @@ impl TaskControlBlock {
     pub fn getpgid(&self) -> usize {
         let inner = self.acquire_inner_lock();
         inner.pgid
+    }
+}
+
+pub fn exec(path: String, mut args_vec: Vec<String>) -> isize {
+    let task = super::current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    if let Some(app_inode) = crate::fs::open(
+        inner.get_work_path().as_str(),
+        path.as_str(),
+        crate::fs::OpenFlags::RDONLY,
+        crate::fs::DiskInodeType::File,
+    ) {
+        drop(inner);
+        let len = app_inode.get_size();
+        debug!("[exec] File size: {} bytes", len);
+        let start: usize = MMAP_BASE;
+        let before_read = crate::mm::unallocated_frames();
+        crate::mm::KERNEL_SPACE.lock().insert_framed_area(
+            start.into(),
+            (start + len).into(),
+            MapPermission::R | MapPermission::W,
+        );
+        unsafe {
+            app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+        }
+        let after_read = crate::mm::unallocated_frames();
+
+        // return argc because cx.x[10] will be covered with it later
+        debug!(
+            "[exec] read_all() DONE. consumed frames:{}, last frames:{}",
+            before_read - after_read,
+            after_read
+        );
+        let task = current_task().unwrap();
+        let argc = args_vec.len();
+        info!("[exec] argc = {}", argc);
+        let before_exec = crate::mm::unallocated_frames();
+        unsafe {
+            let buffer = core::slice::from_raw_parts(start as *const u8, len);
+            if buffer[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
+                task.exec(buffer, args_vec);
+            } else {
+                macro_rules! unmap_exec_buf {
+                    () => {
+                        crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
+                            crate::mm::VirtAddr::from(buffer.as_ptr() as usize).floor(),
+                        );
+                    };
+                }
+                //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
+                //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
+                //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
+                let is_script: bool = buffer[0..2] == ['#' as u8, '!' as u8] || true;
+                if is_script {
+                    let last = buffer[0..1024.min(buffer.len())]
+                        .iter()
+                        .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
+                    /* let path_bin: if let Ok(v) str::from_utf8(buffer[0..last]){
+                     *
+                     * }else{
+                     * 	errno_exit!(ENOEXEC);
+                     * }; */
+                    let mut path_bin = String::from("/bin/sh");
+                    if path_bin == ("/bin/sh") {
+                        path_bin = String::from("busybox");
+                        args_vec.insert(0, String::from("sh"));
+                        args_vec.insert(0, path);
+                    }
+                    unmap_exec_buf!();
+                    return exec(path_bin, args_vec);
+                } else {
+                    unmap_exec_buf!();
+                    -1;
+                }
+                //return crate::syscall::errno::ENOEXEC;
+            }
+            //}
+        }
+        let after_exec = crate::mm::unallocated_frames();
+        debug!(
+            "[exec] exec() DONE. consumed frames:{}, last frames:{}",
+            (before_exec - after_exec) as isize,
+            after_exec
+        );
+        // on success, we should not return.
+        let ret = super::current_trap_cx().x[10];
+        ret as isize
+    } else {
+        -1
     }
 }
 
