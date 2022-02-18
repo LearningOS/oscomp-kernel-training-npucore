@@ -2,29 +2,30 @@ use core::borrow::Borrow;
 use core::borrow::BorrowMut;
 use core::fmt::{self, Debug, Formatter};
 use core::mem::ManuallyDrop;
+use core::str::FromStr;
 
 use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
-use crate::fs::{FileLike, FileDescriptor, Stdin, Stdout};
+use crate::errno_exit;
+use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
 use crate::mm::VirtPageNum;
-use crate::mm::{
-    translated_refmut, MapPermission, MemorySet, PhysPageNum,
-    VirtAddr, KERNEL_SPACE,
-};
-use crate::timer::{TimeVal, ITimerVal};
+use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::syscall::errno::ENOEXEC;
+use crate::task::current_task;
+use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
+use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use lazy_static::__Deref;
 use log::{debug, error, info, trace, warn};
-use riscv::register::{
-    scause::{self, Exception, Interrupt, Trap},
-};
+use riscv::register::scause::{self, Exception, Interrupt, Trap};
 use spin::{Mutex, MutexGuard};
 
 pub struct TaskControlBlock {
@@ -173,8 +174,8 @@ impl TaskControlBlockInner {
         }
         self.clock.last_enter_u_mode = now;
     }
-    pub fn update_itimer_real_if_exists(&mut self, diff:TimeVal){
-        if !self.timer[0].it_value.is_zero(){
+    pub fn update_itimer_real_if_exists(&mut self, diff: TimeVal) {
+        if !self.timer[0].it_value.is_zero() {
             self.timer[0].it_value = self.timer[0].it_value - diff;
             if self.timer[0].it_value.is_zero() {
                 self.add_signal(Signals::SIGALRM);
@@ -182,8 +183,8 @@ impl TaskControlBlockInner {
             }
         }
     }
-    pub fn update_itimer_virtual_if_exists(&mut self, diff:TimeVal){
-        if !self.timer[1].it_value.is_zero(){
+    pub fn update_itimer_virtual_if_exists(&mut self, diff: TimeVal) {
+        if !self.timer[1].it_value.is_zero() {
             self.timer[1].it_value = self.timer[1].it_value - diff;
             if self.timer[1].it_value.is_zero() {
                 self.add_signal(Signals::SIGVTALRM);
@@ -191,8 +192,8 @@ impl TaskControlBlockInner {
             }
         }
     }
-    pub fn update_itimer_prof_if_exists(&mut self, diff:TimeVal){
-        if !self.timer[2].it_value.is_zero(){
+    pub fn update_itimer_prof_if_exists(&mut self, diff: TimeVal) {
+        if !self.timer[2].it_value.is_zero() {
             self.timer[2].it_value = self.timer[2].it_value - diff;
             if self.timer[2].it_value.is_zero() {
                 self.add_signal(Signals::SIGPROF);
@@ -314,7 +315,7 @@ impl TaskControlBlock {
         );
         task_control_block
     }
-    pub fn exec(&self, elf_data: &[u8], args: Vec<String>) {
+    pub fn exec(&self, elf_data: &[u8], args: &mut Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
         debug!("args.len():{}", args.len());
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
@@ -562,6 +563,136 @@ impl TaskControlBlock {
         let inner = self.acquire_inner_lock();
         inner.pgid
     }
+}
+pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
+    debug!("[exec] arg_vec:{:?}", args_vec);
+    macro_rules! unmap_exec_buf {
+        ($buffer:ident) => {
+            crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
+                crate::mm::VirtAddr::from($buffer.as_ptr() as usize).floor(),
+            );
+        };
+    }
+    pub fn elf_exec(path: &mut String, args_vec: &mut Vec<String>) -> isize {
+        let task = super::current_task().unwrap();
+        let mut inner = task.acquire_inner_lock();
+        let mut path_bin = String::from("/bin/sh");
+        let ret = if let Some(app_inode) = crate::fs::open(
+            inner.get_work_path().as_str(),
+            path.as_str(),
+            crate::fs::OpenFlags::RDONLY,
+            crate::fs::DiskInodeType::File,
+        ) {
+            macro_rules! show_frame_consumption {
+                ($place:literal,$before:ident,$after:ident) => {
+                    debug!(
+                        "[exec] {}. consumed frames:{}, last frames:{}",
+                        $place,
+                        ($before - $after) as isize,
+                        $after
+                    );
+                };
+                ($place:literal,$before:ident) => {
+                    debug!(
+                        "[exec] {}. consumed frames:{}, last frames:{}",
+                        $place,
+                        ($before - crate::mm::unallocated_frames()) as isize,
+                        crate::mm::unallocated_frames()
+                    );
+                };
+            }
+            drop(inner);
+            let len = app_inode.get_size();
+            debug!("[exec] File size: {} bytes", len);
+            let start: usize = MMAP_BASE;
+            let before_read = crate::mm::unallocated_frames();
+            crate::mm::KERNEL_SPACE.lock().insert_framed_area(
+                start.into(),
+                (start + len).into(),
+                MapPermission::R | MapPermission::W,
+            );
+            unsafe {
+                app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+            }
+            //let after_read = crate::mm::unallocated_frames();
+            show_frame_consumption!("read_all() DONE", before_read);
+            // return argc because cx.x[10] will be covered with it later
+            let task = current_task().unwrap();
+            info!("[exec] argc = {}", args_vec.len());
+            let before_exec = crate::mm::unallocated_frames();
+            unsafe {
+                // run the file as elf if the magic number matches or return to ENOEXEC.
+                let buffer = core::slice::from_raw_parts(start as *const u8, len);
+                if buffer[0..4.min(buffer.len())] == [0x7f, 0x45, 0x4c, 0x46] {
+                    task.exec(buffer, args_vec);
+                } else {
+                    //if buffer[0..4] != [0x7f, 0x45, 0x4c, 0x46]
+
+                    //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
+                    //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
+                    //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
+                    let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8];
+                    info!("bin_given:{}", bin_given);
+                    if bin_given {
+                        let last = buffer[0..85.min(buffer.len())]
+                            .iter()
+                            .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
+                        //assign_to_bin. not done.
+                        path_bin = String::from_utf8_lossy(
+                            &buffer[2..if last.is_some() { last.unwrap() } else { 2 }],
+                        )
+                        .to_string();
+                        info!("path_bin:{}", path_bin);
+                        //end of assign_to_bin
+                        if path_bin == ("/bin/sh") {
+                            *path = String::from("/busybox");
+                            args_vec.insert(0, String::from("sh"));
+                            args_vec.insert(0, path.to_string());
+                        } else {
+                            let mut it = path_bin.split(' ');
+                            info!("[exec]path_bin!=/bin/sh");
+                            info!("");
+                            let mut v = Vec::new();
+                            *path = if let Some(i) = it.nth(0) {
+                                i.to_string()
+                            } else {
+                                v.push("sh".to_string());
+                                "/busybox".to_string()
+                            };
+                            for i in it {
+                                v.push(i.to_string());
+                            }
+                            v.append(args_vec);
+                            info!("[exec] updated args_vec:{:?},v:{:?}", args_vec, v);
+                            *args_vec = v;
+                        }
+                    } else {
+                        *path = String::from("/busybox");
+                        args_vec.insert(0, String::from("sh"));
+                        args_vec.insert(0, String::from("/busybox"));
+                    }
+                    unmap_exec_buf!(buffer);
+                    return crate::syscall::errno::ENOEXEC;
+                }
+            }
+            show_frame_consumption!("exec() DONE", before_exec);
+            // on success, we should not return.
+            let ret = super::current_trap_cx().x[10];
+            drop(app_inode);
+            ret as isize
+        } else {
+            //else: let ret = if let Some(app_inode) != crate::fs::open(...):
+            -1
+        };
+        ret
+    }
+    let mut ret = elf_exec(&mut path, &mut args_vec);
+    {
+        if ret == ENOEXEC {
+            ret = elf_exec(&mut path, &mut args_vec);
+        }
+    }
+    ret
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]

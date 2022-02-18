@@ -1,7 +1,7 @@
 const SYSCALL_DUP: usize = 23; //23?
 
 //const SYSCALL_DUP: usize = 23;
-const SYSCALL_DUP3:usize = 24;
+const SYSCALL_DUP3: usize = 24;
 
 const SYSCALL_OPEN: usize = 506; //where?
 
@@ -79,9 +79,9 @@ const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
 const SYSCALL_CLEAR: usize = 502;
 
+pub mod errno;
 pub mod fs;
 mod process;
-mod errno;
 
 use alloc::string;
 use fs::*;
@@ -168,7 +168,8 @@ pub fn syscall_name(id: usize) -> &'static str {
 }
 use crate::{
     fs::{FdSet, IoVec},
-    timer::{TimeSpec, ITimerVal}, task::{Rusage, SigAction},
+    task::{Rusage, SigAction},
+    timer::{ITimerVal, TimeSpec},
 };
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
@@ -239,16 +240,10 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_EXIT_GRUOP => sys_exit(args[0] as i32),
         SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0] as usize, args[1] as *mut u64),
         SYSCALL_YIELD => sys_yield(),
-        SYSCALL_SIGACTION => sys_sigaction(
-            args[0] as usize,
-            args[1] as usize,
-            args[2] as usize,
-        ),
-        SYSCALL_SIGPROCMASK => sys_sigprocmask(
-            args[0] as usize,
-            args[1] as usize,
-            args[2] as usize,
-        ),
+        SYSCALL_SIGACTION => sys_sigaction(args[0] as usize, args[1] as usize, args[2] as usize),
+        SYSCALL_SIGPROCMASK => {
+            sys_sigprocmask(args[0] as usize, args[1] as usize, args[2] as usize)
+        }
         SYSCALL_SIGRETURN => sys_sigreturn(),
         SYSCALL_NANOSLEEP => sys_nanosleep(
             args[0] as *const crate::timer::TimeSpec,
@@ -271,12 +266,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_GETPID => sys_getpid(),
         SYSCALL_GETPPID => sys_getppid(),
         SYSCALL_FORK => sys_fork(),
-        SYSCALL_EXECEV => sys_exec(
-            args[0] as *const u8,
-            args[1] as *const usize,
-            SYSCALL_EXECEV,
-        ),
-        SYSCALL_EXEC => sys_exec(args[0] as *const u8, args[1] as *const usize, SYSCALL_EXEC),
+        SYSCALL_EXECEV => sys_exec(args[0] as *const u8, args[1] as *const usize),
+        SYSCALL_EXEC => sys_exec(args[0] as *const u8, args[1] as *const usize),
         SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32, args[2] as usize),
         SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0] as usize),
         SYSCALL_GETUID => sys_getuid(),

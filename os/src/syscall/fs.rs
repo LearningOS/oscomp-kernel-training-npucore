@@ -1,6 +1,6 @@
 use crate::fs::{ch_dir, list_files, make_pipe, open, pselect, DiskInodeType, OpenFlags, PollFd};
 use crate::fs::{
-    ppoll, Dirent, FdSet, File, FileLike, FileDescriptor, IoVec, IoVecs, Kstat, NewStat, NullZero,
+    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, IoVec, IoVecs, Kstat, NewStat, NullZero,
     MNT_TABLE, TTY,
 };
 use crate::lang_items::Bytes;

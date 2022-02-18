@@ -16,6 +16,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
+use core::str::FromStr;
 use log::{debug, error, info, trace, warn};
 
 pub struct utsname {
@@ -251,8 +252,7 @@ pub fn sys_fork() -> isize {
     new_pid as isize
 }
 
-pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
-    info!("[sys_exec] Called from: {}", who);
+pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
     let mut args_vec: Vec<String> = Vec::new();
@@ -266,66 +266,8 @@ pub fn sys_exec(path: *const u8, mut args: *const usize, who: usize) -> isize {
             args = args.add(1);
         }
     }
-    let task = current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
-    let i = match open(
-        inner.get_work_path().as_str(),
-        path.as_str(),
-        OpenFlags::RDONLY,
-        crate::fs::DiskInodeType::File,
-    ) {
-        Some(app_inode) => {
-            drop(inner);
-            let len = app_inode.get_size();
-            debug!("[sys_exec] File size: {} bytes", len);
-            let start: usize = MMAP_BASE;
-            let before_read = crate::mm::unallocated_frames();
-            crate::mm::KERNEL_SPACE.lock().insert_framed_area(
-                start.into(),
-                (start + len).into(),
-                MapPermission::R | MapPermission::W,
-            );
-            unsafe {
-                app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
-            }
-            let after_read = crate::mm::unallocated_frames();
-
-            // return argc because cx.x[10] will be covered with it later
-            debug!(
-                "[sys_exec] read_all() DONE. consumed frames:{}, last frames:{}",
-                before_read - after_read,
-                after_read
-            );
-            let task = current_task().unwrap();
-            let argc = args_vec.len();
-            info!("[sys_exec] argc = {}", argc);
-            let before_exec = crate::mm::unallocated_frames();
-            unsafe {
-                let buffer = core::slice::from_raw_parts(start as *const u8, len);
-                if buffer[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-                    task.exec(buffer, args_vec);
-                } else {
-                    crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
-                        crate::mm::VirtAddr::from(buffer.as_ptr() as usize).floor(),
-                    );
-                    return ENOEXEC;
-                }
-            }
-            let after_exec = crate::mm::unallocated_frames();
-            debug!(
-                "[sys_exec] exec() DONE. consumed frames:{}, last frames:{}",
-                (before_exec - after_exec) as isize,
-                after_exec
-            );
-
-            //remember to UNMAP here!
-            // return argc because cx.x[10] will be covered with it later
-
-            argc as isize
-        }
-        None => -1,
-    };
-    0
+    drop(token);
+    crate::task::exec(path, args_vec)
 }
 
 bitflags! {
@@ -361,7 +303,13 @@ pub fn sys_waitpid(pid: isize, status: *mut i32, option: usize) -> isize {
             .children
             .iter()
             .filter(|p| pid == -1 || pid as usize == p.getpid())
-            .for_each(|p| info!("pid: {}, status: {:?}", p.pid.0, p.acquire_inner_lock().task_status));
+            .for_each(|p| {
+                info!(
+                    "pid: {}, status: {:?}",
+                    p.pid.0,
+                    p.acquire_inner_lock().task_status
+                )
+            });
         let pair = inner.children.iter().enumerate().find(|(_, p)| {
             // ++++ temporarily hold child PCB lock
             p.acquire_inner_lock().is_zombie() && (pid == -1 || pid as usize == p.getpid())
@@ -379,7 +327,7 @@ pub fn sys_waitpid(pid: isize, status: *mut i32, option: usize) -> isize {
                 // this may NULL!!!
                 *translated_refmut(inner.memory_set.token(), status) = (exit_code & 0xff) << 8;
             }
-            return found_pid as isize
+            return found_pid as isize;
         } else {
             drop(inner);
             if option.contains(WaitOption::WNOHANG) {
