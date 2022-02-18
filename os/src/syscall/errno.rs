@@ -142,7 +142,7 @@ macro_rules! set_errno {
 #[macro_export]
 macro_rules! errno_exit {
     ($errno:expr) => {
-	set_errno()!;
-        return expr;
+	set_errno!($errno)!;
+        return expr;// or -1?
     };
 }

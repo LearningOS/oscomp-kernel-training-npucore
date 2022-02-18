@@ -12,11 +12,13 @@ use crate::errno_exit;
 use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
 use crate::mm::VirtPageNum;
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::syscall::errno::ENOEXEC;
 use crate::task::current_task;
 use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -312,7 +314,7 @@ impl TaskControlBlock {
         );
         task_control_block
     }
-    pub fn exec(&self, elf_data: &[u8], args: Vec<String>) {
+    pub fn exec(&self, elf_data: &[u8], args: &mut Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
         debug!("args.len():{}", args.len());
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
@@ -561,94 +563,111 @@ impl TaskControlBlock {
         inner.pgid
     }
 }
-
-pub fn exec(path: String, mut args_vec: Vec<String>) -> isize {
-    let task = super::current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
-    if let Some(app_inode) = crate::fs::open(
-        inner.get_work_path().as_str(),
-        path.as_str(),
-        crate::fs::OpenFlags::RDONLY,
-        crate::fs::DiskInodeType::File,
-    ) {
-        drop(inner);
-        let len = app_inode.get_size();
-        debug!("[exec] File size: {} bytes", len);
-        let start: usize = MMAP_BASE;
-        let before_read = crate::mm::unallocated_frames();
-        crate::mm::KERNEL_SPACE.lock().insert_framed_area(
-            start.into(),
-            (start + len).into(),
-            MapPermission::R | MapPermission::W,
-        );
-        unsafe {
-            app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
-        }
-        let after_read = crate::mm::unallocated_frames();
-
-        // return argc because cx.x[10] will be covered with it later
-        debug!(
-            "[exec] read_all() DONE. consumed frames:{}, last frames:{}",
-            before_read - after_read,
-            after_read
-        );
-        let task = current_task().unwrap();
-        let argc = args_vec.len();
-        info!("[exec] argc = {}", argc);
-        let before_exec = crate::mm::unallocated_frames();
-        unsafe {
-            let buffer = core::slice::from_raw_parts(start as *const u8, len);
-            if buffer[0..4] == [0x7f, 0x45, 0x4c, 0x46] {
-                task.exec(buffer, args_vec);
-            } else {
-                macro_rules! unmap_exec_buf {
-                    () => {
-                        crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
-                            crate::mm::VirtAddr::from(buffer.as_ptr() as usize).floor(),
-                        );
-                    };
-                }
-                //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
-                //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
-                //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
-                let is_script: bool = buffer[0..2] == ['#' as u8, '!' as u8] || true;
-                if is_script {
-                    let last = buffer[0..1024.min(buffer.len())]
-                        .iter()
-                        .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
-                    /* let path_bin: if let Ok(v) str::from_utf8(buffer[0..last]){
-                     *
-                     * }else{
-                     * 	errno_exit!(ENOEXEC);
-                     * }; */
-                    let mut path_bin = String::from("/bin/sh");
-                    if path_bin == ("/bin/sh") {
-                        path_bin = String::from("busybox");
-                        args_vec.insert(0, String::from("sh"));
-                        args_vec.insert(0, path);
-                    }
-                    unmap_exec_buf!();
-                    return exec(path_bin, args_vec);
-                } else {
-                    unmap_exec_buf!();
-                    -1;
-                }
-                //return crate::syscall::errno::ENOEXEC;
-            }
-            //}
-        }
-        let after_exec = crate::mm::unallocated_frames();
-        debug!(
-            "[exec] exec() DONE. consumed frames:{}, last frames:{}",
-            (before_exec - after_exec) as isize,
-            after_exec
-        );
-        // on success, we should not return.
-        let ret = super::current_trap_cx().x[10];
-        ret as isize
-    } else {
-        -1
+pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
+    debug!("[exec] arg_vec:{:?}", args_vec);
+    macro_rules! unmap_exec_buf {
+        ($buffer:ident) => {
+            crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
+                crate::mm::VirtAddr::from($buffer.as_ptr() as usize).floor(),
+            );
+        };
     }
+    pub fn elf_exec(path: &mut String, args_vec: &mut Vec<String>) -> isize {
+        let task = super::current_task().unwrap();
+        let mut inner = task.acquire_inner_lock();
+        let mut path_bin = String::from("/bin/sh");
+        let ret = if let Some(app_inode) = crate::fs::open(
+            inner.get_work_path().as_str(),
+            path.as_str(),
+            crate::fs::OpenFlags::RDONLY,
+            crate::fs::DiskInodeType::File,
+        ) {
+            macro_rules! show_frame_consumption {
+                ($place:literal,$before:ident,$after:ident) => {
+                    debug!(
+                        "[exec] {}. consumed frames:{}, last frames:{}",
+                        $place,
+                        ($before - $after) as isize,
+                        $after
+                    );
+                };
+                ($place:literal,$before:ident) => {
+                    debug!(
+                        "[exec] {}. consumed frames:{}, last frames:{}",
+                        $place,
+                        ($before - crate::mm::unallocated_frames()) as isize,
+                        crate::mm::unallocated_frames()
+                    );
+                };
+            }
+            drop(inner);
+            let len = app_inode.get_size();
+            debug!("[exec] File size: {} bytes", len);
+            let start: usize = MMAP_BASE;
+            let before_read = crate::mm::unallocated_frames();
+            crate::mm::KERNEL_SPACE.lock().insert_framed_area(
+                start.into(),
+                (start + len).into(),
+                MapPermission::R | MapPermission::W,
+            );
+            unsafe {
+                app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+            }
+            //let after_read = crate::mm::unallocated_frames();
+            show_frame_consumption!("read_all() DONE", before_read);
+            // return argc because cx.x[10] will be covered with it later
+            let task = current_task().unwrap();
+            info!("[exec] argc = {}", args_vec.len());
+            let before_exec = crate::mm::unallocated_frames();
+            unsafe {
+                // run the file as elf if the magic number matches or return to ENOEXEC.
+                let buffer = core::slice::from_raw_parts(start as *const u8, len);
+                if buffer[0..4.min(buffer.len())] == [0x7f, 0x45, 0x4c, 0x46] {
+                    task.exec(buffer, args_vec);
+                } else {
+                    //if buffer[0..4] != [0x7f, 0x45, 0x4c, 0x46]
+
+                    //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
+                    //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
+                    //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
+                    let is_text: bool =
+                        buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8] || true;
+                    if is_text {
+                        let last = buffer[0..85.min(buffer.len())]
+                            .iter()
+                            .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
+                        //assign_to_bin. not done.
+                        path_bin = path_bin;
+                        //end of assign_to_bin
+                        if path_bin == ("/bin/sh") {
+                            *path = String::from("/busybox");
+                            args_vec.insert(0, String::from("sh"));
+                            //args_vec.insert(0, path);
+                        }
+                        args_vec.insert(0, path.to_string());
+                    }
+                    unmap_exec_buf!(buffer);
+                    return crate::syscall::errno::ENOEXEC;
+                }
+            }
+            show_frame_consumption!("exec() DONE", before_exec);
+            // on success, we should not return.
+            let ret = super::current_trap_cx().x[10];
+            drop(app_inode);
+            ret as isize
+        } else {
+            //else: let ret = if let Some(app_inode) != crate::fs::open(...):
+            -1
+        };
+        ret
+    }
+    let mut ret = elf_exec(&mut path, &mut args_vec);
+    {
+        if ret == ENOEXEC {
+            ret = elf_exec(&mut path, &mut args_vec);
+        }
+    }
+    ret
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
