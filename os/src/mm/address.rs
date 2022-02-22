@@ -212,7 +212,7 @@ where
 }
 impl<T> IntoIterator for SimpleRange<T>
 where
-    T: StepByOne + Copy + PartialEq + PartialOrd + Debug,
+    T: StepByOne + Copy + PartialEq + PartialOrd + Debug + From<usize>,
 {
     type Item = T;
     type IntoIter = SimpleRangeIterator<T>;

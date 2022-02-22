@@ -10,6 +10,7 @@ use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
 use crate::errno_exit;
 use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
+use crate::mm::ElfAreas;
 use crate::mm::VirtPageNum;
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::ENOANO;
@@ -33,6 +34,7 @@ pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
     pub kernel_stack: KernelStack,
+    pub bin_path: String,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
 }
@@ -246,6 +248,8 @@ impl TaskControlBlock {
     pub fn acquire_inner_lock(&self) -> MutexGuard<TaskControlBlockInner> {
         self.inner.lock()
     }
+    /// !!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!!!!!!!!
+    /// Currently used for initproc loading only. bin_path must be used changed if used elsewhere.
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, user_sp, user_heap, entry_point, auxv) = MemorySet::from_elf(elf_data);
@@ -265,6 +269,7 @@ impl TaskControlBlock {
         // push a task context which goes to trap_return to the top of kernel stack
         let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
         let task_control_block = Self {
+            bin_path: String::from("initproc"),
             pid: pid_handle,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
@@ -334,59 +339,61 @@ impl TaskControlBlock {
             .ppn();
 
         ////////////// envp[] ///////////////////
-        let mut env: Vec<String> = Vec::new();
-        env.push(String::from("SHELL=/user_shell"));
-        env.push(String::from("PWD=/"));
-        env.push(String::from("USER=root"));
-        env.push(String::from("MOTD_SHOWN=pam"));
-        env.push(String::from("LANG=C.UTF-8"));
-        env.push(String::from(
+        let mut env = [
+            "SHELL=/user_shell",
+            "PWD=/",
+            "USER=root",
+            "MOTD_SHOWN=pam",
+            "LANG=C.UTF-8",
             "INVOCATION_ID=e9500a871cf044d9886a157f53826684",
-        ));
-        env.push(String::from("TERM=vt220"));
-        env.push(String::from("SHLVL=2"));
-        env.push(String::from("JOURNAL_STREAM=8:9265"));
-        env.push(String::from("OLDPWD=/root"));
-        env.push(String::from("_=busybox"));
-        env.push(String::from("LOGNAME=root"));
-        env.push(String::from("HOME=/"));
-        env.push(String::from("PATH=/"));
-        let mut envp: Vec<usize> = (0..=env.len()).collect();
-        envp[env.len()] = 0;
-        for i in 0..env.len() {
-            user_sp -= env[i].len() + 1;
-            envp[i] = user_sp;
-            let mut p = user_sp;
-            // write chars to [user_sp, user_sp + len]
-            for c in env[i].as_bytes() {
-                *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-                p += 1;
-            }
-            *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+            "TERM=vt220",
+            "SHLVL=2",
+            "JOURNAL_STREAM=8:9265",
+            "OLDPWD=/root",
+            "_=busybox",
+            "LOGNAME=root",
+            "HOME=/",
+            "PATH=/",
+        ]
+        .iter()
+        .map(|&x| x.to_string())
+        .collect::<Vec<String>>();
+        macro_rules! usr_sp_align_to_usize {
+            () => {
+                user_sp -= user_sp % core::mem::size_of::<usize>();
+            };
         }
+        macro_rules! arg_copy_arr {
+            ($env:ident,$arr:ident) => {
+                $arr[$env.len()] = 0;
+                for i in 0..$env.len() {
+                    user_sp -= $env[i].len() + 1;
+                    $arr[i] = user_sp;
+                    let mut p = user_sp;
+                    // write chars to [user_sp, user_sp + len]
+                    for c in $env[i].as_bytes() {
+                        *translated_refmut(memory_set.token(), p as *mut u8) = *c;
+                        p += 1;
+                    }
+                    *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+                }
+            };
+        }
+        let mut envp: Vec<usize> = (0..=env.len()).collect();
+        arg_copy_arr!(env, envp);
         // make the user_sp aligned to 8B for k210 platform
-        user_sp -= user_sp % core::mem::size_of::<usize>();
+        usr_sp_align_to_usize!();
 
         // push arguments on user stack
-        let mut argv: Vec<_> = (0..=args.len()).collect();
-        argv[args.len()] = 0;
-        for i in 0..args.len() {
-            user_sp -= args[i].len() + 1;
-            argv[i] = user_sp;
-            let mut p = user_sp;
-            for c in args[i].as_bytes() {
-                *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-                p += 1;
-            }
-            *translated_refmut(memory_set.token(), p as *mut u8) = 0;
-        }
+        let mut argv: Vec<usize> = (0..=args.len()).collect();
+        arg_copy_arr!(args, argv);
         // make the user_sp aligned to 8B for k210 platform
-        user_sp -= user_sp % core::mem::size_of::<usize>();
+        usr_sp_align_to_usize!();
 
         ////////////// platform String ///////////////////
         let platform = "RISC-V64";
         user_sp -= platform.len() + 1;
-        user_sp -= user_sp % core::mem::size_of::<usize>();
+        usr_sp_align_to_usize!();
         let mut p = user_sp;
         for c in platform.as_bytes() {
             *translated_refmut(memory_set.token(), p as *mut u8) = *c;
@@ -515,6 +522,7 @@ impl TaskControlBlock {
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
+            bin_path: self.bin_path.clone(),
             inner: Mutex::new(TaskControlBlockInner {
                 //inherited
                 pgid: parent_inner.pgid,
@@ -612,13 +620,13 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             debug!("[exec] File size: {} bytes", len);
             let start: usize = MMAP_BASE;
             let before_read = crate::mm::unallocated_frames();
-            crate::mm::KERNEL_SPACE.lock().insert_framed_area(
-                start.into(),
-                (start + len).into(),
-                MapPermission::R | MapPermission::W,
-            );
-            unsafe {
-                app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+            if crate::mm::push_elf_area(path.to_string(), len).is_err() {
+                unsafe {
+                    app_inode
+                        .read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+                }
+            } else {
+                info!("Trying not to load anything.");
             }
             //let after_read = crate::mm::unallocated_frames();
             show_frame_consumption!("read_all() DONE", before_read);
@@ -638,6 +646,8 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
                     //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
                     //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
+
+                    *args_vec.first_mut().unwrap() = path.to_string();
                     let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8];
                     info!("bin_given:{}", bin_given);
                     if bin_given {
@@ -656,7 +666,8 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                         }
                         info!("path_bin:{}", path_bin);
                         //end of assign_to_bin
-                        if path_bin == ("/bin/sh") {
+                        if ["/bin/sh", "/bin/bash"].contains(&&(path_bin[..])) {
+                            info!("[exec]path_bin==/bin/sh");
                             *path = String::from("/busybox");
                             args_vec.insert(0, String::from("sh"));
                             args_vec.insert(0, path.to_string());

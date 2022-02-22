@@ -1,7 +1,8 @@
-use super::{PhysAddr, PhysPageNum};
+use super::{memory_set::MapArea, PhysAddr, PhysPageNum};
 use crate::config::MEMORY_END;
-use alloc::{vec::Vec, sync::Arc};
-use core::fmt::{self, Debug, Formatter};
+use alloc::{string::String, sync::Arc, vec::Vec};
+use core::fmt::{self, Debug, Error, Formatter, Result};
+use k210_hal::cache::Uncache;
 use lazy_static::*;
 use spin::Mutex;
 
@@ -43,6 +44,7 @@ pub struct StackFrameAllocator {
     current: usize,
     end: usize,
     recycled: Vec<usize>,
+    elfs: Vec<Arc<ElfAreas>>,
 }
 
 impl StackFrameAllocator {
@@ -61,6 +63,7 @@ impl FrameAllocator for StackFrameAllocator {
             current: 0,
             end: 0,
             recycled: Vec::new(),
+            elfs: Vec::new(),
         }
     }
     fn alloc(&mut self) -> Option<PhysPageNum> {
@@ -68,7 +71,14 @@ impl FrameAllocator for StackFrameAllocator {
             Some(ppn.into())
         } else {
             if self.current == self.end {
-                None
+                //attempt to recycle the cached elfs
+                for i in 0..self.elfs.len() {
+                    if Arc::strong_count(&self.elfs[i]) == 1 {
+                        self.elfs.remove(i);
+                    }
+                }
+                //try poping recycled again
+                self.recycled.pop().map(|x| x.into())
             } else {
                 self.current += 1;
                 Some((self.current - 1).into())
@@ -92,7 +102,31 @@ lazy_static! {
     pub static ref FRAME_ALLOCATOR: Mutex<FrameAllocatorImpl> =
         Mutex::new(FrameAllocatorImpl::new());
 }
-
+pub fn push_elf_area(path: String, len: usize) -> Result {
+    //    FRAME_ALLOCATOR.lock().push_elf_area(path, len)
+    let lock = FRAME_ALLOCATOR.lock();
+    let v = lock.elfs.iter().find(|now| now.path == path);
+    if v.is_none() {
+        drop(lock);
+        let area = ElfAreas {
+            areas: crate::mm::KERNEL_SPACE
+                .lock()
+                .insert_program_area(
+                    crate::config::MMAP_BASE.into(),
+                    (crate::config::MMAP_BASE + len).into(),
+                    crate::mm::MapPermission::R | crate::mm::MapPermission::W,
+                )
+                .unwrap(),
+            path,
+        };
+        FRAME_ALLOCATOR.lock().elfs.push(Arc::new(area));
+        Err(core::fmt::Error)
+    } else {
+        crate::mm::KERNEL_SPACE
+            .lock()
+            .push_no_alloc(v.unwrap().clone())
+    }
+}
 pub fn init_frame_allocator() {
     extern "C" {
         fn ekernel();
@@ -134,4 +168,9 @@ pub fn frame_allocator_test() {
     }
     drop(v);
     println!("frame_allocator_test passed!");
+}
+#[derive(Clone)]
+pub struct ElfAreas {
+    pub areas: MapArea,
+    path: String,
 }
