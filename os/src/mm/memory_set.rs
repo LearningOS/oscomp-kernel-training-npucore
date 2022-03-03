@@ -487,15 +487,16 @@ impl MemorySet {
                 }
                 let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm, None);
                 max_end_vpn = map_area.vpn_range.get_end();
-                if offset == 0 && ph.file_size() != 0 {
-                    head_va = start_va.into();
-                    let kernel_start_vpn =
-                        (VirtAddr::from(MMAP_BASE + (ph.offset() as usize))).floor();
+                if offset == 0 && ph.file_size() != 0 && !map_perm.contains(MapPermission::W) {
                     assert_eq!(ph.offset() % 0x1000, 0);
                     assert_eq!(
                         VirtAddr::from(ph.file_size() as usize).ceil().0,
                         map_area.vpn_range.get_end().0 - map_area.vpn_range.get_start().0
                     );
+
+                    head_va = start_va.into();
+                    let kernel_start_vpn =
+                        (VirtAddr::from(MMAP_BASE + (ph.offset() as usize))).floor();
                     map_area.map_kernel_shared(&mut memory_set.page_table, kernel_start_vpn);
                     memory_set.areas.push(map_area);
                     // memory_set.push(
@@ -504,6 +505,9 @@ impl MemorySet {
                     //         [ph.offset() as usize..(ph.offset() + ph.file_size()) as usize]),
                     // );
                 } else {
+                    if map_perm.contains(MapPermission::W) {
+                        warn!("[memory_set.from_elf] W! memory size:{}", ph.mem_size());
+                    }
                     memory_set.push_with_offset(
                         map_area,
                         offset,
@@ -640,12 +644,14 @@ impl MemorySet {
 #[derive(Clone)]
 /// Map area for different segments or a chunk of memory for memory mapped file access.
 pub struct MapArea {
-    /// range of the mapped virtual page numbers.
+    /// Range of the mapped virtual page numbers.
     /// Page aligned.
     vpn_range: VPNRange,
-    ///
+    /// Map physical page frame tracker to virtual pages for RAII & lookup.
     data_frames: BTreeMap<VirtPageNum, Arc<FrameTracker>>,
+    /// Direct or framed(virtual) mapping?
     map_type: MapType,
+    /// Permissions which are the or of RWXU, where U stands for user.
     map_perm: MapPermission,
     map_file: Option<FileLike>,
 }
@@ -675,7 +681,8 @@ impl MapArea {
             map_file,
         }
     }
-    /// Copier
+    /// Copier, but the physical pages are not allocated,
+    /// thus leaving `data_frames` empty.
     pub fn from_another(another: &MapArea) -> Self {
         Self {
             vpn_range: VPNRange::new(another.vpn_range.get_start(), another.vpn_range.get_end()),
@@ -685,7 +692,10 @@ impl MapArea {
             map_file: another.map_file.clone(),
         }
     }
-    /// Map a page in current area.
+    /// Map an included page in current area.
+    /// If the `map_type` is `Framed`, then physical pages shall be allocated by this function.
+    /// Otherwise, where `map_type` is `Identical`,
+    /// the virtual page will be mapped directly to the physical page with an identical address to the page.
     /// # Note
     /// Vpn should be in this map area, but the check is not enforced in this function!
     pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result {
@@ -711,6 +721,8 @@ impl MapArea {
         }
     }
     /// Unmap a page in current area.
+    /// If it is framed, then the physical pages will be removed from the `data_frames` Btree.
+    /// This is unnecessary if the area is directly mapped.
     /// # Note
     /// Vpn should be in this map area, but the check is not enforced in this function!
     pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result {
@@ -736,6 +748,12 @@ impl MapArea {
         Ok(())
     }
     /// Map the same area in `self` from `dst_ptab` to `src_ptab`, sharing the same physical address.
+    /// Convert map areas to physical pages.
+    /// # Of Course...
+    /// Since the area is shared, the pages have been allocated.
+    /// # Argument
+    /// `dst_ptab`: The destination to be mapped into.
+    /// `src_ptab`: The source to be mapped from. This is also the page table where `self` should be included.
     pub fn map_shared(&mut self, dst_ptab: &mut PageTable, src_ptab: &mut PageTable) -> Result {
         let map_perm = self.map_perm.difference(MapPermission::W);
         let pte_flags = PTEFlags::from_bits(map_perm.bits).unwrap();
@@ -752,6 +770,7 @@ impl MapArea {
         }
         Ok(())
     }
+    /// Is it that this function is needed for the reason that kernel space may be directly mapped sometimes?
     pub fn map_kernel_shared(
         &mut self,
         page_table: &mut PageTable,
@@ -782,6 +801,7 @@ impl MapArea {
         }
         Ok(())
     }
+    /// Unmap all pages in `self` from `page_table` using unmap_one()
     pub fn unmap(&mut self, page_table: &mut PageTable) -> Result {
         for vpn in self.vpn_range {
             if let Err(_) = self.unmap_one(page_table, vpn) {
