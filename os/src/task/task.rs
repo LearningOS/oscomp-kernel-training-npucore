@@ -383,7 +383,7 @@ impl TaskControlBlock {
         }
         macro_rules! usr_arg_push {
             ($name:ident,$base:ident,$trg:ident) => {
-                usr_arg_push!($name, $base, $trg, 0, usize);
+                usr_arg_push!($name, $base, $trg, 1, usize);
                 *translated_refmut(
                     memory_set.token(),
                     (user_sp + core::mem::size_of::<usize>() * ($name.len())) as *mut usize,
