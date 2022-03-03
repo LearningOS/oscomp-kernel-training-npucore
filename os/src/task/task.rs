@@ -691,9 +691,8 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             }
             show_frame_consumption!("exec() DONE", before_exec);
             // on success, we should not return.
-            let ret = super::current_trap_cx().x[10];
             drop(app_inode);
-            ret as isize
+            0 as isize
         } else {
             //else: let ret = if let Some(app_inode) != crate::fs::open(...):
             -1
