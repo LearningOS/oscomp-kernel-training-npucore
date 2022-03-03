@@ -326,7 +326,12 @@ impl TaskControlBlock {
         debug!("args.len():{}", args.len());
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
             MemorySet::from_elf(elf_data);
+        let mut envp_base: usize = 0;
+        let mut argv_base: usize = 0;
+        let mut auxv_base: usize = 0;
+        let mut p: usize = 0;
 
+        /////////////////////// start of macro definition ///////////////////////
         macro_rules! auxv_push {
             ($ty:expr,$val:expr) => {
                 auxv.push(AuxHeader {
@@ -334,13 +339,13 @@ impl TaskControlBlock {
                     value: $val,
                 });
             };
-            ($ty:expr) => {
-                auxv_push($ty, user_sp)
-            };
         }
         macro_rules! usr_sp_mov {
             ($step:expr) => {
                 user_sp -= $step
+            };
+            ($step:ty,$times:expr) => {
+                usr_sp_mov!(($times * core::mem::size_of::<$step>()));
             };
         }
         macro_rules! usr_sp_align {
@@ -354,23 +359,50 @@ impl TaskControlBlock {
                 usr_sp_mov!(user_sp % ($times * core::mem::size_of::<$name>()));
             };
         }
+        /// Note: pointer p is shared globally. After the copy, it will point to the vec[len()]
+        macro_rules! byte_copy {
+            ($iter_name:expr) => {
+                p = user_sp;
+                for c in $iter_name {
+                    *translated_refmut(memory_set.token(), p as *mut u8) = (*c) as u8;
+                    p += 1;
+                }
+                *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+            };
+        }
         macro_rules! arg_copy_arr {
             ($env:ident,$arr:ident) => {
                 $arr[$env.len()] = 0;
                 for i in 0..$env.len() {
                     user_sp -= $env[i].len() + 1;
                     $arr[i] = user_sp;
-                    let mut p = user_sp;
-                    // write chars to [user_sp, user_sp + len]
-                    for c in $env[i].as_bytes() {
-                        *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-                        p += 1;
-                    }
+                    byte_copy!($env[i].as_bytes());
                     *translated_refmut(memory_set.token(), p as *mut u8) = 0;
                 }
             };
         }
+        macro_rules! usr_arg_push {
+            ($name:ident,$base:ident,$trg:ident) => {
+                usr_arg_push!($name, $base, $trg, 0, usize);
+                *translated_refmut(
+                    memory_set.token(),
+                    (user_sp + core::mem::size_of::<usize>() * ($name.len())) as *mut usize,
+                ) = 0;
+            };
+            ($name:ident,$base:ident,$trg:ident,$marg:expr,$tyname:ty) => {
+                usr_sp_mov!($tyname, $name.len() + $marg);
+                $base = user_sp;
+                for i in 0..$name.len() {
+                    *translated_refmut(
+                        memory_set.token(),
+                        (user_sp + core::mem::size_of::<$tyname>() * i) as *mut $tyname,
+                    ) = $trg[i];
+                }
+            };
+        }
+        /////////////////////// end of macro definition ///////////////////////
 
+        /////////////////////// start of exec loading ///////////////////////
         info!(
             "[exec] elf_data LOADED. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}",
             user_sp, user_heap, entry_point
@@ -418,17 +450,14 @@ impl TaskControlBlock {
         let platform = "RISC-V64";
         usr_sp_mov!(platform.len() + 1);
         usr_sp_align!(usize);
-        let mut p = user_sp;
-        for c in platform.as_bytes() {
-            *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-            p += 1;
-        }
-        *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+        byte_copy!(platform.as_bytes());
 
         ////////////// rand bytes ///////////////////
         usr_sp_mov!(16);
-        p = user_sp;
         auxv_push!(AT_RANDOM, user_sp);
+
+        let mut p = 0;
+        p = user_sp;
         for i in 0..0xf {
             *translated_refmut(memory_set.token(), p as *mut u8) = i as u8;
             p += 1;
@@ -440,61 +469,17 @@ impl TaskControlBlock {
         ////////////// auxv[] //////////////////////
         auxv_push!(AT_EXECFN, argv[0]); // file name
         auxv_push!(AT_NULL, 0); // end
-        user_sp -= auxv.len() * core::mem::size_of::<AuxHeader>();
-        let auxv_base = user_sp;
-        // println!("[auxv]: base 0x{:X}", auxv_base);
-        for i in 0..auxv.len() {
-            // println!("[auxv]: {:?}", auxv[i]);
-            let addr = user_sp + core::mem::size_of::<AuxHeader>() * i;
-            *translated_refmut(memory_set.token(), addr as *mut usize) = auxv[i].aux_type;
-            *translated_refmut(
-                memory_set.token(),
-                (addr + core::mem::size_of::<usize>()) as *mut usize,
-            ) = auxv[i].value;
-        }
+        usr_arg_push!(auxv, auxv_base, auxv, 0, AuxHeader);
 
         ////////////// *envp [] //////////////////////
-        user_sp -= (env.len() + 1) * core::mem::size_of::<usize>();
-        let envp_base: usize = user_sp;
-        *translated_refmut(
-            memory_set.token(),
-            (user_sp + core::mem::size_of::<usize>() * (env.len())) as *mut usize,
-        ) = 0;
-        for i in 0..env.len() {
-            *translated_refmut(
-                memory_set.token(),
-                (user_sp + core::mem::size_of::<usize>() * i) as *mut usize,
-            ) = envp[i];
-        }
-
+        usr_arg_push!(env, envp_base, envp);
         ////////////// *argv [] //////////////////////
-        user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
-        let argv_base = user_sp;
-        *translated_refmut(
-            memory_set.token(),
-            (user_sp + core::mem::size_of::<usize>() * (args.len())) as *mut usize,
-        ) = 0;
-        for i in 0..args.len() {
-            *translated_refmut(
-                memory_set.token(),
-                (user_sp + core::mem::size_of::<usize>() * i) as *mut usize,
-            ) = argv[i];
-        }
+        usr_arg_push!(args, argv_base, argv);
 
         ////////////// argc //////////////////////
         user_sp -= core::mem::size_of::<usize>();
         *translated_refmut(memory_set.token(), user_sp as *mut usize) = args.len();
 
-        // **** hold current PCB lock
-        let mut inner = self.acquire_inner_lock();
-        // substitute memory_set
-        inner.memory_set = memory_set;
-        inner.heap_bottom = user_heap;
-        inner.heap_pt = user_heap;
-        // flush signal handler
-        inner.siginfo.signal_handler = BTreeMap::new();
-        // update trap_cx ppn
-        inner.trap_cx_ppn = trap_cx_ppn;
         // initialize trap_cx
         let mut trap_cx = TrapContext::app_init_context(
             entry_point,
@@ -507,6 +492,16 @@ impl TaskControlBlock {
         trap_cx.x[11] = argv_base;
         trap_cx.x[12] = envp_base;
         trap_cx.x[13] = auxv_base;
+        // **** hold current PCB lock
+        let mut inner = self.acquire_inner_lock();
+        // substitute memory_set
+        inner.memory_set = memory_set;
+        inner.heap_bottom = user_heap;
+        inner.heap_pt = user_heap;
+        // flush signal handler
+        inner.siginfo.signal_handler = BTreeMap::new();
+        // update trap_cx ppn
+        inner.trap_cx_ppn = trap_cx_ppn;
         *inner.get_trap_cx() = trap_cx;
         // **** release current PCB lock
     }
@@ -757,7 +752,7 @@ impl ProcAddress {
         }
     }
 }
-
+#[derive(Clone, Copy)]
 pub struct AuxHeader {
     pub aux_type: usize,
     pub value: usize,
