@@ -326,6 +326,51 @@ impl TaskControlBlock {
         debug!("args.len():{}", args.len());
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
             MemorySet::from_elf(elf_data);
+
+        macro_rules! auxv_push {
+            ($ty:expr,$val:expr) => {
+                auxv.push(AuxHeader {
+                    aux_type: $ty,
+                    value: $val,
+                });
+            };
+            ($ty:expr) => {
+                auxv_push($ty, user_sp)
+            };
+        }
+        macro_rules! usr_sp_mov {
+            ($step:expr) => {
+                user_sp -= $step
+            };
+        }
+        macro_rules! usr_sp_align {
+            ($name:ty) => {
+                usr_sp_align!(core::mem::size_of::<$name>());
+            };
+            ($times:expr) => {
+                usr_sp_mov!(user_sp % $times);
+            };
+            ($name:ident,$times:expr) => {
+                usr_sp_mov!(user_sp % ($times * core::mem::size_of::<$name>()));
+            };
+        }
+        macro_rules! arg_copy_arr {
+            ($env:ident,$arr:ident) => {
+                $arr[$env.len()] = 0;
+                for i in 0..$env.len() {
+                    user_sp -= $env[i].len() + 1;
+                    $arr[i] = user_sp;
+                    let mut p = user_sp;
+                    // write chars to [user_sp, user_sp + len]
+                    for c in $env[i].as_bytes() {
+                        *translated_refmut(memory_set.token(), p as *mut u8) = *c;
+                        p += 1;
+                    }
+                    *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+                }
+            };
+        }
+
         info!(
             "[exec] elf_data LOADED. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}",
             user_sp, user_heap, entry_point
@@ -358,42 +403,21 @@ impl TaskControlBlock {
         .iter()
         .map(|&x| x.to_string())
         .collect::<Vec<String>>();
-        macro_rules! usr_sp_align_to_usize {
-            () => {
-                user_sp -= user_sp % core::mem::size_of::<usize>();
-            };
-        }
-        macro_rules! arg_copy_arr {
-            ($env:ident,$arr:ident) => {
-                $arr[$env.len()] = 0;
-                for i in 0..$env.len() {
-                    user_sp -= $env[i].len() + 1;
-                    $arr[i] = user_sp;
-                    let mut p = user_sp;
-                    // write chars to [user_sp, user_sp + len]
-                    for c in $env[i].as_bytes() {
-                        *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-                        p += 1;
-                    }
-                    *translated_refmut(memory_set.token(), p as *mut u8) = 0;
-                }
-            };
-        }
         let mut envp: Vec<usize> = (0..=env.len()).collect();
         arg_copy_arr!(env, envp);
         // make the user_sp aligned to 8B for k210 platform
-        usr_sp_align_to_usize!();
+        usr_sp_align!(usize);
 
         // push arguments on user stack
         let mut argv: Vec<usize> = (0..=args.len()).collect();
         arg_copy_arr!(args, argv);
         // make the user_sp aligned to 8B for k210 platform
-        usr_sp_align_to_usize!();
+        usr_sp_align!(usize);
 
         ////////////// platform String ///////////////////
         let platform = "RISC-V64";
-        user_sp -= platform.len() + 1;
-        usr_sp_align_to_usize!();
+        usr_sp_mov!(platform.len() + 1);
+        usr_sp_align!(usize);
         let mut p = user_sp;
         for c in platform.as_bytes() {
             *translated_refmut(memory_set.token(), p as *mut u8) = *c;
@@ -402,29 +426,20 @@ impl TaskControlBlock {
         *translated_refmut(memory_set.token(), p as *mut u8) = 0;
 
         ////////////// rand bytes ///////////////////
-        user_sp -= 16;
+        usr_sp_mov!(16);
         p = user_sp;
-        auxv.push(AuxHeader {
-            aux_type: AT_RANDOM,
-            value: user_sp,
-        });
+        auxv_push!(AT_RANDOM, user_sp);
         for i in 0..0xf {
             *translated_refmut(memory_set.token(), p as *mut u8) = i as u8;
             p += 1;
         }
 
         ////////////// padding //////////////////////
-        user_sp -= user_sp % 16;
+        usr_sp_align!(16);
 
         ////////////// auxv[] //////////////////////
-        auxv.push(AuxHeader {
-            aux_type: AT_EXECFN,
-            value: argv[0],
-        }); // file name
-        auxv.push(AuxHeader {
-            aux_type: AT_NULL,
-            value: 0,
-        }); // end
+        auxv_push!(AT_EXECFN, argv[0]); // file name
+        auxv_push!(AT_NULL, 0); // end
         user_sp -= auxv.len() * core::mem::size_of::<AuxHeader>();
         let auxv_base = user_sp;
         // println!("[auxv]: base 0x{:X}", auxv_base);
@@ -440,7 +455,7 @@ impl TaskControlBlock {
 
         ////////////// *envp [] //////////////////////
         user_sp -= (env.len() + 1) * core::mem::size_of::<usize>();
-        let envp_base = user_sp;
+        let envp_base: usize = user_sp;
         *translated_refmut(
             memory_set.token(),
             (user_sp + core::mem::size_of::<usize>() * (env.len())) as *mut usize,
