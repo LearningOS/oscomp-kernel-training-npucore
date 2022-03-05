@@ -723,10 +723,23 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
     let mut ret = elf_exec(&mut path, &mut args_vec);
     {
         if ret == ENOEXEC {
+            unsafe {
+                llvm_asm!("sfence.vma" :::: "volatile");
+            }
             ret = elf_exec(&mut path, &mut args_vec);
         }
     }
     ret
+    /*
+	
+[ERROR] Unsupported syscall: utimensat , calling over arguments:
+[DEBUG] args[0]: FFFFFFFFFFFFFF9C
+[DEBUG] args[1]: FFFFFFFFFFFFCF1F
+[DEBUG] args[2]: 0
+[DEBUG] args[3]: 0
+[DEBUG] args[4]: 0
+[DEBUG] args[5]: 706050403020100
+*/
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
