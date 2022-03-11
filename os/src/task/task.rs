@@ -629,7 +629,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             debug!("[exec] File size: {} bytes", len);
             let start: usize = MMAP_BASE;
             let before_read = crate::mm::unallocated_frames();
-            if crate::mm::push_elf_area(app_inode.clone(), len).is_err() {
+            if crate::mm::push_elf_area(app_inode.clone()).is_err() {
                 unsafe {
                     app_inode
                         .read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
