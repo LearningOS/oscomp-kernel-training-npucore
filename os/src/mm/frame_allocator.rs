@@ -1,4 +1,4 @@
-use super::{memory_set::MapArea, PhysAddr, PhysPageNum};
+use super::{elf_cache::try_remove_elf, memory_set::MapArea, PhysAddr, PhysPageNum};
 use crate::{
     config::{MEMORY_END, PAGE_SIZE},
     fs::FileLike,
@@ -49,7 +49,6 @@ pub struct StackFrameAllocator {
     current: usize,
     end: usize,
     recycled: Vec<usize>,
-    pub elfs: Vec<MapArea>,
 }
 
 impl StackFrameAllocator {
@@ -71,26 +70,14 @@ impl FrameAllocator for StackFrameAllocator {
             current: 0,
             end: 0,
             recycled: Vec::new(),
-            elfs: Vec::new(),
         }
     }
     fn alloc(&mut self) -> Option<PhysPageNum> {
         if let Some(ppn) = self.recycled.pop() {
             Some(ppn.into())
         } else {
-            if self.current == self.end {
-                //attempt to recycle the cached elfs
-                for i in 0..self.elfs.len() {
-                    if self.elfs[i].file_ref().unwrap() == 1 {
-                        self.elfs.remove(i);
-                    }
-                }
-                //try poping recycled again
-                self.recycled.pop().map(|x| x.into())
-            } else {
-                self.current += 1;
-                Some((self.current - 1).into())
-            }
+            self.current += 1;
+            Some((self.current - 1).into())
         }
     }
     fn dealloc(&mut self, ppn: PhysPageNum) {
@@ -110,54 +97,6 @@ lazy_static! {
     pub static ref FRAME_ALLOCATOR: RwLock<FrameAllocatorImpl> =
         RwLock::new(FrameAllocatorImpl::new());
 }
-pub fn push_elf_area(file: Arc<crate::fs::OSInode>, len: usize) -> Result {
-    //    FRAME_ALLOCATOR.lock().push_elf_area(path, len)
-    let rd = FRAME_ALLOCATOR.read();
-    if len > rd.free_space_size() {
-        log::info!("[push_elf_area] No more space. Trying to replace the saved elfs");
-        let mut v = Vec::new();
-        for i in rd.elfs.iter().enumerate() {
-            if i.1.file_ref().unwrap() == 1 {
-                info!("{}", i.1.file_ref().unwrap());
-                v.push(i.0);
-            }
-        }
-        drop(rd);
-        for i in v {
-            FRAME_ALLOCATOR.write().elfs.remove(i);
-        }
-        if len > FRAME_ALLOCATOR.read().free_space_size() {
-            panic!("[push_elf_area] No space left.")
-        }
-    } else {
-        drop(rd);
-    }
-    let lock = FRAME_ALLOCATOR.read();
-    let v = lock.elfs.iter().find(|now| {
-        if let FileLike::Regular(ref i) = now.map_file.as_ref().unwrap() {
-            i.get_ino() == file.get_ino()
-        } else {
-            false
-        }
-    });
-    if v.is_none() {
-        drop(lock);
-        let mut i = crate::mm::KERNEL_SPACE
-            .lock()
-            .insert_program_area(
-                crate::config::MMAP_BASE.into(),
-                (crate::config::MMAP_BASE + len).into(),
-                crate::mm::MapPermission::R | crate::mm::MapPermission::W,
-            )
-            .unwrap();
-        i.map_file = Some(FileLike::Regular(file));
-        // Note: i must be assigned before being pushed into the frame allocator.
-        FRAME_ALLOCATOR.write().elfs.push(i);
-        Err(core::fmt::Error)
-    } else {
-        crate::mm::KERNEL_SPACE.lock().push_no_alloc(v.unwrap())
-    }
-}
 pub fn init_frame_allocator() {
     extern "C" {
         fn ekernel();
@@ -169,10 +108,19 @@ pub fn init_frame_allocator() {
 }
 
 pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
-    FRAME_ALLOCATOR
+    let ret = FRAME_ALLOCATOR
         .write()
         .alloc()
-        .map(|ppn| Arc::new(FrameTracker::new(ppn)))
+        .map(|ppn| Arc::new(FrameTracker::new(ppn)));
+    if ret.is_some() {
+        ret
+    } else {
+        try_remove_elf(super::elf_cache::ELF_CACHE.read(), None);
+        FRAME_ALLOCATOR
+            .write()
+            .alloc()
+            .map(|ppn| Arc::new(FrameTracker::new(ppn)))
+    }
 }
 
 pub fn frame_dealloc(ppn: PhysPageNum) {
@@ -199,4 +147,7 @@ pub fn frame_allocator_test() {
     }
     drop(v);
     println!("frame_allocator_test passed!");
+}
+pub fn free_space_size_rdlock() -> usize {
+    FRAME_ALLOCATOR.read().free_space_size()
 }

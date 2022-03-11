@@ -1,4 +1,5 @@
 mod address;
+mod elf_cache;
 mod frame_allocator;
 mod heap_allocator;
 mod memory_set;
@@ -6,9 +7,8 @@ mod page_table;
 
 use address::VPNRange;
 pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
-pub use frame_allocator::{
-    frame_alloc, frame_dealloc, push_elf_area, unallocated_frames, FrameTracker,
-};
+pub use elf_cache::push_elf_area;
+pub use frame_allocator::{frame_alloc, frame_dealloc, unallocated_frames, FrameTracker};
 pub use memory_set::remap_test;
 pub use memory_set::{
     kernel_token, mmap, munmap, sbrk, MapFlags, MapPermission, MemorySet, KERNEL_SPACE,
