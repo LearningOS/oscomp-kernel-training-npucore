@@ -43,8 +43,9 @@ else ifeq ($(BOARD), k210)
 endif
 
 # Run K210
-K210-SERIALPORT	= /dev/ttyUSB0
-K210-BURNER	= ../tools/kflash.py
+K210-SERIALPORT-LINUX = /dev/ttyUSB0
+K210-SERIALPORT-WINDOWS = COM3
+K210-BURNER = ../tools/kflash.py
 
 # Binutils
 OBJDUMP := rust-objdump --arch-name=riscv64
@@ -116,22 +117,36 @@ ifeq ($(BOARD), qemu)
         -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0\
 		-smp threads=$(CORE_NUM)
 else
-	(which $(K210-BURNER)) || (cd .. && git clone https://gitee.com/begehau/kflash.py.git && mv kflash.py tools)
+	if [ ! -e "$(K210-BURNER)" ]; then (cd .. && git clone https://gitee.com/begehau/kflash.py.git && mv kflash.py tools) fi
 	@cp $(BOOTLOADER) $(BOOTLOADER).copy
 	@dd if=$(KERNEL_BIN) of=$(BOOTLOADER).copy bs=$(K210_BOOTLOADER_SIZE) seek=1
 	@mv $(BOOTLOADER).copy $(KERNEL_BIN)
-	@sudo chmod 777 $(K210-SERIALPORT)
-	python3 $(K210-BURNER) -p $(K210-SERIALPORT) -b 1500000 $(KERNEL_BIN)
-	python3 -m serial.tools.miniterm --eol LF --dtr 0 --rts 0 --filter direct $(K210-SERIALPORT) 115200
+    ifeq ($(findstring WSL, $(shell uname -a)), )
+		@sudo chmod 777 $(K210-SERIALPORT-LINUX)
+		python3 $(K210-BURNER) -p $(K210-SERIALPORT-LINUX) -b 1500000 $(KERNEL_BIN)
+		python3 -m serial.tools.miniterm --eol LF --dtr 0 --rts 0 --filter direct $(K210-SERIALPORT-LINUX) 115200
+    else
+		powershell.exe 'usbipd wsl detach --all; python $(K210-BURNER) -p $(K210-SERIALPORT-WINDOWS) -b 1500000 $(KERNEL_BIN); (usbipd wsl list | findstr "$(K210-SERIALPORT-WINDOWS)") -match "\d-\d"; usbipd wsl attach --busid $$matches[0]'
+		@sleep 1
+		@sudo chmod 777 $(K210-SERIALPORT-LINUX)
+		python3 -m serial.tools.miniterm --eol LF --dtr 0 --rts 0 --filter direct $(K210-SERIALPORT-LINUX) 115200
+    endif
 endif
 
 
 
 run-k210:
-	(which $(K210-BURNER)) || (cd .. && git clone https://gitee.com/begehau/kflash.py.git && mv kflash.py tools)
-	@sudo chmod 777 $(K210-SERIALPORT)
-	python3 $(K210-BURNER) -p $(K210-SERIALPORT) -b 1500000 $(KERNEL_BIN)
-	python3 -m serial.tools.miniterm --eol LF --dtr 0 --rts 0 --filter direct $(K210-SERIALPORT) 115200
+	if [ ! -e "$(K210-BURNER)" ]; then (cd .. && git clone https://gitee.com/begehau/kflash.py.git && mv kflash.py tools) fi
+    ifeq ($(findstring WSL, $(shell uname -a)), )
+		@sudo chmod 777 $(K210-SERIALPORT-LINUX)
+		python3 $(K210-BURNER) -p $(K210-SERIALPORT-LINUX) -b 1500000 $(KERNEL_BIN)
+		python3 -m serial.tools.miniterm --eol LF --dtr 0 --rts 0 --filter direct $(K210-SERIALPORT-LINUX) 115200
+    else
+		powershell.exe 'usbipd wsl detach --all; python $(K210-BURNER) -p $(K210-SERIALPORT-WINDOWS) -b 1500000 $(KERNEL_BIN); (usbipd wsl list | findstr "$(K210-SERIALPORT-WINDOWS)") -match "\d-\d"; usbipd wsl attach --busid $$matches[0]'
+		@sleep 1
+		@sudo chmod 777 $(K210-SERIALPORT-LINUX)
+		python3 -m serial.tools.miniterm --eol LF --dtr 0 --rts 0 --filter direct $(K210-SERIALPORT-LINUX) 115200
+    endif
 
 
 
