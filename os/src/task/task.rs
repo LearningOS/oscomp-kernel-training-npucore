@@ -10,7 +10,6 @@ use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
 use crate::errno_exit;
 use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
-use crate::mm::ElfAreas;
 use crate::mm::VirtPageNum;
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::ENOANO;
@@ -630,7 +629,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             debug!("[exec] File size: {} bytes", len);
             let start: usize = MMAP_BASE;
             let before_read = crate::mm::unallocated_frames();
-            if crate::mm::push_elf_area(path.to_string(), len).is_err() {
+            if crate::mm::push_elf_area(app_inode.clone(), len).is_err() {
                 unsafe {
                     app_inode
                         .read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
@@ -658,7 +657,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
 
                     *args_vec.first_mut().unwrap() = path.to_string();
-                    let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8];
+                    let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8]; // see if it tells us the path using #!
                     info!("bin_given:{}", bin_given);
                     if bin_given {
                         let last = buffer[0..85.min(buffer.len())]
@@ -731,15 +730,14 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
     }
     ret
     /*
-	
-[ERROR] Unsupported syscall: utimensat , calling over arguments:
-[DEBUG] args[0]: FFFFFFFFFFFFFF9C
-[DEBUG] args[1]: FFFFFFFFFFFFCF1F
-[DEBUG] args[2]: 0
-[DEBUG] args[3]: 0
-[DEBUG] args[4]: 0
-[DEBUG] args[5]: 706050403020100
-*/
+    [ERROR] Unsupported syscall: utimensat , calling over arguments:
+    [DEBUG] args[0]: FFFFFFFFFFFFFF9C
+    [DEBUG] args[1]: FFFFFFFFFFFFCF1F
+    [DEBUG] args[2]: 0
+    [DEBUG] args[3]: 0
+    [DEBUG] args[4]: 0
+    [DEBUG] args[5]: 706050403020100
+    */
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]

@@ -7,7 +7,7 @@ mod page_table;
 use address::VPNRange;
 pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 pub use frame_allocator::{
-    frame_alloc, frame_dealloc, push_elf_area, unallocated_frames, ElfAreas, FrameTracker,
+    frame_alloc, frame_dealloc, push_elf_area, unallocated_frames, FrameTracker,
 };
 pub use memory_set::remap_test;
 pub use memory_set::{

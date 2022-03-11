@@ -181,7 +181,11 @@ impl OSInode {
             -1
         }
     }
-
+    pub fn get_ino(&self) -> usize {
+        let mut i = Kstat::new_abstract();
+        self.get_fstat(&mut i);
+        i.get_ino()
+    }
     pub fn get_fstat(&self, kstat: &mut Kstat) {
         let inner = self.inner.lock();
         let vfile = inner.inode.clone();

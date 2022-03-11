@@ -123,6 +123,9 @@ pub struct Kstat {
 }
 
 impl Kstat {
+    pub fn get_ino(&self) -> usize {
+        self.st_ino as usize
+    }
     pub fn empty() -> Self {
         Self {
             st_dev: 0,

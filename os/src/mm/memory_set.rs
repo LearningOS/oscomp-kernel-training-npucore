@@ -1,4 +1,4 @@
-use super::{frame_alloc, ElfAreas, FrameTracker};
+use super::{frame_alloc, FrameTracker};
 use super::{translated_byte_buffer, UserBuffer};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
@@ -12,6 +12,7 @@ use alloc::vec::Vec;
 use core::borrow::BorrowMut;
 //use proc_macro::Spacing;
 use core::fmt::{Error, Result};
+use core::iter::Map;
 use core::panic;
 use lazy_static::*;
 use log::{debug, error, info, trace, warn};
@@ -42,8 +43,6 @@ pub fn kernel_token() -> usize {
 }
 /// The memory "space" as in user space or kernel space
 pub struct MemorySet {
-    elf_area: Option<Arc<ElfAreas>>,
-    /// The page table of the memory set.
     page_table: PageTable,
     /// The mapped area.
     /// Segments are implemented using this mechanism. In other words, they may be considered a subset of MapArea.
@@ -173,7 +172,6 @@ impl MemorySet {
     /// Create a new struct with no information at all.
     pub fn new_bare() -> Self {
         Self {
-            elf_area: None,
             page_table: PageTable::new(),
             areas: Vec::new(),
             heap_area_idx: None,
@@ -249,20 +247,18 @@ impl MemorySet {
         self.areas.push(map_area);
     }
     /// Push the map area into the memory set without copying or allocation.
-    pub fn push_no_alloc(&mut self, map_area: Arc<ElfAreas>) -> Result {
-        for i in &map_area.areas.data_frames {
+    pub fn push_no_alloc(&mut self, map_area: &MapArea) -> Result {
+        for i in &map_area.data_frames {
             let vpn = i.0;
             if !self.page_table.is_mapped(*vpn) {
                 //if not mapped
-                let pte_flags = PTEFlags::from_bits(map_area.areas.map_perm.bits).unwrap();
+                let pte_flags = PTEFlags::from_bits(map_area.map_perm.bits).unwrap();
                 self.page_table.map(*vpn, i.1.ppn.clone(), pte_flags);
             } else {
                 return Err(Error);
             }
         }
-        self.elf_area = Some(map_area.clone());
-        self.areas
-            .push(self.elf_area.as_ref().unwrap().areas.clone());
+        self.areas.push(map_area.clone());
         Ok(())
     }
     pub fn find_mmap_area_end(&self) -> VirtAddr {
@@ -653,7 +649,7 @@ pub struct MapArea {
     map_type: MapType,
     /// Permissions which are the or of RWXU, where U stands for user.
     map_perm: MapPermission,
-    map_file: Option<FileLike>,
+    pub map_file: Option<FileLike>,
 }
 
 impl MapArea {
@@ -680,6 +676,15 @@ impl MapArea {
             map_perm,
             map_file,
         }
+    }
+    /// Return the reference count to the currently using file if exists.
+    pub fn file_ref(&self) -> Option<usize> {
+        let ret = self.map_file.as_ref().map(|x| match &x {
+            &FileLike::Regular(ref i) => Arc::strong_count(i),
+            &FileLike::Abstract(ref i) => Arc::strong_count(i),
+        });
+        info!("[file_ref] {}", ret.unwrap());
+        ret
     }
     /// Copier, but the physical pages are not allocated,
     /// thus leaving `data_frames` empty.
