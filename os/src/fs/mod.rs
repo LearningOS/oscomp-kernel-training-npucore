@@ -62,4 +62,4 @@ pub use inode::{
 pub use iovec::{IoVec, IoVecs};
 pub use mount::MNT_TABLE;
 pub use pipe::{make_pipe, Pipe};
-pub use stdio::{Stdin, Stdout, _print};
+pub use stdio::{Stdin, Stdout};

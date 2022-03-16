@@ -3,7 +3,7 @@
 */
 use core::convert::Infallible;
 use core::ptr::{read_volatile, write_volatile};
-use embedded_hal::serial::{Read, Write};
+use embedded_hal::serial::nb::{Read, Write};
 
 pub struct Ns16550a {
     base: usize,
@@ -17,10 +17,12 @@ impl Ns16550a {
     }
 }
 
-impl Read<u8> for Ns16550a {
+impl embedded_hal::serial::ErrorType for Ns16550a {
     type Error = Infallible;
+}
 
-    fn try_read(&mut self) -> nb::Result<u8, Self::Error> {
+impl Read<u8> for Ns16550a {
+    fn read(&mut self) -> nb::Result<u8, Self::Error> {
         let pending =
             unsafe { read_volatile((self.base + (offsets::LSR << self.shift)) as *const u8) }
                 & masks::DR;
@@ -35,15 +37,13 @@ impl Read<u8> for Ns16550a {
 }
 
 impl Write<u8> for Ns16550a {
-    type Error = Infallible;
-
-    fn try_write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
+    fn write(&mut self, word: u8) -> nb::Result<(), Self::Error> {
         // 写，但是不刷新
         unsafe { write_volatile((self.base + (offsets::THR << self.shift)) as *mut u8, word) };
         Ok(())
     }
 
-    fn try_flush(&mut self) -> nb::Result<(), Self::Error> {
+    fn flush(&mut self) -> nb::Result<(), Self::Error> {
         let pending =
             unsafe { read_volatile((self.base + (offsets::LSR << self.shift)) as *const u8) }
                 & masks::THRE;

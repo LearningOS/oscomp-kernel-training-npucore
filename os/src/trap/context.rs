@@ -1,4 +1,4 @@
-use riscv::register::sstatus::{self, Sstatus, SPP};
+use riscv::register::sstatus::{self, Sstatus, SPP, set_spp};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -24,7 +24,7 @@ impl TrapContext {
     ) -> Self {
         let mut sstatus = sstatus::read();
         // set CPU privilege to User after trapping back
-        sstatus.set_spp(SPP::User);
+        unsafe { set_spp(SPP::User); }
         let mut cx = Self {
             x: [0; 32],
             sstatus,
