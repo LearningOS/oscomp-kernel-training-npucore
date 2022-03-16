@@ -1,3 +1,4 @@
+#![allow(unused)]
 pub const SUCCESS: isize = 0;
 pub const EPERM: isize = -1;
 pub const ENOENT: isize = -2;

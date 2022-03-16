@@ -2,7 +2,6 @@ use super::{finfo, Dirent, File, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN};
 use crate::color_text;
 use crate::config::PAGE_SIZE;
 use crate::mm::UserBuffer;
-use crate::monitor::SYSCALL_ENABLE;
 use crate::{drivers::BLOCK_DEVICE, println};
 use _core::usize;
 use alloc::string::String;

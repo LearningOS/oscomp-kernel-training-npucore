@@ -19,7 +19,6 @@ mod drivers;
 mod fs;
 mod lang_items;
 mod mm;
-mod monitor;
 mod sbi;
 mod syscall;
 mod task;
