@@ -213,7 +213,7 @@ pub fn sys_crosselect(
     exception_fds: *mut u8,
     timeout: *mut usize,
 ) -> isize {
-    if nfds < 0 {
+    if (nfds as isize) < 0 {
         return -1;
     }
     let token = current_user_token();
@@ -944,7 +944,7 @@ pub fn sys_mypselect(
     timeout: *const TimeSpec,
     sigmask: *const crate::task::signal::Signals,
 ) -> isize {
-    if nfds < 0 {
+    if (nfds as isize) < 0 {
         return -1;
     }
     let token = current_user_token();

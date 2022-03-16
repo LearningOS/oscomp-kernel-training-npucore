@@ -10,13 +10,13 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::borrow::BorrowMut;
-//use proc_macro::Spacing;
 use core::fmt::Result;
 use core::panic;
 use lazy_static::*;
 use log::{debug, error, info, trace, warn};
 use riscv::register::satp;
 use spin::Mutex;
+use core::arch::asm;
 
 extern "C" {
     fn stext();
@@ -622,7 +622,7 @@ impl MemorySet {
         let satp = self.page_table.token();
         unsafe {
             satp::write(satp);
-            llvm_asm!("sfence.vma" :::: "volatile");
+            asm!("sfence.vma");
         }
     }
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {

@@ -266,7 +266,7 @@ impl UserBuffer {
         for buffer in self.buffers.iter_mut() {
             let end = start + buffer.len();
             if end > src_len {
-                &buffer[..src_len - start].copy_from_slice(&src[start..]);
+                buffer[..src_len - start].copy_from_slice(&src[start..]);
                 return src_len;
             }
             else {
@@ -297,7 +297,7 @@ impl UserBuffer {
         for buffer in self.buffers.iter() {
             let end = start + buffer.len();
             if end > dst_len {
-                &dst[start..].copy_from_slice(&buffer[..dst_len - start]);
+                dst[start..].copy_from_slice(&buffer[..dst_len - start]);
                 return dst_len;
             }
             else {

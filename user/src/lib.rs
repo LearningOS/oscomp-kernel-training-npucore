@@ -1,5 +1,4 @@
 #![no_std]
-#![feature(llvm_asm)]
 #![feature(linkage)]
 #![feature(panic_info_message)]
 #![feature(alloc_error_handler)]
@@ -34,21 +33,7 @@ pub fn handle_alloc_error(layout: core::alloc::Layout) -> ! {
 #[linkage = "weak"]
 #[no_mangle]
 #[link_section = ".text.entry"]
-pub extern "C" fn _start() -> ! {
-    unsafe { llvm_asm!("mv a0,sp") };
-    __start_legacy();
-}
-
-pub extern "C" fn __start_legacy() -> ! {
-    let argc: usize;
-    let argv: usize;
-    unsafe { llvm_asm!("mv a1,a0") };
-    unsafe { llvm_asm!("lw a0,0(a0)":"=r"(argc)) };
-    unsafe { llvm_asm!("addi a1, a1, 8":"=r"(argv)) };
-    exit(__start_backup(argc, argv));
-}
-
-pub extern "C" fn __start_backup(argc: usize, argv: usize) -> ! {
+pub extern "C" fn _start(argc: usize, argv: usize) -> ! {
     unsafe {
         HEAP.lock()
             .init(HEAP_SPACE.as_ptr() as usize, USER_HEAP_SIZE);

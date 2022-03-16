@@ -1,15 +1,13 @@
 mod sdcard;
 mod virtio_blk;
 
+pub use sdcard::SDCardWrapper;
+pub use virtio_blk::VirtIOBlock;
+
+use crate::board::BlockDeviceImpl;
 use alloc::sync::Arc;
-use lazy_static::*;
 use simple_fat32::BlockDevice;
-
-#[cfg(feature = "board_qemu")]
-type BlockDeviceImpl = virtio_blk::VirtIOBlock;
-
-#[cfg(feature = "board_k210")]
-type BlockDeviceImpl = sdcard::SDCardWrapper;
+use lazy_static::*;
 
 lazy_static! {
     pub static ref BLOCK_DEVICE: Arc<dyn BlockDevice> = Arc::new(BlockDeviceImpl::new());

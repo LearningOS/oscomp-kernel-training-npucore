@@ -557,7 +557,7 @@ impl TaskControlBlock {
         self.pid.0
     }
     pub fn setpgid(&self, pgid: usize) -> isize {
-        if pgid < 0 {
+        if (pgid as isize) < 0 {
             return -1;
         }
         let mut inner = self.acquire_inner_lock();

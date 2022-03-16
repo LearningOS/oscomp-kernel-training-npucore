@@ -1,3 +1,4 @@
+#![allow(unused)]
 use core::ops::{Add, Sub};
 
 use crate::config::CLOCK_FREQ;
