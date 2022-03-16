@@ -1,11 +1,11 @@
 #![no_std]
 #![no_main]
-use user_lib::{__start_backup, exec, fork, wait, yield_};
+use user_lib::{exit, exec, fork, wait, yield_};
 
 #[no_mangle]
 #[link_section = ".text.entry"]
-pub extern "C" fn _start(argc: usize, argv: usize) -> ! {
-    __start_backup(argc, argv)
+pub extern "C" fn _start() -> ! {
+    exit(main());
 }
 
 #[no_mangle]
