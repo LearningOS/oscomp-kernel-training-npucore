@@ -1,16 +1,6 @@
-const SYSCALL_DUP: usize = 23; //23?
-
-//const SYSCALL_DUP: usize = 23;
-const SYSCALL_DUP3: usize = 24;
-
-const SYSCALL_OPEN: usize = 506; //where?
-
-const SYSCALL_GET_TIME: usize = 1690; //you mean get time of day by 169?
-
-const SYSCALL_FORK: usize = 220; //clone? who is fork?
-
-const SYSCALL_WAITPID: usize = 260; //wait4 is 260
 const SYSCALL_GETCWD: usize = 17;
+const SYSCALL_DUP: usize = 23;
+const SYSCALL_DUP3: usize = 24;
 const SYSCALL_FCNTL: usize = 25;
 const SYSCALL_IOCTL: usize = 29;
 const SYSCALL_MKDIRAT: usize = 34;
@@ -65,12 +55,12 @@ const SYSCALL_GETTID: usize = 178;
 const SYSCALL_SBRK: usize = 213;
 const SYSCALL_BRK: usize = 214;
 const SYSCALL_MUNMAP: usize = 215;
-const SYSCALL_CLONE: usize = 220;
-const SYSCALL_EXEC: usize = 2210;
-const SYSCALL_EXECEV: usize = 221;
+// Warning, we don't implement clone, we implement fork instead.
+const SYSCALL_CLONE: usize = 220; // fork is implemented as clone(SIGCHLD, 0) in lib.
+const SYSCALL_EXECVE: usize = 221;
 const SYSCALL_MMAP: usize = 222;
 const SYSCALL_MPROTECT: usize = 226;
-const SYSCALL_WAIT4: usize = 260;
+const SYSCALL_WAIT4: usize = 260; // wait is implemented as wait4(pid, status, options, 0) in lib.
 const SYSCALL_PRLIMIT: usize = 261;
 const SYSCALL_RENAMEAT2: usize = 276;
 
@@ -78,6 +68,8 @@ const SYSCALL_RENAMEAT2: usize = 276;
 const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
 const SYSCALL_CLEAR: usize = 502;
+const SYSCALL_OPEN: usize = 506; //where?
+const SYSCALL_GET_TIME: usize = 1690; //you mean get time of day by 169?
 
 pub mod errno;
 pub mod fs;
@@ -94,8 +86,6 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_DUP3 => "dup3",
         SYSCALL_OPEN => "open",
         SYSCALL_GET_TIME => "get_time",
-        SYSCALL_FORK => "fork",
-        SYSCALL_WAITPID => "waitpid",
         SYSCALL_GETCWD => "getcwd",
         SYSCALL_FCNTL => "fcntl",
         SYSCALL_IOCTL => "ioctl",
@@ -152,8 +142,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_BRK => "brk",
         SYSCALL_MUNMAP => "munmap",
         SYSCALL_CLONE => "clone",
-        SYSCALL_EXEC => "exec",
-        SYSCALL_EXECEV => "execev",
+        SYSCALL_EXECVE => "execve",
         SYSCALL_MMAP => "mmap",
         SYSCALL_MPROTECT => "mprotect",
         SYSCALL_WAIT4 => "wait4",
@@ -265,10 +254,9 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_UNAME => sys_uname(args[0] as *mut u8),
         SYSCALL_GETPID => sys_getpid(),
         SYSCALL_GETPPID => sys_getppid(),
-        SYSCALL_FORK => sys_fork(),
-        SYSCALL_EXECEV => sys_exec(args[0] as *const u8, args[1] as *const usize),
-        SYSCALL_EXEC => sys_exec(args[0] as *const u8, args[1] as *const usize),
-        SYSCALL_WAITPID => sys_waitpid(args[0] as isize, args[1] as *mut i32, args[2] as usize),
+        SYSCALL_CLONE => sys_fork(),
+        SYSCALL_EXECVE => sys_exec(args[0] as *const u8, args[1] as *const usize),
+        SYSCALL_WAIT4 => sys_wait4(args[0] as isize, args[1] as *mut i32, args[2] as usize),
         SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0] as usize),
         SYSCALL_GETUID => sys_getuid(),
         SYSCALL_GETEUID => sys_geteuid(),

@@ -281,7 +281,7 @@ bitflags! {
 }
 /// If there is not a child process whose pid is same as given, return -1.
 /// Else if there is a child process but it is still running, return -2.
-pub fn sys_waitpid(pid: isize, status: *mut i32, option: usize) -> isize {
+pub fn sys_wait4(pid: isize, status: *mut i32, option: usize) -> isize {
     let option = WaitOption::from_bits(option).unwrap();
     info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
     let task = current_task().unwrap();

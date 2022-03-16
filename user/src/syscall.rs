@@ -1,16 +1,7 @@
-const SYSCALL_DUP: usize = 24; //23?
-
-//const SYSCALL_DUP: usize = 23;
-//const SYSCALL_DUP3:usize = 24;
-
-const SYSCALL_OPEN: usize = 506; //where?
-
-const SYSCALL_GET_TIME: usize = 1690; //you mean get time of day by 169?
-
-const SYSCALL_FORK: usize = 220; //clone? who is fork?
-
-const SYSCALL_WAITPID: usize = 260; //wait4 is 260
+#![allow(unused)]
 const SYSCALL_GETCWD: usize = 17;
+const SYSCALL_DUP: usize = 23;
+const SYSCALL_DUP3: usize = 24;
 const SYSCALL_FCNTL: usize = 25;
 const SYSCALL_IOCTL: usize = 29;
 const SYSCALL_MKDIRAT: usize = 34;
@@ -27,9 +18,11 @@ const SYSCALL_GETDENTS64: usize = 61;
 const SYSCALL_LSEEK: usize = 62;
 const SYSCALL_READ: usize = 63;
 const SYSCALL_WRITE: usize = 64;
+const SYSCALL_READV: usize = 65;
 const SYSCALL_WRITEV: usize = 66;
 const SYSCALL_SENDFILE: usize = 71;
 const SYSCALL_PSELECT6: usize = 72;
+const SYSCALL_PPOLL: usize = 73;
 const SYSCALL_READLINKAT: usize = 78;
 const SYSCALL_NEW_FSTATAT: usize = 79;
 const SYSCALL_FSTAT: usize = 80;
@@ -45,8 +38,11 @@ const SYSCALL_CLOCK_GETTIME: usize = 113;
 const SYSCALL_YIELD: usize = 124;
 const SYSCALL_KILL: usize = 129;
 const SYSCALL_SIGACTION: usize = 134;
+const SYSCALL_SIGPROCMASK: usize = 135;
 const SYSCALL_SIGRETURN: usize = 139;
 const SYSCALL_TIMES: usize = 153;
+const SYSCALL_SETPGID: usize = 154;
+const SYSCALL_GETPGID: usize = 155;
 const SYSCALL_UNAME: usize = 160;
 const SYSCALL_GETRUSAGE: usize = 165;
 const SYSCALL_GET_TIME_OF_DAY: usize = 169;
@@ -60,12 +56,11 @@ const SYSCALL_GETTID: usize = 178;
 const SYSCALL_SBRK: usize = 213;
 const SYSCALL_BRK: usize = 214;
 const SYSCALL_MUNMAP: usize = 215;
-const SYSCALL_CLONE: usize = 220;
-const SYSCALL_EXECEV: usize = 221;
-const SYSCALL_EXEC: usize = 2210;
+const SYSCALL_CLONE: usize = 220; // fork is a warpper
+const SYSCALL_EXECVE: usize = 221;
 const SYSCALL_MMAP: usize = 222;
 const SYSCALL_MPROTECT: usize = 226;
-const SYSCALL_WAIT4: usize = 260;
+const SYSCALL_WAIT4: usize = 260; // waitpid is a warpper of this
 const SYSCALL_PRLIMIT: usize = 261;
 const SYSCALL_RENAMEAT2: usize = 276;
 
@@ -73,6 +68,8 @@ const SYSCALL_RENAMEAT2: usize = 276;
 const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
 const SYSCALL_CLEAR: usize = 502;
+const SYSCALL_OPEN: usize = 506; //where?
+const SYSCALL_GET_TIME: usize = 1690; //you mean get time of day by 169?
 
 fn syscall(id: usize, args: [usize; 3]) -> isize {
     let mut ret: isize;
@@ -132,16 +129,16 @@ pub fn sys_getpid() -> isize {
 }
 
 pub fn sys_fork() -> isize {
-    syscall(SYSCALL_FORK, [0, 0, 0])
+    syscall(SYSCALL_CLONE, [0, 0, 0])
 }
 
 pub fn sys_exec(path: &str, args: &[*const u8]) -> isize {
     syscall(
-        SYSCALL_EXEC,
+        SYSCALL_EXECVE,
         [path.as_ptr() as usize, args.as_ptr() as usize, 0],
     )
 }
 
 pub fn sys_waitpid(pid: isize, exit_code: *mut i32) -> isize {
-    syscall(SYSCALL_WAITPID, [pid as usize, exit_code as usize, 0])
+    syscall(SYSCALL_WAIT4, [pid as usize, exit_code as usize, 0])
 }
