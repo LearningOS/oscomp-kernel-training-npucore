@@ -1,6 +1,8 @@
 # Building
 TARGET := riscv64gc-unknown-none-elf
 MODE := release
+RUSTSBI_K210_ELF := ../rustsbi-k210/target/riscv64imac-unknown-none-elf/debug/rustsbi-k210
+RUSTSBI_K210_BIN := $(RUSTSBI_K210_ELF).bin
 KERNEL_ELF := target/$(TARGET)/$(MODE)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
 DISASM_TMP := target/$(TARGET)/$(MODE)/asm
@@ -44,7 +46,7 @@ endif
 
 # Run K210
 K210-SERIALPORT-LINUX = /dev/ttyUSB0
-K210-SERIALPORT-WINDOWS = COM3
+K210-SERIALPORT-WINDOWS = COM11
 K210-BURNER = ../tools/kflash.py
 
 # Binutils
@@ -72,10 +74,15 @@ rust-user:
 	@cd ../user && make rust-user
 # dev/zero永远输出0
 sdcard:
-	@echo "Are you sure write to $(SDCARD) ? [y/N] " && read ans && [ $${ans:-N} = y ]
-#	@sudo dd if=/dev/zero of=$(SDCARD) bs=1048576 count=16
-#	@sudo dd if=$(FS_IMG) of=$(SDCARD)
-	./buildfs.sh "$(SDCARD)"
+    ifeq ($(findstring WSL, $(shell uname -a)), )
+		@echo "Are you sure write to $(SDCARD) ? [y/N] " && read ans && [ $${ans:-N} = y ]
+		./buildfs.sh "$(SDCARD)"
+    else
+		@echo "Are you sure write to E:/ ? [y/N] " && read ans && [ $${ans:-N} = y ]
+		@sudo mount ../fat32-fuse/fat32.img ../fat32-fuse/fs
+		@powershell.exe 'cd ../fat32-fuse; copy -path "$$(pwd)/fs/*" -destination "E:/" -force'
+		@sudo umount ../fat32-fuse/fs
+    endif
 
 $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
@@ -89,15 +96,20 @@ fat32: $(U_FAT32_DIR)/fat32.img
 fsimg-format:
 	sudo mkfs.vfat -F 32 ${U_FAT32}
 
+bootloader:
+	@cd ../rustsbi-k210 && cargo build
+	@$(OBJCOPY) $(RUSTSBI_K210_ELF) --strip-all -O binary ../bootloader/rustsbi-k210.bin
+	@$(OBJDUMP) -S $(RUSTSBI_K210_ELF) > ../bootloader/rustsbi-k210.S
+
 kernel:
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
-ifeq ($(MODE), debug)
-	@cargo build --features "board_$(BOARD)"
-else
-	@cargo build --release --features "board_$(BOARD)"
-endif
-	@rm src/linker.ld
+    ifeq ($(MODE), debug)
+		@cargo build --features "board_$(BOARD)"
+    else
+		@cargo build --release --features "board_$(BOARD)"
+    endif
+		@rm src/linker.ld
 
 clean:
 	@cargo clean
