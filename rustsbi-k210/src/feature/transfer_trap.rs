@@ -8,7 +8,7 @@ pub unsafe fn should_transfer_trap(ctx: &mut SupervisorContext) -> bool {
 }
 
 pub unsafe fn do_transfer_trap(ctx: &mut SupervisorContext, cause: scause::Trap) {
-    rustsbi::println!("[rustsbi] transfer trap");
+    //rustsbi::println!("[rustsbi] transfer trap");
     // 设置S层异常原因为：非法指令
     scause::set(cause);
     // 填写异常指令的指令内容
