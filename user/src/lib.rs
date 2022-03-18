@@ -13,9 +13,10 @@ extern crate alloc;
 #[macro_use]
 extern crate bitflags;
 
+use core::arch::asm;
+
 use alloc::vec::Vec;
 use buddy_system_allocator::LockedHeap;
-use syscall::*;
 pub use usr_call::*;
 
 const USER_HEAP_SIZE: usize = 32768;
@@ -33,7 +34,23 @@ pub fn handle_alloc_error(layout: core::alloc::Layout) -> ! {
 #[linkage = "weak"]
 #[no_mangle]
 #[link_section = ".text.entry"]
-pub extern "C" fn _start(argc: usize, argv: usize) -> ! {
+pub extern "C" fn _start() -> ! {
+    let argc: usize;
+    let argv: usize;
+    unsafe {
+        asm!(
+            "ld a0, 0(sp)",
+            "add a1, sp, 8",
+            out("a0") argc,
+            out("a1") argv
+        );
+    }
+    _parameter(argc, argv);
+}
+
+#[linkage = "weak"]
+#[no_mangle]
+pub extern "C" fn _parameter(argc: usize, argv: usize) -> ! {
     unsafe {
         HEAP.lock()
             .init(HEAP_SPACE.as_ptr() as usize, USER_HEAP_SIZE);
