@@ -74,9 +74,15 @@ impl FrameAllocator for StackFrameAllocator {
     }
     fn alloc(&mut self) -> Option<PhysPageNum> {
         if let Some(ppn) = self.recycled.pop() {
+            let __ppn: PhysPageNum = ppn.into();
+            log::info!("[frame_alloc] {:?}", __ppn);
             Some(ppn.into())
+        } else if self.current == self.end {
+            None
         } else {
             self.current += 1;
+            let __ppn: PhysPageNum = (self.current - 1).into();
+            log::info!("[frame_alloc] {:?}", __ppn);
             Some((self.current - 1).into())
         }
     }
@@ -115,6 +121,7 @@ pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     if ret.is_some() {
         ret
     } else {
+        log::info!("Hit GC");
         try_remove_elf(super::elf_cache::ELF_CACHE.read(), None);
         FRAME_ALLOCATOR
             .write()

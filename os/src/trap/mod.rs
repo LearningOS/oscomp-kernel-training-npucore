@@ -1,7 +1,5 @@
 mod context;
 
-use core::borrow::BorrowMut;
-use core::fmt::Error;
 use core::arch::{asm, global_asm};
 
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
@@ -147,7 +145,12 @@ pub fn trap_from_kernel() -> ! {
     println!("I will protect {:X}!", __call_sigreturn as usize);
     // It seems like rust has not keyword like "volatile" to protect some variables from being optimized out.
     // So I have to put it here. Hope someone can find a better way to solve it!
-    panic!("a trap {:?} from kernel!", scause::read().cause());
+    panic!(
+        "a trap {:?} from kernel! bad addr = {:#x}, bad instruction = {:#x}",
+        scause::read().cause(),
+        stval::read(),
+        current_trap_cx().sepc
+    );
 }
 
 pub use context::TrapContext;
