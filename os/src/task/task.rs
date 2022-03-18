@@ -723,7 +723,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
     {
         if ret == ENOEXEC {
             unsafe {
-                llvm_asm!("sfence.vma" :::: "volatile");
+                core::arch::asm!("sfence.vma");
             }
             ret = elf_exec(&mut path, &mut args_vec);
         }
