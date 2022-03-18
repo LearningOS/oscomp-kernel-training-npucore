@@ -5,10 +5,11 @@ use core::fmt::Error;
 use core::arch::{asm, global_asm};
 
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
-use crate::mm::{PhysPageNum, VirtPageNum, VirtAddr, MapPermission};
+use crate::mm::{MapPermission, PhysPageNum, VirtAddr, VirtPageNum};
 use crate::syscall::syscall;
 use crate::task::{
-    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, current_task, do_signal, Signals,
+    current_task, current_trap_cx, current_user_token, do_signal, exit_current_and_run_next,
+    suspend_current_and_run_next, Signals,
 };
 use crate::timer::set_next_trigger;
 use riscv::register::{
@@ -80,10 +81,15 @@ pub fn trap_handler() -> ! {
             let task = current_task().unwrap();
             let mut inner = task.acquire_inner_lock();
             let addr = VirtAddr::from(stval);
-            log::debug!("[page_fault] pid: {}, type: {:?}", task.pid.0, scause.cause());
+            log::debug!(
+                "[page_fault] pid: {}, type: {:?}",
+                task.pid.0,
+                scause.cause()
+            );
+            // This is where we handle the page fault.
             if inner.memory_set.do_page_fault(addr).is_err() {
                 inner.add_signal(Signals::SIGSEGV);
-                log::debug!("{:?}",inner.siginfo);
+                log::debug!("{:?}", inner.siginfo);
             }
         }
         Trap::Exception(Exception::IllegalInstruction) => {

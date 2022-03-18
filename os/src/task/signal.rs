@@ -168,6 +168,14 @@ impl Debug for SigAction {
     }
 }
 
+/// Change the action taken by a process on receipt of a specific signal.
+/// (See signal(7) for  an  overview of signals.)
+/// # Fields in Structure of `act` & `oldact`
+/// 
+/// # Arguments
+/// * `signum`: specifies the signal and can be any valid signal except `SIGKILL` and `SIGSTOP`.
+/// * `act`: new action
+/// * `oldact`: new action
 pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -> isize {
     let task = current_task();
     let token = current_user_token();
@@ -285,6 +293,7 @@ pub fn do_signal() {
     }
 }
 
+/// fetch and/or change the signal mask of the calling thread.
 pub fn sigprocmask(how: usize, set: *const Signals, oldset: *mut Signals) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();

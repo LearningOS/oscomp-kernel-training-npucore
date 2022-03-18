@@ -33,6 +33,7 @@ pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
     pub kernel_stack: KernelStack,
+    pub bin_path: String,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
 }
@@ -246,6 +247,8 @@ impl TaskControlBlock {
     pub fn acquire_inner_lock(&self) -> MutexGuard<TaskControlBlockInner> {
         self.inner.lock()
     }
+    /// !!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!!!!!!!!
+    /// Currently used for initproc loading only. bin_path must be used changed if used elsewhere.
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, user_sp, user_heap, entry_point, auxv) = MemorySet::from_elf(elf_data);
@@ -265,6 +268,7 @@ impl TaskControlBlock {
         // push a task context which goes to trap_return to the top of kernel stack
         let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
         let task_control_block = Self {
+            bin_path: String::from("initproc"),
             pid: pid_handle,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
@@ -321,6 +325,83 @@ impl TaskControlBlock {
         debug!("args.len():{}", args.len());
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
             MemorySet::from_elf(elf_data);
+        let mut envp_base: usize = 0;
+        let mut argv_base: usize = 0;
+        let mut auxv_base: usize = 0;
+        let mut p: usize = 0;
+
+        /////////////////////// start of macro definition ///////////////////////
+        macro_rules! auxv_push {
+            ($ty:expr,$val:expr) => {
+                auxv.push(AuxHeader {
+                    aux_type: $ty,
+                    value: $val,
+                });
+            };
+        }
+        macro_rules! usr_sp_mov {
+            ($step:expr) => {
+                user_sp -= $step
+            };
+            ($step:ty,$times:expr) => {
+                usr_sp_mov!(($times * core::mem::size_of::<$step>()));
+            };
+        }
+        macro_rules! usr_sp_align {
+            ($name:ty) => {
+                usr_sp_align!(core::mem::size_of::<$name>());
+            };
+            ($times:expr) => {
+                usr_sp_mov!(user_sp % $times);
+            };
+            ($name:ident,$times:expr) => {
+                usr_sp_mov!(user_sp % ($times * core::mem::size_of::<$name>()));
+            };
+        }
+        /// Note: pointer p is shared globally. After the copy, it will point to the vec[len()]
+        macro_rules! byte_copy {
+            ($iter_name:expr) => {
+                p = user_sp;
+                for c in $iter_name {
+                    *translated_refmut(memory_set.token(), p as *mut u8) = (*c) as u8;
+                    p += 1;
+                }
+                *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+            };
+        }
+        macro_rules! arg_copy_arr {
+            ($env:ident,$arr:ident) => {
+                $arr[$env.len()] = 0;
+                for i in 0..$env.len() {
+                    user_sp -= $env[i].len() + 1;
+                    $arr[i] = user_sp;
+                    byte_copy!($env[i].as_bytes());
+                    *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+                }
+            };
+        }
+        macro_rules! usr_arg_push {
+            ($name:ident,$base:ident,$trg:ident) => {
+                usr_arg_push!($name, $base, $trg, 1, usize);
+                *translated_refmut(
+                    memory_set.token(),
+                    (user_sp + core::mem::size_of::<usize>() * ($name.len())) as *mut usize,
+                ) = 0;
+            };
+            ($name:ident,$base:ident,$trg:ident,$marg:expr,$tyname:ty) => {
+                usr_sp_mov!($tyname, $name.len() + $marg);
+                $base = user_sp;
+                for i in 0..$name.len() {
+                    *translated_refmut(
+                        memory_set.token(),
+                        (user_sp + core::mem::size_of::<$tyname>() * i) as *mut $tyname,
+                    ) = $trg[i];
+                }
+            };
+        }
+        /////////////////////// end of macro definition ///////////////////////
+
+        /////////////////////// start of exec loading ///////////////////////
         info!(
             "[exec] elf_data LOADED. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}",
             user_sp, user_heap, entry_point
@@ -334,145 +415,70 @@ impl TaskControlBlock {
             .ppn();
 
         ////////////// envp[] ///////////////////
-        let mut env: Vec<String> = Vec::new();
-        env.push(String::from("SHELL=/user_shell"));
-        env.push(String::from("PWD=/"));
-        env.push(String::from("USER=root"));
-        env.push(String::from("MOTD_SHOWN=pam"));
-        env.push(String::from("LANG=C.UTF-8"));
-        env.push(String::from(
+        let mut env = [
+            "SHELL=/user_shell",
+            "PWD=/",
+            "USER=root",
+            "MOTD_SHOWN=pam",
+            "LANG=C.UTF-8",
             "INVOCATION_ID=e9500a871cf044d9886a157f53826684",
-        ));
-        env.push(String::from("TERM=vt220"));
-        env.push(String::from("SHLVL=2"));
-        env.push(String::from("JOURNAL_STREAM=8:9265"));
-        env.push(String::from("OLDPWD=/root"));
-        env.push(String::from("_=busybox"));
-        env.push(String::from("LOGNAME=root"));
-        env.push(String::from("HOME=/"));
-        env.push(String::from("PATH=/"));
+            "TERM=vt220",
+            "SHLVL=2",
+            "JOURNAL_STREAM=8:9265",
+            "OLDPWD=/root",
+            "_=busybox",
+            "LOGNAME=root",
+            "HOME=/",
+            "PATH=/",
+        ]
+        .iter()
+        .map(|&x| x.to_string())
+        .collect::<Vec<String>>();
         let mut envp: Vec<usize> = (0..=env.len()).collect();
-        envp[env.len()] = 0;
-        for i in 0..env.len() {
-            user_sp -= env[i].len() + 1;
-            envp[i] = user_sp;
-            let mut p = user_sp;
-            // write chars to [user_sp, user_sp + len]
-            for c in env[i].as_bytes() {
-                *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-                p += 1;
-            }
-            *translated_refmut(memory_set.token(), p as *mut u8) = 0;
-        }
+        arg_copy_arr!(env, envp);
         // make the user_sp aligned to 8B for k210 platform
-        user_sp -= user_sp % core::mem::size_of::<usize>();
+        usr_sp_align!(usize);
 
         // push arguments on user stack
-        let mut argv: Vec<_> = (0..=args.len()).collect();
-        argv[args.len()] = 0;
-        for i in 0..args.len() {
-            user_sp -= args[i].len() + 1;
-            argv[i] = user_sp;
-            let mut p = user_sp;
-            for c in args[i].as_bytes() {
-                *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-                p += 1;
-            }
-            *translated_refmut(memory_set.token(), p as *mut u8) = 0;
-        }
+        let mut argv: Vec<usize> = (0..=args.len()).collect();
+        arg_copy_arr!(args, argv);
         // make the user_sp aligned to 8B for k210 platform
-        user_sp -= user_sp % core::mem::size_of::<usize>();
+        usr_sp_align!(usize);
 
         ////////////// platform String ///////////////////
         let platform = "RISC-V64";
-        user_sp -= platform.len() + 1;
-        user_sp -= user_sp % core::mem::size_of::<usize>();
-        let mut p = user_sp;
-        for c in platform.as_bytes() {
-            *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-            p += 1;
-        }
-        *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+        usr_sp_mov!(platform.len() + 1);
+        usr_sp_align!(usize);
+        byte_copy!(platform.as_bytes());
 
         ////////////// rand bytes ///////////////////
-        user_sp -= 16;
+        usr_sp_mov!(16);
+        auxv_push!(AT_RANDOM, user_sp);
+
+        let mut p = 0;
         p = user_sp;
-        auxv.push(AuxHeader {
-            aux_type: AT_RANDOM,
-            value: user_sp,
-        });
         for i in 0..0xf {
             *translated_refmut(memory_set.token(), p as *mut u8) = i as u8;
             p += 1;
         }
 
         ////////////// padding //////////////////////
-        user_sp -= user_sp % 16;
+        usr_sp_align!(16);
 
         ////////////// auxv[] //////////////////////
-        auxv.push(AuxHeader {
-            aux_type: AT_EXECFN,
-            value: argv[0],
-        }); // file name
-        auxv.push(AuxHeader {
-            aux_type: AT_NULL,
-            value: 0,
-        }); // end
-        user_sp -= auxv.len() * core::mem::size_of::<AuxHeader>();
-        let auxv_base = user_sp;
-        // println!("[auxv]: base 0x{:X}", auxv_base);
-        for i in 0..auxv.len() {
-            // println!("[auxv]: {:?}", auxv[i]);
-            let addr = user_sp + core::mem::size_of::<AuxHeader>() * i;
-            *translated_refmut(memory_set.token(), addr as *mut usize) = auxv[i].aux_type;
-            *translated_refmut(
-                memory_set.token(),
-                (addr + core::mem::size_of::<usize>()) as *mut usize,
-            ) = auxv[i].value;
-        }
+        auxv_push!(AT_EXECFN, argv[0]); // file name
+        auxv_push!(AT_NULL, 0); // end
+        usr_arg_push!(auxv, auxv_base, auxv, 0, AuxHeader);
 
         ////////////// *envp [] //////////////////////
-        user_sp -= (env.len() + 1) * core::mem::size_of::<usize>();
-        let envp_base = user_sp;
-        *translated_refmut(
-            memory_set.token(),
-            (user_sp + core::mem::size_of::<usize>() * (env.len())) as *mut usize,
-        ) = 0;
-        for i in 0..env.len() {
-            *translated_refmut(
-                memory_set.token(),
-                (user_sp + core::mem::size_of::<usize>() * i) as *mut usize,
-            ) = envp[i];
-        }
-
+        usr_arg_push!(env, envp_base, envp);
         ////////////// *argv [] //////////////////////
-        user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
-        let argv_base = user_sp;
-        *translated_refmut(
-            memory_set.token(),
-            (user_sp + core::mem::size_of::<usize>() * (args.len())) as *mut usize,
-        ) = 0;
-        for i in 0..args.len() {
-            *translated_refmut(
-                memory_set.token(),
-                (user_sp + core::mem::size_of::<usize>() * i) as *mut usize,
-            ) = argv[i];
-        }
+        usr_arg_push!(args, argv_base, argv);
 
         ////////////// argc //////////////////////
         user_sp -= core::mem::size_of::<usize>();
         *translated_refmut(memory_set.token(), user_sp as *mut usize) = args.len();
 
-        // **** hold current PCB lock
-        let mut inner = self.acquire_inner_lock();
-        // substitute memory_set
-        inner.memory_set = memory_set;
-        inner.heap_bottom = user_heap;
-        inner.heap_pt = user_heap;
-        // flush signal handler
-        inner.siginfo.signal_handler = BTreeMap::new();
-        // update trap_cx ppn
-        inner.trap_cx_ppn = trap_cx_ppn;
         // initialize trap_cx
         let mut trap_cx = TrapContext::app_init_context(
             entry_point,
@@ -485,6 +491,16 @@ impl TaskControlBlock {
         trap_cx.x[11] = argv_base;
         trap_cx.x[12] = envp_base;
         trap_cx.x[13] = auxv_base;
+        // **** hold current PCB lock
+        let mut inner = self.acquire_inner_lock();
+        // substitute memory_set
+        inner.memory_set = memory_set;
+        inner.heap_bottom = user_heap;
+        inner.heap_pt = user_heap;
+        // flush signal handler
+        inner.siginfo.signal_handler = BTreeMap::new();
+        // update trap_cx ppn
+        inner.trap_cx_ppn = trap_cx_ppn;
         *inner.get_trap_cx() = trap_cx;
         // **** release current PCB lock
     }
@@ -515,6 +531,7 @@ impl TaskControlBlock {
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
+            bin_path: self.bin_path.clone(),
             inner: Mutex::new(TaskControlBlockInner {
                 //inherited
                 pgid: parent_inner.pgid,
@@ -612,13 +629,13 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             debug!("[exec] File size: {} bytes", len);
             let start: usize = MMAP_BASE;
             let before_read = crate::mm::unallocated_frames();
-            crate::mm::KERNEL_SPACE.lock().insert_framed_area(
-                start.into(),
-                (start + len).into(),
-                MapPermission::R | MapPermission::W,
-            );
-            unsafe {
-                app_inode.read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+            if crate::mm::push_elf_area(app_inode.clone()).is_err() {
+                unsafe {
+                    app_inode
+                        .read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+                }
+            } else {
+                info!("Trying not to load anything.");
             }
             //let after_read = crate::mm::unallocated_frames();
             show_frame_consumption!("read_all() DONE", before_read);
@@ -638,7 +655,9 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
                     //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
                     //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
-                    let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8];
+
+                    *args_vec.first_mut().unwrap() = path.to_string();
+                    let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8]; // see if it tells us the path using #!
                     info!("bin_given:{}", bin_given);
                     if bin_given {
                         let last = buffer[0..85.min(buffer.len())]
@@ -656,7 +675,8 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                         }
                         info!("path_bin:{}", path_bin);
                         //end of assign_to_bin
-                        if path_bin == ("/bin/sh") {
+                        if ["/bin/sh", "/bin/bash"].contains(&&(path_bin[..])) {
+                            info!("[exec]path_bin==/bin/sh");
                             *path = String::from("/busybox");
                             args_vec.insert(0, String::from("sh"));
                             args_vec.insert(0, path.to_string());
@@ -702,10 +722,22 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
     let mut ret = elf_exec(&mut path, &mut args_vec);
     {
         if ret == ENOEXEC {
+            unsafe {
+                llvm_asm!("sfence.vma" :::: "volatile");
+            }
             ret = elf_exec(&mut path, &mut args_vec);
         }
     }
     ret
+    /*
+    [ERROR] Unsupported syscall: utimensat , calling over arguments:
+    [DEBUG] args[0]: FFFFFFFFFFFFFF9C
+    [DEBUG] args[1]: FFFFFFFFFFFFCF1F
+    [DEBUG] args[2]: 0
+    [DEBUG] args[3]: 0
+    [DEBUG] args[4]: 0
+    [DEBUG] args[5]: 706050403020100
+    */
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -730,7 +762,7 @@ impl ProcAddress {
         }
     }
 }
-
+#[derive(Clone, Copy)]
 pub struct AuxHeader {
     pub aux_type: usize,
     pub value: usize,

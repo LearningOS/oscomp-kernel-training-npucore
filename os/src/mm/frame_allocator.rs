@@ -1,9 +1,15 @@
-use super::{PhysAddr, PhysPageNum};
-use crate::config::MEMORY_END;
-use alloc::{vec::Vec, sync::Arc};
-use core::fmt::{self, Debug, Formatter};
+use super::{elf_cache::try_remove_elf, memory_set::MapArea, PhysAddr, PhysPageNum};
+use crate::{
+    config::{MEMORY_END, PAGE_SIZE},
+    fs::FileLike,
+};
+// KISS
+use alloc::{string::String, sync::Arc, vec::Vec};
+use core::fmt::{self, Debug, Error, Formatter, Result};
+use k210_hal::cache::Uncache;
 use lazy_static::*;
-use spin::Mutex;
+use log::info;
+use spin::RwLock;
 
 pub struct FrameTracker {
     pub ppn: PhysPageNum,
@@ -51,8 +57,11 @@ impl StackFrameAllocator {
         self.end = r.0;
         println!("last {} Physical Frames.", self.end - self.current);
     }
-    pub fn unallocated_frames(&mut self) -> usize {
+    pub fn unallocated_frames(&self) -> usize {
         self.recycled.len() + self.end - self.current
+    }
+    pub fn free_space_size(&self) -> usize {
+        self.unallocated_frames() * PAGE_SIZE
     }
 }
 impl FrameAllocator for StackFrameAllocator {
@@ -67,12 +76,8 @@ impl FrameAllocator for StackFrameAllocator {
         if let Some(ppn) = self.recycled.pop() {
             Some(ppn.into())
         } else {
-            if self.current == self.end {
-                None
-            } else {
-                self.current += 1;
-                Some((self.current - 1).into())
-            }
+            self.current += 1;
+            Some((self.current - 1).into())
         }
     }
     fn dealloc(&mut self, ppn: PhysPageNum) {
@@ -89,33 +94,41 @@ impl FrameAllocator for StackFrameAllocator {
 type FrameAllocatorImpl = StackFrameAllocator;
 
 lazy_static! {
-    pub static ref FRAME_ALLOCATOR: Mutex<FrameAllocatorImpl> =
-        Mutex::new(FrameAllocatorImpl::new());
+    pub static ref FRAME_ALLOCATOR: RwLock<FrameAllocatorImpl> =
+        RwLock::new(FrameAllocatorImpl::new());
 }
-
 pub fn init_frame_allocator() {
     extern "C" {
         fn ekernel();
     }
-    FRAME_ALLOCATOR.lock().init(
+    FRAME_ALLOCATOR.write().init(
         PhysAddr::from(ekernel as usize).ceil(),
         PhysAddr::from(MEMORY_END).floor(),
     );
 }
 
 pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
-    FRAME_ALLOCATOR
-        .lock()
+    let ret = FRAME_ALLOCATOR
+        .write()
         .alloc()
-        .map(|ppn| Arc::new(FrameTracker::new(ppn)))
+        .map(|ppn| Arc::new(FrameTracker::new(ppn)));
+    if ret.is_some() {
+        ret
+    } else {
+        try_remove_elf(super::elf_cache::ELF_CACHE.read(), None);
+        FRAME_ALLOCATOR
+            .write()
+            .alloc()
+            .map(|ppn| Arc::new(FrameTracker::new(ppn)))
+    }
 }
 
 pub fn frame_dealloc(ppn: PhysPageNum) {
-    FRAME_ALLOCATOR.lock().dealloc(ppn);
+    FRAME_ALLOCATOR.write().dealloc(ppn);
 }
 
 pub fn unallocated_frames() -> usize {
-    FRAME_ALLOCATOR.lock().unallocated_frames()
+    FRAME_ALLOCATOR.write().unallocated_frames()
 }
 
 #[allow(unused)]
@@ -134,4 +147,7 @@ pub fn frame_allocator_test() {
     }
     drop(v);
     println!("frame_allocator_test passed!");
+}
+pub fn free_space_size_rdlock() -> usize {
+    FRAME_ALLOCATOR.read().free_space_size()
 }

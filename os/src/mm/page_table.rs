@@ -1,11 +1,14 @@
-use super::{frame_alloc, FrameTracker, PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, MapPermission};
+use super::{
+    frame_alloc, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne, VirtAddr,
+    VirtPageNum,
+};
 use crate::task::{current_task, current_user_token};
-use alloc::{string::String, sync::Arc};
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{string::String, sync::Arc};
 use bitflags::*;
-use log::{debug, error, info, trace, warn};
 use core::fmt::Result;
+use log::{debug, error, info, trace, warn};
 bitflags! {
     /// Page Table Entry flags
     pub struct PTEFlags: u8 {
@@ -78,7 +81,9 @@ impl PageTable {
             frames: vec![frame],
         }
     }
-    /// Temporarily used to get arguments from user space.
+    /// Create an empty page table from `satp`
+    /// # Argument
+    /// * `satp` Supervisor Address Translation & Protection reg. that points to the physical page containing the root page.
     pub fn from_token(satp: usize) -> Self {
         Self {
             root_ppn: PhysPageNum::from(satp & ((1usize << 44) - 1)),
@@ -97,6 +102,8 @@ impl PageTable {
             false
         }
     }
+    /// Find the page in the page table, creating the page on the way if not exists.
+    /// Note: It does NOT create the terminal node. The caller must verify its validity and create according to his own needs.
     fn find_pte_create(&mut self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
         let idxs = vpn.indexes();
         let mut ppn = self.root_ppn;
@@ -104,6 +111,8 @@ impl PageTable {
         for i in 0..3 {
             let pte = &mut ppn.get_pte_array()[idxs[i]];
             if i == 2 {
+                // this condition is used to make sure the
+                //returning predication is put before validity to quit before creating the terminal page entry.
                 result = Some(pte);
                 break;
             }
@@ -116,6 +125,7 @@ impl PageTable {
         }
         result
     }
+    /// Find the page table entry denoted by vpn, returning Some(&_) if found or None if not.
     fn find_pte(&self, vpn: VirtPageNum) -> Option<&PageTableEntry> {
         let idxs = vpn.indexes();
         let mut ppn = self.root_ppn;
@@ -133,6 +143,7 @@ impl PageTable {
         }
         result
     }
+    /// Find and return reference the page table entry denoted by `vpn`, `None` if not found.
     fn find_pte_refmut(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
         let idxs = vpn.indexes();
         let mut ppn = self.root_ppn;
@@ -151,20 +162,34 @@ impl PageTable {
         result
     }
     #[allow(unused)]
+    /// Map the `vpn` to `ppn` with the `flags`.
+    /// # Note
+    /// Allocation should be done elsewhere.
+    /// # Exceptions
+    /// Panics if the `vpn` is mapped.
     pub fn map(&mut self, vpn: VirtPageNum, ppn: PhysPageNum, flags: PTEFlags) {
         let pte = self.find_pte_create(vpn).unwrap();
         assert!(!pte.is_valid(), "vpn {:?} is mapped before mapping", vpn);
         *pte = PageTableEntry::new(ppn, flags | PTEFlags::V);
     }
     #[allow(unused)]
+    /// Unmap the `vpn` to `ppn` with the `flags`.
+    /// # Exceptions
+    /// Panics if the `vpn` is NOT mapped (invalid).
     pub fn unmap(&mut self, vpn: VirtPageNum) {
-        let pte = self.find_pte_create(vpn).unwrap();
+        let pte = self.find_pte_refmut(vpn).unwrap(); // was `self.find_creat_pte(vpn).unwrap()`;
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
         *pte = PageTableEntry::empty();
     }
+    /// Translate the `vpn` into its corresponding `Some(PageTableEntry)` if exists
+    /// `None` is returned if nothing is found.
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
+        // This is not the same map as we defined just now...
+        // It is the map for func. programming.
         self.find_pte(vpn).map(|pte| pte.clone())
     }
+    /// Translate the virtual address into its corresponding `PhysAddr` if mapped in current page table.
+    /// `None` is returned if nothing is found.
     pub fn translate_va(&self, va: VirtAddr) -> Option<PhysAddr> {
         self.find_pte(va.clone().floor()).map(|pte| {
             let aligned_pa: PhysAddr = pte.ppn().into();
@@ -176,6 +201,7 @@ impl PageTable {
     pub fn translate_refmut(&self, vpn: VirtPageNum) -> Option<&mut PageTableEntry> {
         self.find_pte_refmut(vpn)
     }
+    /// Return the physical token to current page.
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
@@ -240,6 +266,8 @@ pub fn translated_ref<T>(token: usize, ptr: *const T) -> &'static T {
 }
 
 /// Translate the user space pointer `ptr` into a mutable reference in user space through page table `token`
+/// # Implementation Information
+/// * Get the pagetable from token
 pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
     let page_table = PageTable::from_token(token);
     let va = ptr as usize;
@@ -248,9 +276,15 @@ pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
         .unwrap()
         .get_mut()
 }
-
+/// A buffer in user space. Kernel space code may use this struct to copy to/ read from user space.
+/// This struct is meaningless in case that the kernel page is present in the user side MemorySet.
 pub struct UserBuffer {
+    /// The segmented array, or, a "vector of vectors".
+    /// # Design Information
+    /// In Rust, reference lifetime is a must for this template.
+    /// The lifetime of buffers is `static` because the buffer 'USES A' instead of 'HAS A'
     pub buffers: Vec<&'static mut [u8]>,
+    /// The total size of the Userbuffer.
     pub len: usize,
 }
 
@@ -268,8 +302,7 @@ impl UserBuffer {
             if end > src_len {
                 buffer[..src_len - start].copy_from_slice(&src[start..]);
                 return src_len;
-            }
-            else {
+            } else {
                 buffer.copy_from_slice(&src[start..end]);
             }
             start = end;
@@ -299,8 +332,7 @@ impl UserBuffer {
             if end > dst_len {
                 dst[start..].copy_from_slice(&buffer[..dst_len - start]);
                 return dst_len;
-            }
-            else {
+            } else {
                 dst[start..end].copy_from_slice(buffer);
             }
             start = end;
@@ -407,23 +439,24 @@ impl Iterator for UserBufferIterator {
     }
 }
 
-pub fn copy_from_user<T:'static + Copy>(token: usize, src: *const T, dst: *mut T) {
+pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
     if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
         unsafe { *dst = *translated_ref(token, src) };
-    }
-    else {
-        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size)).read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
+    } else {
+        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
+            .read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
     }
 }
 
-pub fn copy_to_user<T:'static + Copy>(token: usize, src: *const T, dst: *mut T) {
+pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
+    // A nice predicate. Well done!
     if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
         unsafe { *translated_refmut(token, dst) = *src };
-    }
-    else {
-        UserBuffer::new(translated_byte_buffer(token, dst as *const u8, size)).write(unsafe { core::slice::from_raw_parts_mut(src as *mut u8, size) });
+    } else {
+        UserBuffer::new(translated_byte_buffer(token, dst as *const u8, size))
+            .write(unsafe { core::slice::from_raw_parts_mut(src as *mut u8, size) });
     }
 }
 
@@ -449,7 +482,6 @@ where
     }
     ref_array
 }
-
 
 // fn trans_to_bytes<T>(ptr: *const T) -> &'static [u8] {
 //     let size = core::mem::size_of::<T>();
