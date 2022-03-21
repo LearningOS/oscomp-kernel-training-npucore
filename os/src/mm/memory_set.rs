@@ -493,7 +493,7 @@ impl MemorySet {
                     head_va = start_va.into();
                     let kernel_start_vpn =
                         (VirtAddr::from(MMAP_BASE + (ph.offset() as usize))).floor();
-                    map_area.map_kernel_shared(&mut memory_set.page_table, kernel_start_vpn);
+                    map_area.map_from_kernel_elf_area(&mut memory_set.page_table, kernel_start_vpn);
                     memory_set.areas.push(map_area);
                     // memory_set.push(
                     //     map_area,
@@ -594,7 +594,7 @@ impl MemorySet {
         // map data sections/user heap/mmap area/user stack
         for i in 0..user_space.areas.len() - 1 {
             let mut new_area = user_space.areas[i].clone();
-            new_area.map_shared(&mut memory_set.page_table, &mut user_space.page_table);
+            new_area.map_from_existed_page_table(&mut memory_set.page_table, &mut user_space.page_table);
             memory_set.areas.push(new_area);
             debug!(
                 "[fork] map shared area: {:?}",
@@ -752,21 +752,21 @@ impl MapArea {
         }
         Ok(())
     }
-    /// Map the same area in `self` from `dst_ptab` to `src_ptab`, sharing the same physical address.
+    /// Map the same area in `self` from `dst_page_table` to `src_page_table`, sharing the same physical address.
     /// Convert map areas to physical pages.
     /// # Of Course...
     /// Since the area is shared, the pages have been allocated.
     /// # Argument
-    /// `dst_ptab`: The destination to be mapped into.
-    /// `src_ptab`: The source to be mapped from. This is also the page table where `self` should be included.
-    pub fn map_shared(&mut self, dst_ptab: &mut PageTable, src_ptab: &mut PageTable) -> Result {
+    /// `dst_page_table`: The destination to be mapped into.
+    /// `src_page_table`: The source to be mapped from. This is also the page table where `self` should be included.
+    pub fn map_from_existed_page_table(&mut self, dst_page_table: &mut PageTable, src_page_table: &mut PageTable) -> Result {
         let map_perm = self.map_perm.difference(MapPermission::W);
         let pte_flags = PTEFlags::from_bits(map_perm.bits).unwrap();
         for vpn in self.vpn_range {
-            if let Some(pte) = src_ptab.translate_refmut(vpn) {
+            if let Some(pte) = src_page_table.translate_refmut(vpn) {
                 let ppn = pte.ppn();
-                if !dst_ptab.is_mapped(vpn) {
-                    dst_ptab.map(vpn, ppn, pte_flags);
+                if !dst_page_table.is_mapped(vpn) {
+                    dst_page_table.map(vpn, ppn, pte_flags);
                     pte.set_permission(map_perm);
                 } else {
                     return Err(core::fmt::Error);
@@ -775,31 +775,40 @@ impl MapArea {
         }
         Ok(())
     }
-    /// Is it that this function is needed for the reason that kernel space may be directly mapped sometimes?
-    pub fn map_kernel_shared(
+    
+    /// Map vpns in `self` to the same ppns in `kernel_elf_area` from `start_vpn_in_kernel_elf_area`,
+    /// range is depend on `self.vpn_range`.
+    /// # ATTENTION
+    /// Suppose that the kernel_space.areas.last() is elf_area.
+    /// `page_table` and `self` should belong to the same memory_set.
+    /// vpn_range in `kernel_elf_area` should be broader than (or at least equal to) `self`.
+    /// # WARNING
+    /// Author did not consider to reuse this function at the time he wrote it.
+    /// So be careful to use it in some other places besides `from_elf`.
+    pub fn map_from_kernel_elf_area(
         &mut self,
         page_table: &mut PageTable,
-        kernel_start_vpn: VirtPageNum,
+        start_vpn_in_kernel_elf_area: VirtPageNum,
     ) -> Result {
         let kernel_space = KERNEL_SPACE.lock();
         let kernel_page_table = &kernel_space.page_table;
-        let kernel_area = kernel_space.areas.last().unwrap();
+        let kernel_elf_area = kernel_space.areas.last().unwrap();
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
-        let mut src_vpn = kernel_start_vpn;
+        let mut src_vpn = start_vpn_in_kernel_elf_area;
         for vpn in self.vpn_range {
             if let Some(pte) = kernel_page_table.translate(src_vpn) {
                 let ppn = pte.ppn();
                 if !page_table.is_mapped(vpn) {
-                    let frame = kernel_area.data_frames.get(&src_vpn).unwrap();
+                    let frame = kernel_elf_area.data_frames.get(&src_vpn).unwrap();
                     self.data_frames.insert(vpn, frame.clone());
                     assert_eq!(ppn, frame.ppn);
                     page_table.map(vpn, ppn, pte_flags);
                 } else {
-                    error!("[map_kernel_shared] user vpn already mapped!");
+                    error!("[map_from_kernel_elf_area] user vpn already mapped!");
                     return Err(core::fmt::Error);
                 }
             } else {
-                error!("[map_kernel_shared] kernel vpn invalid!");
+                error!("[map_from_kernel_elf_area] kernel vpn invalid!");
                 return Err(core::fmt::Error);
             }
             src_vpn = (src_vpn.0 + 1).into();
