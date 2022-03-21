@@ -155,6 +155,25 @@ pub fn frame_allocator_test() {
     drop(v);
     println!("frame_allocator_test passed!");
 }
+
 pub fn free_space_size_rdlock() -> usize {
     FRAME_ALLOCATOR.read().free_space_size()
+}
+
+#[macro_export]
+macro_rules! show_frame_consumption {
+    ($place:literal; $($statement:stmt); *;) => {
+        let __frame_consumption_before = crate::mm::unallocated_frames();
+        $($statement)*
+        let __frame_consumption_after = crate::mm::unallocated_frames();
+        debug!("[{}] consumed frames: {}, last frames: {}", $place, (__frame_consumption_before - __frame_consumption_after) as isize, __frame_consumption_after)
+    };
+    ($place:literal, $before:ident) => {
+        debug!(
+            "[{}] consumed frames:{}, last frames:{}",
+            $place,
+            ($before - crate::mm::unallocated_frames()) as isize,
+            crate::mm::unallocated_frames()
+        );
+    };
 }

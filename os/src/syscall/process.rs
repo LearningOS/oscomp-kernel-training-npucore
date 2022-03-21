@@ -4,6 +4,7 @@ use crate::mm::{
     copy_from_user, copy_to_user, mmap, munmap, sbrk, translated_byte_buffer, translated_ref,
     translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
 };
+use crate::show_frame_consumption;
 use crate::syscall::errno::*;
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
@@ -233,9 +234,10 @@ pub fn sys_brk(brk_addr: usize) -> isize {
 
 pub fn sys_fork() -> isize {
     let current_task = current_task().unwrap();
-    let before_fork = crate::mm::unallocated_frames();
-    let new_task = current_task.fork();
-    let after_fork = crate::mm::unallocated_frames();
+    crate::show_frame_consumption! {
+        "sys_fork";
+        let new_task = current_task.fork();
+    }
     let new_pid = new_task.pid.0;
     // modify trap context of new_task, because it returns immediately after switching
     let trap_cx = new_task.acquire_inner_lock().get_trap_cx();
@@ -244,11 +246,6 @@ pub fn sys_fork() -> isize {
     trap_cx.x[10] = 0;
     // add new task to scheduler
     add_task(new_task);
-    debug!(
-        "[sys_fork] consumed frames: {}, last frames: {}",
-        before_fork - after_fork,
-        after_fork
-    );
     new_pid as isize
 }
 

@@ -606,39 +606,21 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             crate::fs::OpenFlags::RDONLY,
             crate::fs::DiskInodeType::File,
         ) {
-            macro_rules! show_frame_consumption {
-                ($place:literal,$before:ident,$after:ident) => {
-                    debug!(
-                        "[exec] {}. consumed frames:{}, last frames:{}",
-                        $place,
-                        ($before - $after) as isize,
-                        $after
-                    );
-                };
-                ($place:literal,$before:ident) => {
-                    debug!(
-                        "[exec] {}. consumed frames:{}, last frames:{}",
-                        $place,
-                        ($before - crate::mm::unallocated_frames()) as isize,
-                        crate::mm::unallocated_frames()
-                    );
-                };
-            }
             drop(inner);
             let len = app_inode.get_size();
             debug!("[exec] File size: {} bytes", len);
             let start: usize = MMAP_BASE;
-            let before_read = crate::mm::unallocated_frames();
-            if crate::mm::push_elf_area(app_inode.clone()).is_err() {
-                unsafe {
-                    app_inode
-                        .read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
-                }
-            } else {
-                info!("Trying not to load anything.");
+            crate::show_frame_consumption! {
+                "push_elf_area";
+                if crate::mm::push_elf_area(app_inode.clone()).is_err() {
+                    unsafe {
+                        app_inode
+                            .read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+                    }
+                } else {
+                    info!("Trying not to load anything.");
+                };
             }
-            //let after_read = crate::mm::unallocated_frames();
-            show_frame_consumption!("read_all() DONE", before_read);
             // return argc because cx.x[10] will be covered with it later
             let task = current_task().unwrap();
             info!("[exec] argc = {}", args_vec.len());
@@ -709,7 +691,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     return crate::syscall::errno::ENOEXEC;
                 }
             }
-            show_frame_consumption!("exec() DONE", before_exec);
+            crate::show_frame_consumption!("task_exec", before_exec);
             // on success, we should not return.
             drop(app_inode);
             0 as isize
