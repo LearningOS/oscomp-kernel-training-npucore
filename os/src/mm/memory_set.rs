@@ -249,12 +249,11 @@ impl MemorySet {
     }
     /// Push the map area into the memory set without copying or allocation.
     pub fn push_no_alloc(&mut self, map_area: &MapArea) -> Result {
-        for i in &map_area.data_frames {
-            let vpn = i.0;
+        for (vpn, frame) in &map_area.data_frames {
             if !self.page_table.is_mapped(*vpn) {
                 //if not mapped
                 let pte_flags = PTEFlags::from_bits(map_area.map_perm.bits).unwrap();
-                self.page_table.map(*vpn, i.1.ppn.clone(), pte_flags);
+                self.page_table.map(*vpn, frame.ppn.clone(), pte_flags);
             } else {
                 return Err(Error);
             }
