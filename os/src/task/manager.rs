@@ -1,6 +1,7 @@
 use super::TaskControlBlock;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use lazy_static::*;
 use spin::Mutex;
 
@@ -54,14 +55,40 @@ pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
 /// # Attention
 /// You should find a place to save `Arc<TaskControlBlock>` of the task, or you would
 /// be unable to use `wake_interruptible()` to wake it up in the future.
+/// This function **won't change task_status**, you should change it manully to insure consistency.
 pub fn sleep_interruptible(task: Arc<TaskControlBlock>) {
     TASK_MANAGER.lock().add_interruptible(task);
 }
 
 /// This function will drop task from interruptible_queue and push it into ready_queue.
 /// The task will be scheduled if everything goes well.
+/// # Attention
+/// This function **won't change task_status**, you should change it manully to insure consistency.
 pub fn wake_interruptible(task: Arc<TaskControlBlock>) {
     let mut manager = TASK_MANAGER.lock();
     manager.drop_interruptible(task.clone());
     manager.add(task.clone());
+}
+
+pub struct WaitQueue {
+    inner: Mutex<Vec<Arc<TaskControlBlock>>>,
+}
+
+impl WaitQueue {
+    /// This function add a task to WaitQueue but **won't block it**,
+    /// if you want to block a task, use `block_current_and_run_next()`.
+    pub fn add_task(&mut self, task: Arc<TaskControlBlock>) {
+        self.inner.lock().push(task);
+    }
+    /// This funtion will wake up all tasks in inner Vec and change their `task_status`
+    /// to `Ready`, so it will try to acquire inner lock and **dead lock could happen**.
+    /// These tasks will be scheduled if everything goes well.
+    pub fn wake_all(&mut self) {
+        let mut vec = self.inner.lock();
+        vec.iter().for_each(|task| {
+            wake_interruptible(task.clone());
+            task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
+        });
+        vec.clear();
+    }
 }
