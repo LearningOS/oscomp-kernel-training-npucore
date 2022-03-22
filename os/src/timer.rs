@@ -5,12 +5,12 @@ use crate::config::CLOCK_FREQ;
 use crate::sbi::set_timer;
 use riscv::register::time;
 
-const TICKS_PER_SEC: usize = 100;
-const MSEC_PER_SEC: usize = 1000;
-const USEC_PER_SEC: usize = 1_000_000;
-const NSEC_PER_SEC: usize = 1_000_000_000;
-const NSEC_PER_MSEC: usize = 1_000_000;
-const USEC_PER_MSEC: usize = 1_000;
+pub const TICKS_PER_SEC: usize = 100;
+pub const MSEC_PER_SEC: usize = 1000;
+pub const USEC_PER_SEC: usize = 1_000_000;
+pub const NSEC_PER_SEC: usize = 1_000_000_000;
+pub const NSEC_PER_MSEC: usize = 1_000_000;
+pub const USEC_PER_MSEC: usize = 1_000;
 
 /// Return current time measured by ticks, which is NOT divided by frequency.
 pub fn get_time() -> usize {

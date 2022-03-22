@@ -11,51 +11,13 @@ use crate::task::{
     suspend_current_and_run_next, Rusage,
 };
 use crate::task::{block_current_and_run_next, signal::*};
-use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone};
+use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone, NSEC_PER_SEC};
 use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
-use core::str::FromStr;
 use log::{debug, error, info, trace, warn};
-
-pub struct utsname {
-    sysname: [u8; 65],
-    nodename: [u8; 65],
-    release: [u8; 65],
-    version: [u8; 65],
-    machine: [u8; 65],
-    domainname: [u8; 65],
-}
-
-impl utsname {
-    pub fn new() -> Self {
-        Self {
-            sysname: utsname::str2u8("Linux"),
-            nodename: utsname::str2u8("debian"),
-            release: utsname::str2u8("5.10.0-7-riscv64"),
-            version: utsname::str2u8("#1 SMP Debian 5.10.40-1 (2021-05-28)"),
-            machine: utsname::str2u8("riscv64"),
-            domainname: utsname::str2u8(""),
-        }
-    }
-
-    fn str2u8(str: &str) -> [u8; 65] {
-        let mut arr: [u8; 65] = [0; 65];
-        let str_bytes = str.as_bytes();
-        let len = str.len();
-        for i in 0..len {
-            arr[i] = str_bytes[i];
-        }
-        arr
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        let size = core::mem::size_of::<Self>();
-        unsafe { core::slice::from_raw_parts(self as *const _ as usize as *const u8, size) }
-    }
-}
 
 pub fn sys_exit(exit_code: i32) -> ! {
     exit_current_and_run_next(exit_code);
@@ -145,13 +107,28 @@ pub fn sys_get_time() -> isize {
     get_time_ms() as isize
 }
 
+#[allow(unused)]
+pub struct UTSName {
+    sysname: [u8; 65],
+    nodename: [u8; 65],
+    release: [u8; 65],
+    version: [u8; 65],
+    machine: [u8; 65],
+    domainname: [u8; 65],
+}
+
 pub fn sys_uname(buf: *mut u8) -> isize {
     let token = current_user_token();
-    let mut buf_vec = translated_byte_buffer(token, buf, size_of::<utsname>());
-    let uname = utsname::new();
-    // 使用UserBuffer结构，以便于跨页读写
-    let mut userbuf = UserBuffer::new(buf_vec);
-    userbuf.write(uname.as_bytes());
+    let mut buffer = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<UTSName>()));
+    // Stupid but efficient.
+    buffer.write(core::concat!(
+        "Linux\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        "debian\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        "5.10.0-7-riscv64\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        "#1 SMP Debian 5.10.40-1 (2021-05-28)\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        "riscv64\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+    ).as_bytes());
     0
 }
 
@@ -190,18 +167,18 @@ pub fn sys_getegid() -> isize {
 // Fortunately, that won't make difference when we just try to run busybox sh so far.
 pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
     /* An attempt.*/
-    let mut task = crate::task::find_process_by_pid(pid);
+    let task = crate::task::find_process_by_pid(pid);
     match task {
-        Some(i) => i.setpgid(pgid),
+        Some(task) => task.setpgid(pgid),
         None => -1,
     }
 }
 
 pub fn sys_getpgid(pid: usize) -> isize {
     /* An attempt.*/
-    let mut task = crate::task::find_process_by_pid(pid);
+    let task = crate::task::find_process_by_pid(pid);
     match task {
-        Some(i) => i.getpgid() as isize,
+        Some(task) => task.getpgid() as isize,
         None => -1,
     }
 }
@@ -216,7 +193,7 @@ pub fn sys_sbrk(increment: isize) -> isize {
 }
 
 pub fn sys_brk(brk_addr: usize) -> isize {
-    let mut new_addr = 0;
+    let new_addr: usize;
     if brk_addr == 0 {
         new_addr = sbrk(0);
     } else {
@@ -234,7 +211,7 @@ pub fn sys_brk(brk_addr: usize) -> isize {
 
 pub fn sys_fork() -> isize {
     let current_task = current_task().unwrap();
-    crate::show_frame_consumption! {
+    show_frame_consumption! {
         "sys_fork";
         let new_task = current_task.fork();
     }
@@ -378,24 +355,19 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
         addr, len, prot
     );
     assert!(!prot.contains(MapPermission::W));
-    let task = current_task().unwrap();
-    let memory_set = &mut task.acquire_inner_lock().memory_set;
-    let start_vpn = addr / PAGE_SIZE;
-    for i in 0..(len / PAGE_SIZE) {
+    // let task = current_task().unwrap();
+    // let memory_set = &mut task.acquire_inner_lock().memory_set;
+    // let start_vpn = addr / PAGE_SIZE;
+    // for i in 0..(len / PAGE_SIZE) {
         // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
         // if memory_set.set_pte_flags(start_vpn.into(), MapPermission::from_bits((prot as u8) << 1).unwrap()) == -1 {
         // if fail
         //     panic!("sys_mprotect: No such pte");
         // }
-    }
+    // }
     // fence here if we have multi harts
     0
 }
-
-pub const TICKS_PER_SEC: usize = 100;
-pub const MSEC_PER_SEC: usize = 1000;
-pub const USEC_PER_SEC: usize = 1000_000;
-pub const NSEC_PER_SEC: usize = 1000_000_000;
 
 pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     if tp as usize == 0 {
@@ -404,7 +376,7 @@ pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
     }
 
     let token = current_user_token();
-    let mut ticks = get_time();
+    let ticks = get_time();
     let sec = (ticks / CLOCK_FREQ) as u64;
     let nsec = ((ticks % CLOCK_FREQ) * NSEC_PER_SEC / CLOCK_FREQ) as u64;
     *translated_refmut(token, tp) = sec;
@@ -438,7 +410,7 @@ pub fn sys_sigreturn() -> isize {
     // mark not processing signal handler
     let current_task = current_task().unwrap();
     info!("[sys_sigreturn] pid: {}", current_task.pid.0);
-    let mut inner = current_task.acquire_inner_lock();
+    let inner = current_task.acquire_inner_lock();
     // restore trap_cx
     let trap_cx = inner.get_trap_cx();
     let sp = trap_cx.x[2];
