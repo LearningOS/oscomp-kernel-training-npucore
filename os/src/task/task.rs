@@ -1,30 +1,21 @@
-use core::borrow::Borrow;
-use core::borrow::BorrowMut;
 use core::fmt::{self, Debug, Formatter};
-use core::mem::ManuallyDrop;
-use core::str::FromStr;
 
 use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
-use crate::errno_exit;
 use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
-use crate::mm::VirtPageNum;
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
-use crate::syscall::errno::ENOANO;
 use crate::syscall::errno::ENOEXEC;
 use crate::task::current_task;
 use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
-use alloc::borrow::ToOwned;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
-use lazy_static::__Deref;
 use log::{debug, error, info, trace, warn};
 use riscv::register::scause::{self, Exception, Interrupt, Trap};
 use spin::{Mutex, MutexGuard};
@@ -76,6 +67,7 @@ impl ProcClock {
     }
 }
 
+#[allow(unused)]
 #[derive(Clone, Copy)]
 pub struct Rusage {
     ru_utime: TimeVal,  /* user CPU time used */
@@ -325,10 +317,10 @@ impl TaskControlBlock {
         debug!("args.len():{}", args.len());
         let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
             MemorySet::from_elf(elf_data);
-        let mut envp_base: usize = 0;
-        let mut argv_base: usize = 0;
-        let mut auxv_base: usize = 0;
-        let mut p: usize = 0;
+        let envp_base: usize;
+        let argv_base: usize;
+        let auxv_base: usize;
+        let mut p: usize;
 
         /////////////////////// start of macro definition ///////////////////////
         macro_rules! auxv_push {
@@ -415,7 +407,7 @@ impl TaskControlBlock {
             .ppn();
 
         ////////////// envp[] ///////////////////
-        let mut env = [
+        let env = [
             "SHELL=/user_shell",
             "PWD=/",
             "USER=root",
@@ -455,8 +447,7 @@ impl TaskControlBlock {
         usr_sp_mov!(16);
         auxv_push!(AT_RANDOM, user_sp);
 
-        let mut p = 0;
-        p = user_sp;
+        let mut p = user_sp;
         for i in 0..0xf {
             *translated_refmut(memory_set.token(), p as *mut u8) = i as u8;
             p += 1;
@@ -598,8 +589,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
     }
     pub fn elf_exec(path: &mut String, args_vec: &mut Vec<String>) -> isize {
         let task = super::current_task().unwrap();
-        let mut inner = task.acquire_inner_lock();
-        let mut path_bin = String::from("/bin/sh");
+        let inner = task.acquire_inner_lock();
         let ret = if let Some(app_inode) = crate::fs::open(
             inner.get_work_path().as_str(),
             path.as_str(),
@@ -639,6 +629,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
 
                     *args_vec.first_mut().unwrap() = path.to_string();
+                    let path_bin: String;
                     let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8]; // see if it tells us the path using #!
                     info!("bin_given:{}", bin_given);
                     if bin_given {
@@ -667,7 +658,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                             let cmd = path_bin.split(' ').collect::<Vec<_>>();
                             //args_vec[0] = path.clone();
                             *path = cmd[0].to_string();
-                            let mut bin_name = path[..]
+                            let bin_name = path[..]
                                 .split('/')
                                 .collect::<Vec<_>>()
                                 .last()
@@ -727,8 +718,7 @@ pub enum TaskStatus {
     Ready,
     Running,
     Zombie,
-    Sleep,
-    Stop,
+    Interruptible
 }
 
 pub struct ProcAddress {
