@@ -335,6 +335,20 @@ pub fn sys_wait4(pid: isize, status: *mut i32, option: usize) -> isize {
     }
 }
 
+#[allow(unused)]
+pub struct RLimit {
+    rlim_cur: usize,  /* Soft limit */
+    rlim_max: usize,  /* Hard limit (ceiling for rlim_cur) */
+}
+
+/// It can be used to both set and get the resource limits of an arbitrary process.
+/// # WARNING
+/// Fake implementation
+pub fn sys_prlimit(pid: usize, resource: usize, new_limit: *const RLimit, old_limit: *mut RLimit) -> isize {
+    warn!("[sys_prlimit] fake implementation! Do nothing and return 0.");
+    SUCCESS
+}
+
 pub fn sys_set_tid_address(tidptr: usize) -> isize {
     current_task()
         .unwrap()

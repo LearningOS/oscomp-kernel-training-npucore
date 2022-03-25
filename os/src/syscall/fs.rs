@@ -957,3 +957,13 @@ pub fn sys_mypselect(
         sigmask,
     )
 }
+
+/// umask() sets the calling process's file mode creation mask (umask) to
+/// mask & 0777 (i.e., only the file permission bits of mask are used),
+/// and returns the previous value of the mask.
+/// # WARNING
+/// Fake implementation
+pub fn sys_umask(mask: usize) -> isize {
+    warn!("[sys_umask] fake implementation! Do nothing and return 0.");
+    0
+}

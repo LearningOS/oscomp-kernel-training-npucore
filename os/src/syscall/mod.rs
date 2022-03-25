@@ -44,6 +44,7 @@ const SYSCALL_SETPGID: usize = 154;
 const SYSCALL_GETPGID: usize = 155;
 const SYSCALL_UNAME: usize = 160;
 const SYSCALL_GETRUSAGE: usize = 165;
+const SYSCALL_UMASK: usize = 166;
 const SYSCALL_GET_TIME_OF_DAY: usize = 169;
 const SYSCALL_GETPID: usize = 172;
 const SYSCALL_GETPPID: usize = 173;
@@ -130,6 +131,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_GETPGID => "getpgid",
         SYSCALL_UNAME => "uname",
         SYSCALL_GETRUSAGE => "getrusage",
+        SYSCALL_UMASK => "umask",
         SYSCALL_GET_TIME_OF_DAY => "get_time_of_day",
         SYSCALL_GETPID => "getpid",
         SYSCALL_GETPPID => "getppid",
@@ -198,9 +200,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_CLOSE => sys_close(args[0]),
         SYSCALL_PIPE => sys_pipe(args[0] as *mut usize),
-        SYSCALL_GETDENTS64 => {
-            sys_getdents64(args[0] as isize, args[1] as *mut u8, args[2] as usize)
-        }
+        SYSCALL_GETDENTS64 => sys_getdents64(args[0] as isize, args[1] as *mut u8, args[2]),
         SYSCALL_READ => sys_read(args[0], args[1] as *const u8, args[2]),
         SYSCALL_READV => sys_readv(args[0], args[1] as *const IoVec, args[2]),
         SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
@@ -210,13 +210,13 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[0] as isize,
             args[1] as isize,
             args[2] as *mut usize,
-            args[3] as usize,
+            args[3],
         ),
         SYSCALL_READLINKAT => sys_readlinkat(
             args[0] as isize,
             args[1] as *const u8,
             args[2] as *mut u8,
-            args[3] as usize,
+            args[3],
         ),
         SYSCALL_NEW_FSTATAT => sys_newfstatat(
             args[0] as isize,
@@ -227,12 +227,12 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_FSTAT => sys_fstat(args[0] as isize, args[1] as *mut u8),
         SYSCALL_EXIT => sys_exit(args[0] as i32),
         SYSCALL_EXIT_GRUOP => sys_exit(args[0] as i32),
-        SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0] as usize, args[1] as *mut u64),
-        SYSCALL_KILL => sys_kill(args[0] as usize, args[1] as usize),
+        SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0], args[1] as *mut u64),
+        SYSCALL_KILL => sys_kill(args[0], args[1]),
         SYSCALL_YIELD => sys_yield(),
-        SYSCALL_SIGACTION => sys_sigaction(args[0] as usize, args[1] as usize, args[2] as usize),
+        SYSCALL_SIGACTION => sys_sigaction(args[0], args[1], args[2]),
         SYSCALL_SIGPROCMASK => {
-            sys_sigprocmask(args[0] as usize, args[1] as usize, args[2] as usize)
+            sys_sigprocmask(args[0], args[1], args[2])
         }
         SYSCALL_SIGRETURN => sys_sigreturn(),
         SYSCALL_NANOSLEEP => sys_nanosleep(
@@ -246,19 +246,21 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_GET_TIME => sys_get_time(),
         SYSCALL_GETRUSAGE => sys_getrusage(args[0] as isize, args[1] as *mut Rusage),
+        SYSCALL_UMASK => sys_umask(args[0]),
         SYSCALL_GET_TIME_OF_DAY => sys_get_time_of_day(
             args[0] as *mut crate::timer::TimeVal,
             args[1] as *mut crate::timer::TimeZone,
         ),
-        SYSCALL_SETPGID => sys_setpgid(args[0] as usize, args[1] as usize),
-        SYSCALL_GETPGID => sys_getpgid(args[0] as usize),
+        SYSCALL_SETPGID => sys_setpgid(args[0], args[1]),
+        SYSCALL_GETPGID => sys_getpgid(args[0]),
         SYSCALL_UNAME => sys_uname(args[0] as *mut u8),
         SYSCALL_GETPID => sys_getpid(),
         SYSCALL_GETPPID => sys_getppid(),
         SYSCALL_CLONE => sys_fork(),
         SYSCALL_EXECVE => sys_exec(args[0] as *const u8, args[1] as *const usize),
-        SYSCALL_WAIT4 => sys_wait4(args[0] as isize, args[1] as *mut i32, args[2] as usize),
-        SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0] as usize),
+        SYSCALL_WAIT4 => sys_wait4(args[0] as isize, args[1] as *mut i32, args[2]),
+        SYSCALL_PRLIMIT => sys_prlimit(args[0], args[1], args[2] as *const RLimit, args[3] as *mut RLimit),
+        SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0]),
         SYSCALL_GETUID => sys_getuid(),
         SYSCALL_GETEUID => sys_geteuid(),
         SYSCALL_GETGID => sys_getgid(),
@@ -268,7 +270,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_BRK => sys_brk(args[0]),
         SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
-        SYSCALL_MPROTECT => sys_mprotect(args[0] as usize, args[1] as usize, args[2] as usize),
+        SYSCALL_MPROTECT => sys_mprotect(args[0], args[1], args[2]),
         // test
         /* SYSCALL_PSELECT6 => sys_crosselect(
          *     args[0] as usize,
@@ -286,20 +288,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
          *     args[4] as *mut usize,
          * ), */
         SYSCALL_PSELECT6 => sys_mypselect(
-            args[0] as usize,
+            args[0],
             args[1] as *mut FdSet,
             args[2] as *mut FdSet,
             args[3] as *mut FdSet,
             args[4] as *const TimeSpec,
             args[5] as *const crate::task::Signals,
         ),
-        SYSCALL_PPOLL => sys_ppoll(
-            args[0] as usize,
-            args[1] as usize,
-            args[2] as usize,
-            args[3] as usize,
-        ),
-        //SYSCALL_GET_TIME_OF_DAY =>
+        SYSCALL_PPOLL => sys_ppoll(args[0], args[1], args[2], args[3]),
         _ => {
             error!(
                 "Unsupported syscall:{} ({}), calling over arguments:",
