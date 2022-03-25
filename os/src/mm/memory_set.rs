@@ -5,6 +5,7 @@ use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::*;
 use crate::fs::{File, FileDescriptor, FileLike};
+use crate::syscall::errno::*;
 use crate::task::{current_task, AuxHeader, FdTable};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
@@ -961,8 +962,9 @@ pub fn mmap(
     fd: usize,
     offset: usize,
 ) -> usize {
+    // not aligned on a page boundary
     if start % PAGE_SIZE != 0 {
-        panic!("[mmap] start not aligned.");
+        return EINVAL as usize;
     }
     let len = if len == 0 { PAGE_SIZE } else { len };
     let task = current_task().unwrap();
@@ -998,23 +1000,27 @@ pub fn mmap(
         if !flags.contains(MapFlags::MAP_ANONYMOUS) {
             warn!("[mmap] Non-Anony call haven't been support yet!");
             if fd >= inner.fd_table.len() {
-                return usize::MAX;
+                // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
+                return EBADF as usize;
             }
             if let Some(fd) = &inner.fd_table[fd] {
                 match &fd.file {
                     FileLike::Regular(inode) => {
+                        // A file mapping was requested, but fd is not open for reading
                         if !inode.readable() {
-                            return usize::MAX;
+                            return EACCES as usize;
                         }
                         inode.set_offset(offset)
                     }
+                    // A file descriptor refers to a non-regular file
                     _ => {
-                        return usize::MAX;
+                        return EACCES as usize;
                     }
                 }
                 new_area.map_file = Some(fd.file.clone());
             } else {
-                return usize::MAX;
+                // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
+                return EBADF as usize;
             }
         }
         let idx = inner.memory_set.areas.len() - 2;
@@ -1040,7 +1046,7 @@ pub fn sbrk(increment: isize) -> usize {
         let limit = inner.heap_bottom + USER_HEAP_SIZE;
         if new_pt > limit {
             warn!(
-                "[sbrk] over the upperbond! upperbond: {:X}, old_pt: {:X}, new_pt: {:X}",
+                "[sbrk] over the upperbound! upperbound: {:X}, old_pt: {:X}, new_pt: {:X}",
                 limit, old_pt, new_pt
             );
             return old_pt;
@@ -1065,7 +1071,7 @@ pub fn sbrk(increment: isize) -> usize {
     } else if increment < 0 {
         if new_pt < inner.heap_bottom {
             warn!(
-                "[sbrk] over the lowerbond! lowerbond: {:X}, old_pt: {:X}, new_pt: {:X}",
+                "[sbrk] over the lowerbound! lowerbound: {:X}, old_pt: {:X}, new_pt: {:X}",
                 inner.heap_bottom, old_pt, new_pt
             );
             return old_pt;
