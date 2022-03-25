@@ -1,6 +1,6 @@
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
-use core::fmt::{self, Binary, Debug, Formatter};
+use core::fmt::{self, Binary, Debug, Formatter, Error};
 use log::{debug, error, info, trace, warn};
 use riscv::register::{
     mtvec::TrapMode,
@@ -63,6 +63,17 @@ bitflags! {
 }
 
 impl Signals {
+    /// if signum > 63 (illeagal), return `Err()`, else return `Ok(Option<Signals>)`
+    /// # Attention
+    /// Some signals are not present in `struct Signals` (they are leagal though)
+    /// In this case, the `Option<Signals>` will be `None`
+    pub fn from_signum(signum: usize) -> Result<Option<Signals>, Error> {
+        if signum <= 63 {
+            Ok(Signals::from_bits(1 << signum))
+        } else {
+            Err(core::fmt::Error)
+        }
+    }
     pub fn to_signum(&self) -> Option<usize> {
         if self.bits().count_ones() == 1 {
             Some(self.bits().trailing_zeros() as usize + 1)

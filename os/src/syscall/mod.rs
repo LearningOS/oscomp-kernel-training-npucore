@@ -228,6 +228,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_EXIT => sys_exit(args[0] as i32),
         SYSCALL_EXIT_GRUOP => sys_exit(args[0] as i32),
         SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0] as usize, args[1] as *mut u64),
+        SYSCALL_KILL => sys_kill(args[0] as usize, args[1] as usize),
         SYSCALL_YIELD => sys_yield(),
         SYSCALL_SIGACTION => sys_sigaction(args[0] as usize, args[1] as usize, args[2] as usize),
         SYSCALL_SIGPROCMASK => {

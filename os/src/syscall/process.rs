@@ -8,9 +8,7 @@ use crate::show_frame_consumption;
 use crate::syscall::errno::*;
 use crate::task::{
     add_task, current_task, current_user_token, exit_current_and_run_next,
-    suspend_current_and_run_next, Rusage,
-};
-use crate::task::{block_current_and_run_next, signal::*};
+    suspend_current_and_run_next, Rusage, block_current_and_run_next, find_task_by_pid, signal::*};
 use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone, NSEC_PER_SEC};
 use crate::trap::TrapContext;
 use alloc::string::String;
@@ -27,6 +25,30 @@ pub fn sys_exit(exit_code: i32) -> ! {
 pub fn sys_yield() -> isize {
     suspend_current_and_run_next();
     0
+}
+
+pub fn sys_kill(pid: usize, sig: usize) -> isize {
+    let signal = match Signals::from_signum(sig) {
+        Ok(signal) => signal,
+        Err(_) => return EINVAL,
+    };
+    if pid > 0 {
+        if let Some(task) = find_task_by_pid(pid) {
+            if let Some(signal) = signal {
+                let mut inner = task.acquire_inner_lock();
+                inner.add_signal(signal);
+            }
+            SUCCESS
+        } else {
+            ESRCH
+        }
+    } else if pid == 0 {
+        todo!()
+    } else if (pid as isize) == -1 {
+        todo!()
+    } else { // (pid as isize) < -1
+        todo!()
+    }
 }
 
 pub fn sys_nanosleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {

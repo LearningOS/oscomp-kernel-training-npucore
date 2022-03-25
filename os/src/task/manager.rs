@@ -33,6 +33,11 @@ impl TaskManager {
                 != task.as_ref() as *const TaskControlBlock
         });
     }
+    pub fn find(&self, pid: usize) -> Option<Arc<TaskControlBlock>> {
+        self.ready_queue.iter().chain(self.interruptible_queue.iter()).find(|task| {
+            task.pid.0 == pid
+        }).cloned()
+    }
 }
 
 lazy_static! {
@@ -68,6 +73,10 @@ pub fn wake_interruptible(task: Arc<TaskControlBlock>) {
     let mut manager = TASK_MANAGER.lock();
     manager.drop_interruptible(task.clone());
     manager.add(task.clone());
+}
+
+pub fn find_task_by_pid(pid: usize) -> Option<Arc<TaskControlBlock>> {
+    TASK_MANAGER.lock().find(pid)
 }
 
 pub struct WaitQueue {
