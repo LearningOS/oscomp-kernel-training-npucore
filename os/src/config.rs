@@ -1,6 +1,6 @@
 #[allow(unused)]
 
-pub const USER_STACK_BOTTOM: usize = TRAP_CONTEXT - PAGE_SIZE;
+pub const USER_STACK_BOTTOM: usize = SIGNAL_TRAMPOLINE;
 pub const USER_STACK_TOP: usize = USER_STACK_BOTTOM - USER_STACK_SIZE;
 pub const USER_STACK_SIZE: usize = PAGE_SIZE * 20;
 pub const KERNEL_STACK_SIZE: usize = PAGE_SIZE * 2;
@@ -17,7 +17,7 @@ pub const PAGE_SIZE_BITS: usize = 0xc;
 
 pub const TRAMPOLINE: usize = usize::MAX - PAGE_SIZE + 1;
 pub const TRAP_CONTEXT: usize = TRAMPOLINE - PAGE_SIZE;
-pub const SIGNAL_TRAMPOLINE: usize = USER_STACK_TOP - 2*PAGE_SIZE;
+pub const SIGNAL_TRAMPOLINE: usize = TRAP_CONTEXT - PAGE_SIZE;
 
 // Execution of programs
 pub const AT_NULL: usize = 0; /* end of vector */
