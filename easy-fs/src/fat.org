@@ -1,0 +1,32 @@
+* Notation
+** question mark"?"
+as in RegEx
+* Disk Layout
+** MBR?
+** FAT32 Layout
+*** Reserved Area
+**** DBR(Dos Boot Record, not mentioned in FAT32 layout)
+In our implementation, BS is used along with BPB.
+
+Besides, the items of the two are mixed instead of separated.
+***** (DOS)Boot Sector
+marked with BS.
+***** BPB
+*** FAT Region[(usu. 2)]
+*** File and Directory Data Region
+* rCore FS/VFS Layout & Design
+From Top to the Bottom
+** Original EasyFS
+*** Inode(vfs.rs)
+管理索引节点（即文件控制块）数据结构，并实现文件创建/文件打开/文件读写等成员函数来向上支持文件操作相关的系统调用的处理
+*** Disk block management layer(efs.rs)
+合并了上述核心数据结构和磁盘布局所形成的磁盘文件系统数据结构，以及创建/打
+开文件系统的相关处理和磁盘块的分配和回收处理
+*** Disk(layout.rs)
+Layout磁盘上的超级块、位图、索引节点、数据块、目录项等核心数据结构和相关处理
+*** BlockCache(block_cache.rs)
+Caching the block in the disk to prevent frequent access.
+*** BlockDevice(the Driver)(block_dev.rs)
+** Common: The Lowest 2 Layers
+Note: BlockCache should support direct mapping/copying without caching...
+** Modification in My FAT32
