@@ -66,9 +66,9 @@ fn easy_fs_pack() -> std::io::Result<()> {
 
     let mut ent = FATDirEnt::empty();
     println!(
-        "{},name: {:?}",
+        "{},name: {}",
         rt.read_at_block_cache(0, ent.as_bytes_mut()),
-        ent
+        ent.get_name()
     );
 
     /*

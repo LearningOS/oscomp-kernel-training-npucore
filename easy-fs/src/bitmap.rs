@@ -1,4 +1,7 @@
-use crate::layout::{BAD_BLOCK, EOC};
+use crate::{
+    block_cache::FileCache,
+    layout::{BAD_BLOCK, EOC},
+};
 
 use super::{block_cache::get_block_cache, BlockDevice, BLOCK_SZ};
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};

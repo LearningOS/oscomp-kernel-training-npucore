@@ -1,4 +1,5 @@
 use super::{DiskInodeType, EasyFileSystem};
+use crate::block_cache::FileCache;
 use crate::{get_block_cache, DataBlock, BLOCK_SZ};
 use alloc::sync::Arc;
 use alloc::vec;

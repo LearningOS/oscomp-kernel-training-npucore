@@ -1,5 +1,6 @@
 use super::{get_block_cache, BlockDevice, Fat};
 use crate::{
+    block_cache::{BlockCacheManager, FileCache},
     layout::{DiskInodeType, BPB},
     Inode,
 };
@@ -10,6 +11,8 @@ pub struct EasyFileSystem {
     /// Partition/Device the FAT32 is hosted on.
     pub block_device: Arc<dyn BlockDevice>,
 
+    //    /// Block Cache Manager
+    //    pub cache_mgr: Arc<BlockCacheManager>,
     /// FAT information
     pub fat: Fat,
 

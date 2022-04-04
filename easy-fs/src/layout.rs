@@ -1,5 +1,10 @@
+use crate::block_cache::FileCache;
+
 use super::{BlockDevice, BLOCK_SZ};
-use alloc::sync::Arc;
+use alloc::{
+    string::{String, ToString},
+    sync::Arc,
+};
 use core::{fmt::Debug, mem};
 
 pub const EOC: u32 = 0x0FFF_FFFF;
@@ -293,6 +298,15 @@ impl FATDirEnt {
             None
         }
     }
+    pub fn get_name(&self) -> String {
+        unsafe {
+            if self.is_long() {
+                self.long_entry.name()
+            } else {
+                self.short_entry.name().to_string()
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -382,6 +396,26 @@ pub struct FATLongDirEnt {
     fst_clus_lo: u16,
     /// Characters 12-13 of the long-name sub-component in this dir entry
     name3: [u16; 2],
+}
+
+impl FATLongDirEnt {
+    pub fn name(&self) -> String {
+        let mut name_all: [u16; 13] = [0u16; 13];
+        name_all[..5].copy_from_slice(&self.name1);
+        name_all[5..11].copy_from_slice(&self.name2);
+        name_all[11..].copy_from_slice(&self.name3);
+        String::from_utf16_lossy(
+            &name_all[..if let Some((i, _)) = name_all
+                .iter()
+                .enumerate()
+                .find(|here| -> bool { *here.1 == 0 })
+            {
+                i
+            } else {
+                0
+            }],
+        )
+    }
 }
 
 impl Clone for FATLongDirEnt {
