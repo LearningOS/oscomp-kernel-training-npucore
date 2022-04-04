@@ -158,8 +158,8 @@ pub fn syscall_name(id: usize) -> &'static str {
     }
 }
 use crate::{
-    fs::{FdSet, IoVec},
-    task::{Rusage, SigAction},
+    fs::{FdSet},
+    task::{Rusage},
     timer::{ITimerVal, TimeSpec},
 };
 
@@ -202,7 +202,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_PIPE => sys_pipe(args[0] as *mut usize),
         SYSCALL_GETDENTS64 => sys_getdents64(args[0] as isize, args[1] as *mut u8, args[2]),
         SYSCALL_READ => sys_read(args[0], args[1] as *const u8, args[2]),
-        SYSCALL_READV => sys_readv(args[0], args[1] as *const IoVec, args[2]),
+        SYSCALL_READV => sys_readv(args[0], args[1], args[2]),
         SYSCALL_WRITE => sys_write(args[0], args[1] as *const u8, args[2]),
         SYSCALL_WRITEV => sys_writev(args[0], args[1], args[2]),
         SYSCALL_LSEEK => sys_lseek(args[0], args[1], args[2]),

@@ -1,12 +1,11 @@
 use crate::fs::{ch_dir, list_files, make_pipe, open, pselect, DiskInodeType, OpenFlags, PollFd};
 use crate::fs::{
-    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, IoVec, IoVecs, Kstat, NewStat, NullZero,
-    MNT_TABLE, TTY,
+    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Kstat, NewStat, NullZero, MNT_TABLE, TTY,
 };
 use crate::lang_items::Bytes;
 use crate::mm::{
-    copy_from_user, translated_byte_buffer, translated_ref, translated_refmut, translated_str,
-    UserBuffer,
+    copy_from_user, translated_byte_buffer, translated_byte_buffer_append_to_existed_vec,
+    translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user_array,
 };
 use crate::task::FdTable;
 use crate::task::{current_task, current_user_token};
@@ -65,58 +64,123 @@ pub fn sys_lseek(fd: usize, offset: usize, whence: usize) -> isize {
     }
 }
 
-pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
-    let token = current_user_token();
+pub fn sys_read(fd: usize, buf: *const u8, count: usize) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    if fd >= inner.fd_table.len() {
-        return -1;
+    // fd is not a valid file descriptor
+    if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
+        return EBADF;
     }
-    if let Some(file) = &inner.fd_table[fd] {
-        let file: Arc<dyn File + Send + Sync> = match &file.file {
-            FileLike::Abstract(f) => f.clone(),
-            FileLike::Regular(f) => {
-                /*print!("\n");*/
-                f.clone()
-            }
-            _ => return -1,
-        };
-        if !file.writable() {
-            return -1;
-        }
-        drop(inner);
-        file.write(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize
-    } else {
-        -1
+    let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
+    let file: Arc<dyn File + Send + Sync> = match &file_descriptor.file {
+        FileLike::Abstract(file) => file.clone(),
+        FileLike::Regular(file) => file.clone(),
+    };
+    // fd is not open for reading
+    if !file.readable() {
+        return EBADF;
     }
+    let token = inner.get_user_token();
+    drop(inner);
+    file.read(UserBuffer::new(translated_byte_buffer(token, buf, count))) as isize
 }
 
-pub fn sys_writev(fd: usize, iov_ptr: usize, iov_num: usize) -> isize {
-    let iov_head = iov_ptr as *mut IoVec;
-
-    let token = current_user_token();
+pub fn sys_write(fd: usize, buf: *const u8, count: usize) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    if fd >= inner.fd_table.len() {
-        return -1;
+    // fd is not a valid file descriptor
+    if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
+        return EBADF;
     }
-    if let Some(file) = &inner.fd_table[fd] {
-        let f: Arc<dyn File + Send + Sync> = match &file.file {
-            FileLike::Abstract(f) => f.clone(),
-            FileLike::Regular(f) => f.clone(),
-            _ => return -1,
-        };
-        if !f.writable() {
-            return -1;
-        }
-        drop(inner);
-        unsafe {
-            let buf = UserBuffer::new(IoVecs::new(iov_head, iov_num, token).0);
-            f.write(buf) as isize
-        }
-    } else {
-        -1
+    let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
+    let file: Arc<dyn File + Send + Sync> = match &file_descriptor.file {
+        FileLike::Abstract(file) => file.clone(),
+        FileLike::Regular(file) => file.clone(),
+    };
+    // fd is not open for writing
+    if !file.writable() {
+        return EBADF;
     }
+    let token = inner.get_user_token();
+    drop(inner);
+    file.write(UserBuffer::new(translated_byte_buffer(token, buf, count))) as isize
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct IOVec {
+    iov_base: *const u8, /* Starting address */
+    iov_len: usize,      /* Number of bytes to transfer */
+}
+
+pub fn sys_readv(fd: usize, iov: usize, iovcnt: usize) -> isize {
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    // fd is not a valid file descriptor
+    if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
+        return EBADF;
+    }
+    let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
+    let file: Arc<dyn File + Send + Sync> = match &file_descriptor.file {
+        FileLike::Abstract(file) => file.clone(),
+        FileLike::Regular(file) => file.clone(),
+    };
+    // fd is not open for reading
+    if !file.readable() {
+        return EBADF;
+    }
+    let token = inner.get_user_token();
+    drop(inner);
+    let mut iovecs = Vec::<IOVec>::with_capacity(iovcnt);
+    copy_from_user_array(token, iov as *const IOVec, iovecs.as_mut_ptr(), iovcnt);
+    unsafe { iovecs.set_len(iovcnt) };
+    file.read(UserBuffer::new(iovecs.iter().fold(
+        Vec::new(),
+        |buffer, iovec| {
+            // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
+            translated_byte_buffer_append_to_existed_vec(
+                Some(buffer),
+                token,
+                iovec.iov_base,
+                iovec.iov_len,
+            )
+        },
+    ))) as isize
+}
+
+pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    // fd is not a valid file descriptor
+    if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
+        return EBADF;
+    }
+    let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
+    let file: Arc<dyn File + Send + Sync> = match &file_descriptor.file {
+        FileLike::Abstract(file) => file.clone(),
+        FileLike::Regular(file) => file.clone(),
+    };
+    // fd is not open for writing
+    if !file.writable() {
+        return EBADF;
+    }
+    let token = inner.get_user_token();
+    drop(inner);
+    let mut iovecs = Vec::<IOVec>::with_capacity(iovcnt);
+    copy_from_user_array(token, iov as *const IOVec, iovecs.as_mut_ptr(), iovcnt);
+    unsafe { iovecs.set_len(iovcnt) };
+    file.write(UserBuffer::new(iovecs.iter().fold(
+        Vec::new(),
+        |buffer, iovec| {
+            // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
+            translated_byte_buffer_append_to_existed_vec(
+                Some(buffer),
+                token,
+                iovec.iov_base,
+                iovec.iov_len,
+            )
+        },
+    ))) as isize
 }
 
 /* return the num of bytes */
@@ -173,36 +237,6 @@ pub fn sys_sendfile(out_fd: isize, in_fd: isize, offset_ptr: *mut usize, count: 
         }
     } else {
         return -1;
-    }
-}
-/// A read mirror to writev(). Read the file denoted by fd according to what was recorded in vector [IoVec;iovcnt].
-///
-/// The  readv()  system call reads iovcnt buffers from the file associated with the file descriptor fd into the buffers described by iov ("scatter input").
-pub fn sys_readv(fd: usize, iov: *const IoVec, iovcnt: usize) -> isize {
-    let iov_head = iov as *mut IoVec;
-    let token = current_user_token();
-    let task = current_task().unwrap();
-    let inner = task.acquire_inner_lock();
-    if fd >= inner.fd_table.len() {
-        return -1;
-    }
-    if let Some(file) = &inner.fd_table[fd] {
-        let mut sum: isize = 0;
-        let f: Arc<dyn File + Send + Sync> = match &file.file {
-            FileLike::Abstract(f) => f.clone(),
-            FileLike::Regular(f) => f.clone(),
-            _ => return -1,
-        };
-        if !f.writable() {
-            return -1;
-        }
-        drop(inner);
-        unsafe {
-            let buf = UserBuffer::new(IoVecs::new(iov_head, iovcnt, token).0);
-            f.read(buf) as isize
-        }
-    } else {
-        -1
     }
 }
 
@@ -382,33 +416,6 @@ pub fn sys_crossselect1(
     }
     println!("[ultrasel] ret: {}", ret);
     return ret;
-}
-
-pub fn sys_read(fd: usize, buf: *const u8, len: usize) -> isize {
-    let token = current_user_token();
-    let task = current_task().unwrap();
-    let inner = task.acquire_inner_lock();
-    if fd >= inner.fd_table.len() {
-        return -1;
-    }
-    if let Some(file) = &inner.fd_table[fd] {
-        let file: Arc<dyn File + Send + Sync> = match &file.file {
-            FileLike::Abstract(f) => f.clone(),
-            FileLike::Regular(f) => {
-                /*print!("\n");*/
-                f.clone()
-            }
-            _ => return -1,
-        };
-        if !file.readable() {
-            return -1;
-        }
-        // release Task lock manually to avoid deadlock
-        drop(inner);
-        file.read(UserBuffer::new(translated_byte_buffer(token, buf, len))) as isize
-    } else {
-        -1
-    }
 }
 
 pub fn sys_open(path: *const u8, flags: u32) -> isize {

@@ -59,7 +59,7 @@ pub use inode::{
     /*find_par_inode_id, */ ch_dir, clear_cache, init_rootfs, list_apps, list_files, open,
     DiskInodeType, OSInode, OpenFlags,
 };
-pub use iovec::{IoVec, IoVecs};
+//pub use iovec::{IoVec, IoVecs};
 pub use mount::MNT_TABLE;
 pub use pipe::{make_pipe, Pipe};
 pub use stdio::{Stdin, Stdout};

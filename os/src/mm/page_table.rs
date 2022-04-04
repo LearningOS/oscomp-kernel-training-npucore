@@ -215,11 +215,17 @@ impl PageTable {
     }
 }
 
-pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&'static mut [u8]> {
+/// if `existed_vec == None`, a empty `Vec` will be created.
+pub fn translated_byte_buffer_append_to_existed_vec(
+    existed_vec: Option<Vec<&'static mut [u8]>>,
+    token: usize,
+    ptr: *const u8,
+    len: usize,
+) -> Vec<&'static mut [u8]> {
     let page_table = PageTable::from_token(token);
     let mut start = ptr as usize;
     let end = start + len;
-    let mut v = Vec::new();
+    let mut v = existed_vec.unwrap_or_default();
     while start < end {
         let start_va = VirtAddr::from(start);
         let mut vpn = start_va.floor();
@@ -235,6 +241,10 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&'static mut [u8]> {
+    translated_byte_buffer_append_to_existed_vec(None, token, ptr, len)
 }
 
 /// Load a string from other address spaces into kernel space without an end `\0`.
@@ -309,21 +319,21 @@ impl UserBuffer {
         }
         self.len
     }
-    pub fn read_as_vec(&self, vec: &mut Vec<u8>, vlen: usize) -> usize {
-        let len = self.len();
-        let mut current = 0;
-        for sub_buff in self.buffers.iter() {
-            let sblen = (*sub_buff).len();
-            for j in 0..sblen {
-                vec.push((*sub_buff)[j]);
-                current += 1;
-                if current == len {
-                    return len;
-                }
-            }
-        }
-        return len;
-    }
+    // pub fn read_as_vec(&self, vec: &mut Vec<u8>, vlen: usize) -> usize {
+    //     let len = self.len();
+    //     let mut current = 0;
+    //     for sub_buff in self.buffers.iter() {
+    //         let sblen = (*sub_buff).len();
+    //         for j in 0..sblen {
+    //             vec.push((*sub_buff)[j]);
+    //             current += 1;
+    //             if current == len {
+    //                 return len;
+    //             }
+    //         }
+    //     }
+    //     return len;
+    // }
     pub fn read(&self, dst: &mut [u8]) -> usize {
         let mut start = 0;
         let dst_len = dst.len();
@@ -449,6 +459,23 @@ pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut 
     }
 }
 
+pub fn copy_from_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
+    let size = core::mem::size_of::<T>() * len;
+    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
+        let page_table = PageTable::from_token(token);
+        let src_pa = page_table
+            .translate_va(VirtAddr::from(src as usize))
+            .unwrap();
+        unsafe {
+            core::slice::from_raw_parts_mut(dst as *mut T, len)
+                .copy_from_slice(core::slice::from_raw_parts(src_pa.0 as *const T, len))
+        };
+    } else {
+        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
+            .read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
+    }
+}
+
 pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
     // A nice predicate. Well done!
@@ -460,28 +487,45 @@ pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T)
     }
 }
 
-pub fn translated_array_copy<T>(token: usize, ptr: *mut T, len: usize) -> Vec<T>
-where
-    T: Copy,
-{
-    let page_table = PageTable::from_token(token);
-    let mut ref_array: Vec<T> = Vec::new();
-    let mut va = ptr as usize;
-    let step = core::mem::size_of::<T>();
-    //println!("step = {}, len = {}", step, len);
-    for _i in 0..len {
-        let u_buf = UserBuffer::new(translated_byte_buffer(token, va as *const u8, step));
-        let mut bytes_vec: Vec<u8> = Vec::new();
-        u_buf.read_as_vec(&mut bytes_vec, step);
-        //println!("loop, va = 0x{:X}, vec = {:?}", va, bytes_vec);
+pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
+    let size = core::mem::size_of::<T>() * len;
+    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
+        let page_table = PageTable::from_token(token);
+        let dst_pa = page_table
+            .translate_va(VirtAddr::from(dst as usize))
+            .unwrap();
         unsafe {
-            ref_array
-                .push(*(bytes_vec.as_slice() as *const [u8] as *const u8 as usize as *const T));
-        }
-        va += step;
+            core::slice::from_raw_parts_mut(dst_pa.0 as *mut T, len)
+                .copy_from_slice(core::slice::from_raw_parts(src as *const T, len))
+        };
+    } else {
+        UserBuffer::new(translated_byte_buffer(token, dst as *const u8, size))
+            .write(unsafe { core::slice::from_raw_parts_mut(src as *mut u8, size) });
     }
-    ref_array
 }
+
+// pub fn translated_array_copy<T>(token: usize, ptr: *mut T, len: usize) -> Vec<T>
+// where
+//     T: Copy,
+// {
+//     let page_table = PageTable::from_token(token);
+//     let mut ref_array: Vec<T> = Vec::new();
+//     let mut va = ptr as usize;
+//     let step = core::mem::size_of::<T>();
+//     //println!("step = {}, len = {}", step, len);
+//     for _i in 0..len {
+//         let u_buf = UserBuffer::new(translated_byte_buffer(token, va as *const u8, step));
+//         let mut bytes_vec: Vec<u8> = Vec::new();
+//         u_buf.read_as_vec(&mut bytes_vec, step);
+//         //println!("loop, va = 0x{:X}, vec = {:?}", va, bytes_vec);
+//         unsafe {
+//             ref_array
+//                 .push(*(bytes_vec.as_slice() as *const [u8] as *const u8 as usize as *const T));
+//         }
+//         va += step;
+//     }
+//     ref_array
+// }
 
 // fn trans_to_bytes<T>(ptr: *const T) -> &'static [u8] {
 //     let size = core::mem::size_of::<T>();

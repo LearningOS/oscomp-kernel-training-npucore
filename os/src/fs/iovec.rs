@@ -1,39 +1,39 @@
-use crate::mm::{
-    //translated_ref_array,
-    translated_array_copy,
-    translated_byte_buffer,
-};
-use alloc::vec;
-use alloc::vec::Vec;
+// use crate::mm::{
+//     //translated_ref_array,
+//     translated_array_copy,
+//     translated_byte_buffer,
+// };
+// use alloc::vec;
+// use alloc::vec::Vec;
 
-#[derive(Debug, Copy, Clone)]
-#[repr(C)]
-/// Vector to record the target to read to or write from.
-pub struct IoVec {
-    /// Starting address
-    base: *mut u8,
-    /// Number of bytes to transfer
-    len: usize,
-}
+// #[derive(Debug, Copy, Clone)]
+// #[repr(C)]
+// /// Vector to record the target to read to or write from.
+// pub struct IoVec {
+//     /// Starting address
+//     base: *mut u8,
+//     /// Number of bytes to transfer
+//     len: usize,
+// }
 
-pub struct IoVecs(pub Vec<&'static mut [u8]>);
+// pub struct IoVecs(pub Vec<&'static mut [u8]>);
 
-impl IoVecs {
-    pub unsafe fn new(iov_ptr: *mut IoVec, iov_num: usize, token: usize) -> Self {
-        let mut iovecs: Vec<&'static mut [u8]> = vec![];
-        let iovref_vec = translated_array_copy(token, iov_ptr, iov_num);
-        iovecs.reserve(iovref_vec.len());
-        for iovref in iovref_vec {
-            if iovref.len == 0 {
-                continue;
-            }
-            //println!("iov.base = 0x{:X}, iov.len = {}", iovref.base as usize,iovref.len);
-            let mut buf: Vec<&'static mut [u8]> =
-                translated_byte_buffer(token, iovref.base, iovref.len);
-            iovecs.append(&mut buf);
-        }
-        Self(iovecs)
-    }
+// impl IoVecs {
+//     pub unsafe fn new(iov_ptr: *mut IoVec, iov_num: usize, token: usize) -> Self {
+//         let mut iovecs: Vec<&'static mut [u8]> = vec![];
+//         let iovref_vec = translated_array_copy(token, iov_ptr, iov_num);
+//         iovecs.reserve(iovref_vec.len());
+//         for iovref in iovref_vec {
+//             if iovref.len == 0 {
+//                 continue;
+//             }
+//             //println!("iov.base = 0x{:X}, iov.len = {}", iovref.base as usize,iovref.len);
+//             let mut buf: Vec<&'static mut [u8]> =
+//                 translated_byte_buffer(token, iovref.base, iovref.len);
+//             iovecs.append(&mut buf);
+//         }
+//         Self(iovecs)
+//     }
 
     //pub unsafe fn check_and_new(
     //    iov_ptr: *const IoVec,
@@ -94,4 +94,4 @@ impl IoVecs {
     //    }
     //    buf
     //}
-}
+// }
