@@ -292,6 +292,16 @@ impl MemorySet {
     //     }
     //     None
     // }
+    pub fn contains_valid_buffer(&self, buf: usize, size: usize, perm: MapPermission) -> bool {
+        let start_vpn = VirtAddr::from(buf).floor();
+        let end_vpn = VirtAddr::from(buf + size).ceil();
+        self.areas.iter().find(|area| {
+            // If there is such a page in user space, and the addr is in the vpn range
+            area.map_perm.contains(perm | MapPermission::U)
+                && area.vpn_range.get_start() <= start_vpn
+                && end_vpn <= area.vpn_range.get_end()
+        }).is_some()
+    }
     /// The REAL handler to page fault.
     /// Handles all types of page fault:(In regex:) "(Store|Load|Instruction)(Page)?Fault"
     /// Checks the permission to decide whether to copy.

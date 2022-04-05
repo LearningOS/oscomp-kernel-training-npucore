@@ -6,7 +6,7 @@ use crate::lang_items::Bytes;
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user_array, translated_byte_buffer,
     translated_byte_buffer_append_to_existed_vec, translated_ref, translated_refmut,
-    translated_str, UserBuffer,
+    translated_str, MapPermission, UserBuffer,
 };
 use crate::task::FdTable;
 use crate::task::{current_task, current_user_token};
@@ -23,22 +23,31 @@ use super::errno::*;
 const AT_FDCWD: isize = -100;
 pub const FD_LIMIT: usize = 128;
 
-pub fn sys_getcwd(buf: *mut u8, len: usize) -> isize {
-    let token = current_user_token();
+pub fn sys_getcwd(buf: usize, size: usize) -> isize {
     let task = current_task().unwrap();
-    let buf_vec = translated_byte_buffer(token, buf, len);
     let inner = task.acquire_inner_lock();
-
-    let mut userbuf = UserBuffer::new(buf_vec);
-    let current_offset: usize = 0;
-    if buf as usize == 0 {
-        return 0;
-    } else {
-        let cwd = inner.current_path.as_bytes();
-        userbuf.write(cwd);
-        return buf as isize;
+    if !inner
+        .memory_set
+        .contains_valid_buffer(buf, size, MapPermission::W)
+    {
+        // buf points to a bad address.
+        return EFAULT;
     }
+    if size == 0 && buf != 0 {
+        // The size argument is zero and buf is not a NULL pointer.
+        return EINVAL;
+    }
+    if inner.current_path.len() >= size {
+        // The size argument is less than the length of the absolute pathname of the working directory,
+        // including the terminating null byte.
+        return ERANGE;
+    }
+    let token = inner.get_user_token();
+    UserBuffer::new(translated_byte_buffer(token, buf as *const u8, size))
+        .write(inner.current_path.as_bytes());
+    buf as isize
 }
+
 pub fn sys_lseek(fd: usize, offset: usize, whence: usize) -> isize {
     let token = current_user_token();
     let task = current_task().unwrap();
@@ -64,7 +73,7 @@ pub fn sys_lseek(fd: usize, offset: usize, whence: usize) -> isize {
     }
 }
 
-pub fn sys_read(fd: usize, buf: *const u8, count: usize) -> isize {
+pub fn sys_read(fd: usize, buf: usize, count: usize) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     // fd is not a valid file descriptor
@@ -80,12 +89,23 @@ pub fn sys_read(fd: usize, buf: *const u8, count: usize) -> isize {
     if !file.readable() {
         return EBADF;
     }
+    // buf is outside your accessible address space.
+    if !inner
+        .memory_set
+        .contains_valid_buffer(buf, count, MapPermission::W)
+    {
+        return EFAULT;
+    }
     let token = inner.get_user_token();
     drop(inner);
-    file.read(UserBuffer::new(translated_byte_buffer(token, buf, count))) as isize
+    file.read(UserBuffer::new(translated_byte_buffer(
+        token,
+        buf as *const u8,
+        count,
+    ))) as isize
 }
 
-pub fn sys_write(fd: usize, buf: *const u8, count: usize) -> isize {
+pub fn sys_write(fd: usize, buf: usize, count: usize) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     // fd is not a valid file descriptor
@@ -101,9 +121,20 @@ pub fn sys_write(fd: usize, buf: *const u8, count: usize) -> isize {
     if !file.writable() {
         return EBADF;
     }
+    // buf is outside your accessible address space.
+    if !inner
+        .memory_set
+        .contains_valid_buffer(buf, count, MapPermission::R)
+    {
+        return EFAULT;
+    }
     let token = inner.get_user_token();
     drop(inner);
-    file.write(UserBuffer::new(translated_byte_buffer(token, buf, count))) as isize
+    file.write(UserBuffer::new(translated_byte_buffer(
+        token,
+        buf as *const u8,
+        count,
+    ))) as isize
 }
 
 #[repr(C)]
