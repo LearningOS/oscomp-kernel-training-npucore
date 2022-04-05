@@ -4,8 +4,9 @@ use crate::fs::{
 };
 use crate::lang_items::Bytes;
 use crate::mm::{
-    copy_from_user, translated_byte_buffer, translated_byte_buffer_append_to_existed_vec,
-    translated_ref, translated_refmut, translated_str, UserBuffer, copy_from_user_array,
+    copy_from_user, copy_from_user_array, copy_to_user_array, translated_byte_buffer,
+    translated_byte_buffer_append_to_existed_vec, translated_ref, translated_refmut,
+    translated_str, UserBuffer,
 };
 use crate::task::FdTable;
 use crate::task::{current_task, current_user_token};
@@ -15,7 +16,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use core::ptr::{null, null_mut};
-use core::slice::from_raw_parts_mut;
 use log::{debug, error, info, trace, warn};
 
 use super::errno::*;
@@ -448,30 +448,54 @@ pub fn sys_close(fd: usize) -> isize {
     info!("[sys_close] fd:{}", fd);
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    if fd >= inner.fd_table.len() {
-        return -1;
-    }
-    if inner.fd_table[fd].is_none() {
-        return -1;
+    if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
+        return EBADF;
     }
     inner.fd_table[fd].take();
-    0
+    SUCCESS
 }
 
-pub fn sys_pipe(pipe: *mut usize) -> isize {
-    let pipe = unsafe { pipe as *mut i32 };
+bitflags! {
+    struct PipeFlags: usize {
+        const O_CLOEXEC     =   02000000;
+        const O_DIRECT	    =   00040000;
+        const O_NONBLOCK    =   00004000;
+    }
+}
+
+/// # Warning
+/// Only O_CLOEXEC is supported now
+pub fn sys_pipe2(pipefd: usize, flags: usize) -> isize {
+    let flags = match PipeFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => return EINVAL,
+    };
     let task = current_task().unwrap();
-    let token = current_user_token();
     let mut inner = task.acquire_inner_lock();
     let (pipe_read, pipe_write) = make_pipe();
     let read_fd = inner.alloc_fd();
-    inner.fd_table[read_fd] = Some(FileDescriptor::new(false, FileLike::Abstract(pipe_read)));
+    inner.fd_table[read_fd] = Some(FileDescriptor::new(
+        flags.contains(PipeFlags::O_CLOEXEC),
+        FileLike::Abstract(pipe_read),
+    ));
     let write_fd = inner.alloc_fd();
-    inner.fd_table[write_fd] = Some(FileDescriptor::new(false, FileLike::Abstract(pipe_write)));
-    *translated_refmut(token, pipe) = read_fd as i32;
-    *translated_refmut(token, unsafe { pipe.add(1) }) = write_fd as i32;
-    info!("[sys_pipe] read_fd: {}, write_fd: {}", read_fd, write_fd);
-    0
+    inner.fd_table[write_fd] = Some(FileDescriptor::new(
+        flags.contains(PipeFlags::O_CLOEXEC),
+        FileLike::Abstract(pipe_write),
+    ));
+    let token = inner.get_user_token();
+    drop(inner);
+    copy_to_user_array(
+        token,
+        [read_fd as u32, write_fd as u32].as_ptr(),
+        pipefd as *mut u32,
+        2,
+    );
+    info!(
+        "[sys_pipe2] read_fd: {}, write_fd: {}, flags: {:?}",
+        read_fd, write_fd, flags
+    );
+    SUCCESS
 }
 
 pub fn sys_getdents64(fd: isize, buf: *mut u8, len: usize) -> isize {
