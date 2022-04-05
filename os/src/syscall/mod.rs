@@ -266,23 +266,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_MMAP => sys_mmap(args[0], args[1], args[2], args[3], args[4], args[5]),
         SYSCALL_MUNMAP => sys_munmap(args[0], args[1]),
         SYSCALL_MPROTECT => sys_mprotect(args[0], args[1], args[2]),
-        // test
-        /* SYSCALL_PSELECT6 => sys_crosselect(
-         *     args[0] as usize,
-         *     args[1] as *mut u8,
-         *     args[2] as *mut u8,
-         *     args[3] as *mut u8,
-         *     args[4] as *mut usize,
-         * ), */
-        // ultraos api
-        /* SYSCALL_PSELECT6 => sys_ultrapselect(
-         *     args[0] as usize,
-         *     args[1] as *mut u8,
-         *     args[2] as *mut u8,
-         *     args[3] as *mut u8,
-         *     args[4] as *mut usize,
-         * ), */
-        SYSCALL_PSELECT6 => sys_mypselect(
+        SYSCALL_PSELECT6 => sys_pselect(
             args[0],
             args[1] as *mut FdSet,
             args[2] as *mut FdSet,
