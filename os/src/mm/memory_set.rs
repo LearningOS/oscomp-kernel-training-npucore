@@ -314,6 +314,18 @@ impl MemorySet {
         }) {
             let result = area.map_one(&mut self.page_table, vpn); // attempt to map
             if result.is_ok() {
+                if let Some(file) = &area.map_file {
+                    // read to the virtual page which we just mapped
+                    // can be improved by mapping to fs cache
+                    let page = UserBuffer::new(translated_byte_buffer(self.page_table.token(), VirtAddr::from(vpn).0 as *const u8, 4096));
+                    match file {
+                        FileLike::Regular(file) => {
+                            file.read(page);
+                        },
+                        // map a non-regular file will cause EACCES, so it's impossible here
+                        _ => unreachable!(),
+                    }
+                }
                 // if mapped successfully,
                 // in other words, not previously mapped before last statement(let result = ...)
                 info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
@@ -1008,7 +1020,7 @@ pub fn mmap(
         );
 
         if !flags.contains(MapFlags::MAP_ANONYMOUS) {
-            warn!("[mmap] Non-Anony call haven't been support yet!");
+            warn!("[mmap] file-backed map!");
             if fd >= inner.fd_table.len() {
                 // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
                 return EBADF as usize;
@@ -1033,6 +1045,7 @@ pub fn mmap(
                 return EBADF as usize;
             }
         }
+        // the last one is trap context, we insert mmap area to the slot right before trap context (len - 2)
         let idx = inner.memory_set.areas.len() - 2;
         inner.memory_set.areas.insert(idx, new_area);
         start_va.0
