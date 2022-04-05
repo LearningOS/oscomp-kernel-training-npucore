@@ -120,11 +120,27 @@ impl File for Stdout {
         panic!("Cannot read from stdout!");
     }
     fn write(&self, user_buf: UserBuffer) -> usize {
-        let lock = STDOUTLOCK.lock();
+        let _lock = STDOUTLOCK.lock();
         for buffer in user_buf.buffers.iter() {
             print!("{}", core::str::from_utf8(*buffer).unwrap());
         }
         user_buf.len()
+    }
+    fn kread(&self, _offset: Option<&mut usize>, _buffer: &mut [u8]) -> usize {
+        panic!("Cannot read from stdout!");
+    }
+    /// The chardev is not seek-able so offset should be `None`,
+    /// Otherwise `kwrite()` will do nothing and return ESPIPE.
+    /// # Warning
+    /// Buffer must be in kernel space
+    fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
+        if offset.is_some() {
+            // The chardev is not seek-able
+            return crate::syscall::errno::ESPIPE as usize;
+        }
+        let _lock = STDOUTLOCK.lock();
+        print!("{}", core::str::from_utf8(buffer).unwrap());
+        buffer.len()
     }
 }
 

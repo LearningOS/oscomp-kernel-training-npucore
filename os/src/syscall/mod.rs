@@ -206,12 +206,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_WRITE => sys_write(args[0], args[1], args[2]),
         SYSCALL_WRITEV => sys_writev(args[0], args[1], args[2]),
         SYSCALL_LSEEK => sys_lseek(args[0], args[1], args[2]),
-        SYSCALL_SENDFILE => sys_sendfile(
-            args[0] as isize,
-            args[1] as isize,
-            args[2] as *mut usize,
-            args[3],
-        ),
+        SYSCALL_SENDFILE => sys_sendfile(args[0], args[1], args[2], args[3]),
         SYSCALL_READLINKAT => sys_readlinkat(
             args[0] as isize,
             args[1] as *const u8,

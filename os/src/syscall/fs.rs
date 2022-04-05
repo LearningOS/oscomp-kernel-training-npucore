@@ -222,61 +222,82 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
     ))) as isize
 }
 
-/* return the num of bytes */
-pub fn sys_sendfile(out_fd: isize, in_fd: isize, offset_ptr: *mut usize, count: usize) -> isize {
-    /*
-        If offset is not NULL, then it points to a variable holding the
-        file offset from which sendfile() will start reading data from
-        in_fd.
 
-        When sendfile() returns,
-        *** this variable will be set to the offset of the byte following
-        the last byte that was read. ***
-
-        If offset is not NULL, then sendfile() does not modify the file
-        offset of in_fd; otherwise the file offset is adjusted to reflect
-        the number of bytes read from in_fd.
-
-        If offset is NULL, then data will be read from in_fd starting at
-        the file offset, and the file offset will be updated by the call.
-    */
+/// If offset is not NULL, then it points to a variable holding the
+/// file offset from which sendfile() will start reading data from
+/// in_fd.
+///
+/// When sendfile() returns,
+/// this variable will be set to the offset of the byte following
+/// the last byte that was read.
+///
+/// If offset is not NULL, then sendfile() does not modify the file
+/// offset of in_fd; otherwise the file offset is adjusted to reflect
+/// the number of bytes read from in_fd.
+///
+/// If offset is NULL, then data will be read from in_fd starting at
+/// the file offset, and the file offset will be updated by the call.
+pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: usize, count: usize) -> isize {
     let task = current_task().unwrap();
-    let token = current_user_token();
     let inner = task.acquire_inner_lock();
-
-    if let Some(file_in) = &inner.fd_table[in_fd as usize] {
-        // file_in exists
-        match &file_in.file {
-            FileLike::Regular(fin) => {
-                if let Some(file_out) = &inner.fd_table[out_fd as usize] {
-                    //file_out exists
-                    match &file_out.file {
-                        FileLike::Regular(fout) => {
-                            if offset_ptr as usize != 0 {
-                                //won't influence file.offset
-                                let offset = translated_refmut(token, offset_ptr);
-                                let data = fin.read_vec(*offset as isize, count);
-                                let wlen = fout.write_all(&data);
-                                *offset += wlen;
-                                return wlen as isize;
-                            } else {
-                                //use file.offset
-                                let data = fin.read_vec(-1, count);
-                                let wlen = fout.write_all(&data);
-                                return wlen as isize;
-                            }
-                        }
-                        _ => return -1,
-                    }
-                } else {
-                    return -1;
-                }
-            }
-            _ => return -1,
-        }
-    } else {
-        return -1;
+    if in_fd >= inner.fd_table.len()
+        || inner.fd_table[in_fd].is_none()
+        || out_fd >= inner.fd_table.len()
+        || inner.fd_table[out_fd].is_none()
+    {
+        return EBADF;
     }
+    info!("[sys_sendfile] outfd: {}, in_fd: {}", out_fd, in_fd);
+    let in_file = match &inner.fd_table[in_fd].as_ref().unwrap().file {
+        // The in_fd argument must correspond to a file which supports mmap-like operations
+        FileLike::Abstract(_) => return EINVAL,
+        FileLike::Regular(file) => {
+            // fd is not open for reading
+            if !file.readable() {
+                return EBADF;
+            }
+            file.clone()
+        }
+    };
+    let out = inner.fd_table[out_fd].as_ref().unwrap();
+    let out_file = match &out.file {
+        FileLike::Abstract(file) => {
+            // fd is not open for writing
+            if !file.writable() {
+                return EBADF;
+            }
+            file.clone()
+        },
+        FileLike::Regular(file) => {
+            // fd is not open for writing
+            if !file.writable() {
+                return EBADF;
+            }
+            file.clone()
+        }
+    };
+    let token = inner.get_user_token();
+    drop(inner);
+    let offset = if offset == 0 {
+        None
+    } else {
+        Some(translated_refmut(token, offset as *mut usize))
+    };
+    // 32KB here, can't be too large, or our kernel heap will crash
+    let max_packet_size = 32 * 1024;
+    let packet_size = core::cmp::min(max_packet_size, count);
+    // a buffer in kernel
+    let mut buffer = Vec::<u8>::with_capacity(packet_size);
+    unsafe {
+        buffer.set_len(packet_size);
+        // use `kread()` to read from `in_file`, `offset` is needed to consider here
+        let read_size = in_file.kread(offset, buffer.as_mut_slice());
+        // the leading `read_size` data in buffer is valid
+        buffer.set_len(read_size);
+    }
+    let write_size = out_file.kwrite(None, buffer.as_slice());
+    info!("[sys_sendfile] written bytes: {}", write_size);
+    write_size as isize
 }
 
 pub fn sys_crosselect(

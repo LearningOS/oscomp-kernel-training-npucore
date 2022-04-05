@@ -11,24 +11,6 @@ use bitflags::*;
 use lazy_static::*;
 use simple_fat32::{FAT32Manager, VFile, ATTRIBUTE_ARCHIVE, ATTRIBUTE_DIRECTORY};
 use spin::Mutex;
-//use crate::config::*;
-//use crate::gdb_println;
-
-// pub const SEEK_SET: i32 = 0; /* set to offset bytes.  */
-// pub const SEEK_CUR: i32 = 1; /* set to its current location plus offset bytes.  */
-// pub const SEEK_END: i32 = 2; /* set to the size of the file plus offset bytes.  */
-// /*  Adjust the file offset to the next location in the file
-// greater than or equal to offset containing data.  If
-// offset points to data, then the file offset is set to
-// offset */
-// pub const SEEK_DATA: i32 = 3;
-// /*  Adjust the file offset to the next hole in the file
-// greater than or equal to offset.  If offset points into
-// the middle of a hole, then the file offset is set to
-// offset.  If there is no hole past offset, then the file
-// offset is adjusted to the end of the file (i.e., there is
-// an implicit hole at the end of any file). */
-// pub const SEEK_HOLE: i32 = 4;
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub enum DiskInodeType {
@@ -62,83 +44,6 @@ impl OSInode {
     pub fn is_dir(&self) -> bool {
         let inner = self.inner.lock();
         inner.inode.is_dir()
-    }
-
-    /* this func will not influence the file offset
-     * @parm: if offset == -1, file offset will be used
-     */
-    pub fn read_vec(&self, offset: isize, len: usize) -> Vec<u8> {
-        let mut inner = self.inner.lock();
-        let mut len = len;
-        let ori_off = inner.offset;
-        if offset >= 0 {
-            inner.offset = offset as usize;
-        }
-        let mut buffer = [0u8; 512];
-        let mut v: Vec<u8> = Vec::new();
-        loop {
-            let rlen = inner.inode.read_at(inner.offset, &mut buffer);
-            if rlen == 0 {
-                break;
-            }
-            inner.offset += rlen;
-            v.extend_from_slice(&buffer[..rlen.min(len)]);
-            if len > rlen {
-                len -= rlen;
-            } else {
-                break;
-            }
-        }
-        if offset >= 0 {
-            inner.offset = ori_off;
-        }
-        v
-    }
-
-    pub fn read_all(&self) -> Vec<u8> {
-        let mut inner = self.inner.lock();
-        let mut buffer = [0u8; 512];
-        let mut v: Vec<u8> = Vec::new();
-        loop {
-            let len = inner.inode.read_at(inner.offset, &mut buffer);
-            if len == 0 {
-                break;
-            }
-            inner.offset += len;
-            v.extend_from_slice(&buffer[..len]);
-        }
-        v
-    }
-
-    pub fn read_into(&self, buffer: &mut [u8]) {
-        unsafe {
-            let mut inner = self.inner.lock();
-            loop {
-                let len = inner.inode.read_at(inner.offset, buffer);
-                if len == 0 {
-                    break;
-                }
-                inner.offset += len;
-            }
-        }
-    }
-    pub fn write_all(&self, str_vec: &Vec<u8>) -> usize {
-        let mut inner = self.inner.lock();
-        let mut remain = str_vec.len();
-        let mut base = 0;
-        loop {
-            let len = remain.min(512);
-            inner
-                .inode
-                .write_at(inner.offset, &str_vec.as_slice()[base..base + len]);
-            inner.offset += len;
-            base += len;
-            remain -= len;
-            if remain == 0 {
-                break;
-            }
-        }
-        return base;
     }
 
     pub fn find(&self, path: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
@@ -550,5 +455,49 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    /// If offset is not `None`, `kread()` will start reading file from `*offset`,
+    /// the `*offset` is adjusted to reflect the number of bytes written to the buffer,
+    /// and the file offset won't be modified.
+    /// Otherwise `kread()` will start reading file from file offset,
+    /// the file offset is adjusted to reflect the number of bytes written to the buffer.
+    /// # Warning
+    /// Buffer must be in kernel space
+    fn kread(&self, offset: Option<&mut usize>, buffer: &mut [u8]) -> usize {
+        let mut inner = self.inner.lock();
+        match offset {
+            Some(offset) => {
+                let len = inner.inode.read_at(*offset, buffer);
+                *offset += len;
+                len
+            }
+            None => {
+                let len = inner.inode.read_at(inner.offset, buffer);
+                inner.offset += len;
+                len
+            }
+        }
+    }
+    /// If offset is not `None`, `kwrite()` will start writing file from `*offset`,
+    /// the `*offset` is adjusted to reflect the number of bytes read from the buffer,
+    /// and the file offset won't be modified.
+    /// Otherwise `kwrite()` will start writing file from file offset,
+    /// the file offset is adjusted to reflect the number of bytes read from the buffer.
+    /// # Warning
+    /// Buffer must be in kernel space
+    fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
+        let mut inner = self.inner.lock();
+        match offset {
+            Some(offset) => {
+                let len = inner.inode.write_at(*offset, buffer);
+                *offset += len;
+                len
+            }
+            None => {
+                let len = inner.inode.write_at(inner.offset, buffer);
+                inner.offset += len;
+                len
+            }
+        }
     }
 }

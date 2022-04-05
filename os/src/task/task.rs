@@ -4,7 +4,7 @@ use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
-use crate::fs::{FileDescriptor, FileLike, Stdin, Stdout};
+use crate::fs::{File, FileDescriptor, FileLike, Stdin, Stdout};
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::ENOEXEC;
 use crate::task::current_task;
@@ -605,7 +605,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                 if crate::mm::push_elf_area(app_inode.clone()).is_err() {
                     unsafe {
                         app_inode
-                            .read_into(&mut core::slice::from_raw_parts_mut(start as *mut u8, len));
+                            .kread(None, core::slice::from_raw_parts_mut(start as *mut u8, len));
                     }
                 } else {
                     info!("Trying not to load anything.");

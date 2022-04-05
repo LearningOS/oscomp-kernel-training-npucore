@@ -6,7 +6,7 @@ pub mod signal;
 mod switch;
 mod task;
 
-use crate::fs::{open, DiskInodeType, OpenFlags};
+use crate::fs::{open, DiskInodeType, OpenFlags, File};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 use lazy_static::*;
@@ -121,8 +121,8 @@ lazy_static! {
             crate::mm::MapPermission::R | crate::mm::MapPermission::W,
         );
         unsafe {
-            let mut buffer = core::slice::from_raw_parts_mut(start as *mut u8, len);
-            inode.read_into(&mut buffer);
+            let buffer = core::slice::from_raw_parts_mut(start as *mut u8, len);
+            inode.kread(None, buffer);
             TaskControlBlock::new(buffer)
         }
     });

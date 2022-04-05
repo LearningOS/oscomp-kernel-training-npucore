@@ -1,7 +1,6 @@
 mod dev_fs;
 pub mod finfo;
 mod inode;
-mod iovec;
 mod mount;
 mod pipe;
 mod poll;
@@ -42,7 +41,13 @@ pub trait File: Send + Sync {
     fn writable(&self) -> bool;
     fn read(&self, buf: UserBuffer) -> usize;
     fn write(&self, buf: UserBuffer) -> usize;
-    fn ioctl(&self, cmd: u32, arg: usize) -> isize {
+    fn kread(&self, _offset: Option<&mut usize>, _buffer: &mut [u8]) -> usize {
+        todo!()
+    }
+    fn kwrite(&self, _offset: Option<&mut usize>, _buffer: &[u8]) -> usize {
+        todo!()
+    }
+    fn ioctl(&self, _cmd: u32, _arg: usize) -> isize {
         0
     }
     fn r_ready(&self) -> bool {
