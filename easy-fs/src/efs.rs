@@ -104,6 +104,7 @@ impl EasyFileSystem {
             rt_clus as usize,
             DiskInodeType::Directory,
             None,
+            None,
             Arc::clone(efs),
         )
     }

@@ -1,9 +1,15 @@
+use core::fmt::Result;
+use core::mem;
+use core::ops::{AddAssign, DerefMut, SubAssign};
+
 use super::{DiskInodeType, EasyFileSystem};
 use crate::block_cache::FileCache;
 use crate::{get_block_cache, DataBlock, BLOCK_SZ};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use spin::Mutex;
 /// The functionality of ClusLi & Inode can be merged.
 /// The struct for file information
 /* *ClusLi was DiskInode*
@@ -13,45 +19,60 @@ use alloc::vec::Vec;
 pub struct Inode {
     /// For FAT32, size is a value computed from FAT.
     /// You should iterate around the FAT32 to get the size.
-    pub size: u32,
+    pub size: Mutex<u32>,
     /// The cluster list.
-    pub direct: Vec<u32>,
+    pub direct: Mutex<Vec<u32>>,
     pub type_: DiskInodeType,
+    pub parent_dir: Option<Arc<Self>>,
     fs: Arc<EasyFileSystem>,
     //    block_device: Arc<dyn BlockDevice>,
 }
 
 impl Inode {
     /// Constructor for Inodes
+    /// # Arguments
+    /// `fst_clus`: The first cluster of the file
+    /// `type_`: The type of the inode determined by the file
+    /// `size`: NOTE: the `size` field should be set to `None` for a directory
+    /// `parent_dir`: parent directory
+    /// `fs`: The pointer to the file system
     pub fn new(
         fst_clus: usize,
         type_: DiskInodeType,
         size: Option<usize>,
+        parent_dir: Option<Arc<Self>>,
         fs: Arc<EasyFileSystem>,
     ) -> Self {
         let mut clus_size_as_size = false;
-        let mut i = Inode {
-            direct: fs
-                .fat
-                .get_all_clus_num(fst_clus as u32, fs.block_device.clone()),
+        let i = Inode {
+            direct: Mutex::new(
+                fs.fat
+                    .get_all_clus_num(fst_clus as u32, fs.block_device.clone()),
+            ),
             type_,
             size: if let Some(size) = size {
                 clus_size_as_size = true;
-                size as u32
+                Mutex::new(size as u32)
             } else {
-                0
+                Mutex::new(0 as u32)
             },
+            parent_dir,
             fs,
         };
         if !clus_size_as_size {
-            i.size = i.direct.len() as u32 * i.fs.clus_size();
+            i.size
+                .lock()
+                .add_assign(i.direct.lock().len() as u32 * i.fs.clus_size());
         }
         return i;
     }
+    pub fn file_size(&self) -> usize {
+        *self.size.lock() as usize
+    }
     /// direct vec/blocks allocated only when they are needed.
     pub fn initialize(&mut self, type_: DiskInodeType) {
-        self.size = 0;
-        self.direct = vec::Vec::new();
+        self.size = Mutex::new(0);
+        self.direct = Mutex::new(vec::Vec::new());
         self.type_ = type_;
     }
     pub fn is_dir(&self) -> bool {
@@ -63,7 +84,7 @@ impl Inode {
     }
     /// Return clus number correspond to size.
     pub fn data_clus(&self) -> u32 {
-        self._data_clus(self.size)
+        self._data_clus(*self.size.lock())
     }
     pub fn _data_clus(&self, file_size: u32) -> u32 {
         (file_size + self.fs.byts_per_clus as u32 - 1) / self.fs.byts_per_clus as u32
@@ -77,8 +98,11 @@ impl Inode {
     }
     /// Get the addition of clusters needed to increase the file size.
     pub fn clus_num_needed(&self, new_size: u32) -> u32 {
-        assert!(new_size >= self.size);
-        self.total_clus(new_size) - self.total_clus(self.size)
+        let lock = self.size.lock();
+        let size = *lock;
+        drop(lock);
+        assert!(new_size >= size);
+        self.total_clus(new_size) - self.total_clus(size)
     }
     /// Return the corresponding
     /// (`cluster_id`, `nth_block_in_that_cluster`, `byts_offset_in_last_block`)
@@ -94,7 +118,7 @@ impl Inode {
     #[inline(always)]
     fn get_block_id(&self, blk: u32) -> u32 {
         let (clus, sec, _) = self.clus_offset(blk as usize);
-        self.fs.first_sector_of_cluster(self.direct[clus]) + sec as u32
+        self.fs.first_sector_of_cluster(self.direct.lock()[clus]) + sec as u32
     }
 
     /// The `get_block_cache` version of read_at
@@ -106,7 +130,8 @@ impl Inode {
     /// * `block_device`: the block_dev
     pub fn read_at_block_cache(&self, offset: usize, buf: &mut [u8]) -> usize {
         let mut start = offset;
-        let end = (offset + buf.len()).min(self.size as usize);
+        let size = { *self.size.lock() };
+        let end = (offset + buf.len()).min(size as usize);
         if start >= end {
             return 0;
         }
@@ -140,7 +165,10 @@ impl Inode {
     }
     pub fn write_at_block_cache(&mut self, offset: usize, buf: &[u8]) -> usize {
         let mut start = offset;
-        let end = (offset + buf.len()).min(self.size as usize);
+        let lock = self.size.lock();
+        let size = *lock;
+        drop(lock);
+        let end = (offset + buf.len()).min(size as usize);
         assert!(start <= end);
         let mut start_block = start / BLOCK_SZ;
         let mut write_size = 0usize;
@@ -176,19 +204,36 @@ impl Inode {
     /// # Warning
     /// We will clear the block contents to zero later.
     pub fn clear_size(&mut self) -> Vec<u32> {
-        let mut v: Vec<u32> = Vec::new();
-        self.size = 0;
+        let mut lock = self.size.lock();
+        let rhs = *lock;
+        lock.sub_assign(rhs);
+        drop(lock);
         // direct is storing the CLUSTERS!
-        for i in &self.direct {
-            for j in self.fs.first_sector_of_cluster(*i)
-                ..self.fs.first_sector_of_cluster(*i) + self.fs.sec_per_clus as u32
-            {
-                v.push(j);
-            }
-        }
-        v
+        let mut lock = self.direct.lock();
+        mem::take(&mut lock)
     }
 
+    fn find_local(&self, name: String) -> Option<Arc<Self>> {
+        //None
+        todo!()
+    }
+    pub fn open(&self, name: String) -> Option<Arc<Self>> {
+        if self.is_file() {
+            None
+        } else {
+            self.find_local(name)
+        }
+    }
+
+    pub fn ls(&self) -> Vec<String> {
+        if !self.is_dir() {
+            return Vec::new();
+        } else {
+            let v = Vec::new();
+            todo!();
+            return v;
+        }
+    }
     // Increase the size of current file.
     /*pub fn increase_size(
         &mut self,
@@ -198,4 +243,22 @@ impl Inode {
     ) -> Option<()> {
         todo!();
     }*/
+}
+
+struct DirIter {}
+impl DirIter {
+    fn is_file(&self) -> bool {
+        todo!()
+    }
+}
+
+impl Iterator for DirIter {
+    type Item = Arc<Self>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.is_file() {
+            None
+        } else {
+            todo!()
+        }
+    }
 }

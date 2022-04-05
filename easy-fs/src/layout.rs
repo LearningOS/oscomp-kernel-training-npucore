@@ -9,6 +9,8 @@ use core::{fmt::Debug, mem};
 
 pub const EOC: u32 = 0x0FFF_FFFF;
 pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
+pub const DIR_ENTRY_UNUSED: u8 = 0x5e;
+pub const DIR_ENTRY_LAST_AND_UNUSED: u8 = 0x0;
 
 #[derive(Debug, Copy)]
 #[repr(packed)]
@@ -247,6 +249,8 @@ pub enum FATDiskInodeType {
     AttrReadOnly = 0x01,
     AttrHidden = 0x02,
     AttrSystem = 0x04,
+
+    /// Root Dir
     AttrVolumeID = 0x08,
     AttrDirectory = 0x10,
     AttrArchive = 0x20,
@@ -306,6 +310,15 @@ impl FATDirEnt {
                 self.short_entry.name().to_string()
             }
         }
+    }
+    pub fn unused(&self) -> bool {
+        self.last_and_unused() || self.unused_not_last()
+    }
+    pub fn unused_not_last(&self) -> bool {
+        unsafe { self.long_entry.ord == DIR_ENTRY_UNUSED }
+    }
+    pub fn last_and_unused(&self) -> bool {
+        unsafe { self.long_entry.ord == DIR_ENTRY_LAST_AND_UNUSED }
     }
 }
 

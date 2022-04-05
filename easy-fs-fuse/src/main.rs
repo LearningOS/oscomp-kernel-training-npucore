@@ -61,14 +61,21 @@ fn easy_fs_pack() -> std::io::Result<()> {
         "data_area_start_block: {}, \nsec_per_clus: {}, \nbyts_per_clus: {}, \nroot_clus:{}",
         i.data_area_start_block, i.sec_per_clus, i.byts_per_clus, i.root_clus
     );
-    let rt = Inode::new(i.root_clus as usize, DiskInodeType::File, None, i.clone());
+    let rt = Inode::new(
+        i.root_clus as usize,
+        DiskInodeType::File,
+        None,
+        None,
+        i.clone(),
+    );
     println!("size:{:?}", rt.size);
 
     let mut ent = FATDirEnt::empty();
     println!(
-        "{},name: {}",
+        "{},name: {}, size:{}",
         rt.read_at_block_cache(0, ent.as_bytes_mut()),
-        ent.get_name()
+        ent.get_name(),
+        rt.file_size()
     );
 
     /*
