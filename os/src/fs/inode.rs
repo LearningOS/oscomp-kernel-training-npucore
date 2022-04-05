@@ -1,10 +1,10 @@
 use super::{finfo, Dirent, File, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN};
 use crate::color_text;
-use crate::config::PAGE_SIZE;
 use crate::mm::UserBuffer;
+use crate::syscall::errno::*;
+use crate::syscall::fs::SeekWhence;
 use crate::{drivers::BLOCK_DEVICE, println};
 use _core::usize;
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -14,21 +14,21 @@ use spin::Mutex;
 //use crate::config::*;
 //use crate::gdb_println;
 
-pub const SEEK_SET: i32 = 0; /* set to offset bytes.  */
-pub const SEEK_CUR: i32 = 1; /* set to its current location plus offset bytes.  */
-pub const SEEK_END: i32 = 2; /* set to the size of the file plus offset bytes.  */
-/*  Adjust the file offset to the next location in the file
-greater than or equal to offset containing data.  If
-offset points to data, then the file offset is set to
-offset */
-pub const SEEK_DATA: i32 = 3;
-/*  Adjust the file offset to the next hole in the file
-greater than or equal to offset.  If offset points into
-the middle of a hole, then the file offset is set to
-offset.  If there is no hole past offset, then the file
-offset is adjusted to the end of the file (i.e., there is
-an implicit hole at the end of any file). */
-pub const SEEK_HOLE: i32 = 4;
+// pub const SEEK_SET: i32 = 0; /* set to offset bytes.  */
+// pub const SEEK_CUR: i32 = 1; /* set to its current location plus offset bytes.  */
+// pub const SEEK_END: i32 = 2; /* set to the size of the file plus offset bytes.  */
+// /*  Adjust the file offset to the next location in the file
+// greater than or equal to offset containing data.  If
+// offset points to data, then the file offset is set to
+// offset */
+// pub const SEEK_DATA: i32 = 3;
+// /*  Adjust the file offset to the next hole in the file
+// greater than or equal to offset.  If offset points into
+// the middle of a hole, then the file offset is set to
+// offset.  If there is no hole past offset, then the file
+// offset is adjusted to the end of the file (i.e., there is
+// an implicit hole at the end of any file). */
+// pub const SEEK_HOLE: i32 = 4;
 
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub enum DiskInodeType {
@@ -279,46 +279,46 @@ impl OSInode {
         inner.inode.set_delete_bit();
     }
 
-    pub fn set_offset(&self, off: usize) {
+    // pub fn set_offset(&self, off: usize) {
+    //     let mut inner = self.inner.lock();
+    //     inner.offset = off;
+    // }
+
+    pub fn lseek(&self, offset: isize, whence: SeekWhence) -> isize {
         let mut inner = self.inner.lock();
-        inner.offset = off;
-    }
-
-    pub fn lseek(&self, offset: isize, whence: i32) -> isize {
-        let mut inner = self.inner.lock();
-        log::info!(
-            "[OSInode] lseek(offset={},whence={}), file offset: {}",
-            offset,
-            whence,
-            inner.offset
-        );
-        if whence == SEEK_END {
-            //if inner.offset as isize - offset < 0
-
-            if inner.offset as isize - offset < 0 {
-                return -1;
-            }
-        } else {
-            if offset < 0 {
-                return -1;
-            }
-        }
-
+        let old_offset = inner.offset;
         match whence {
-            SEEK_CUR => {
-                inner.offset += offset as usize;
-            }
-            SEEK_END => {
-                let size = inner.inode.get_size();
-                inner.offset = (size as isize + offset) as usize;
-                // was once
-                // `(size as isize + offset - 1) as usize;`
-            }
-            SEEK_SET => {
+            SeekWhence::SEEK_SET => {
+                if offset < 0 {
+                    return EINVAL;
+                }
                 inner.offset = offset as usize;
-            }
-            _ => return -1,
+            },
+            SeekWhence::SEEK_CUR => {
+                let new_offset = inner.offset as isize + offset;
+                if new_offset >= 0 {
+                    inner.offset = new_offset as usize;
+                } else {
+                    return EINVAL;
+                }
+            },
+            SeekWhence::SEEK_END => {
+                let new_offset = inner.inode.get_size() as isize + offset;
+                if new_offset >= 0 {
+                    inner.offset = new_offset as usize;
+                } else {
+                    return EINVAL;
+                }
+            },
+            // whence is duplicated
+            _ => return EINVAL,
         }
+        log::info!(
+            "[lseek] old offset: {}, new offset: {}, file size: {}",
+            old_offset,
+            inner.offset,
+            inner.inode.get_size()
+        );
         inner.offset as isize
     }
 }

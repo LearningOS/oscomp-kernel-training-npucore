@@ -48,28 +48,36 @@ pub fn sys_getcwd(buf: usize, size: usize) -> isize {
     buf as isize
 }
 
+bitflags! {
+    pub struct SeekWhence: usize {
+        const SEEK_SET  =   0; /* set to offset bytes.  */
+        const SEEK_CUR  =   1; /* set to its current location plus offset bytes.  */
+        const SEEK_END  =   2; /* set to the size of the file plus offset bytes.  */
+    }
+}
+
 pub fn sys_lseek(fd: usize, offset: usize, whence: usize) -> isize {
-    let token = current_user_token();
+    // whence is not valid
+    let whence = match SeekWhence::from_bits(whence) {
+        Some(whence) => whence,
+        None => return EINVAL,
+    };
+    info!(
+        "[sys_lseek] fd: {}, offset: {}, whence: {:?}",
+        fd, offset, whence,
+    );
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    if fd >= inner.fd_table.len() {
-        return -1;
+    // fd is not a valid file descriptor
+    if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
+        return EBADF;
     }
-    if let Some(file) = &inner.fd_table[fd] {
-        let ret = match &file.file {
-            FileLike::Regular(f) => {
-                /*print!("\n");*/
-                info!("lseek(fd={},offset={},whence={}), ", fd, offset, whence);
-                //f.clone();
-
-                f.lseek(offset as isize, whence as i32) as isize
-            }
-            _ => -1,
-        };
-        drop(inner);
-        ret
-    } else {
-        -1
+    let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
+    match &file_descriptor.file {
+        // On Linux, using lseek() on a terminal device returns ESPIPE
+        FileLike::Abstract(_) => return ESPIPE,
+        // whence should be check in lseek
+        FileLike::Regular(file) => file.lseek(offset as isize, whence),
     }
 }
 

@@ -1020,7 +1020,7 @@ pub fn mmap(
                         if !inode.readable() {
                             return EACCES as usize;
                         }
-                        inode.set_offset(offset)
+                        inode.lseek(offset as isize, crate::syscall::fs::SeekWhence::SEEK_SET);
                     }
                     // A file descriptor refers to a non-regular file
                     _ => {
