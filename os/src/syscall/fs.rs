@@ -236,7 +236,7 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
 ///
 /// If offset is NULL, then data will be read from in_fd starting at
 /// the file offset, and the file offset will be updated by the call.
-pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: usize, count: usize) -> isize {
+pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: *mut usize, count: usize) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     if in_fd >= inner.fd_table.len()
@@ -278,33 +278,33 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: usize, count: usize) ->
     let token = inner.get_user_token();
     drop(inner);
 
-    let mut _foo : usize = 0;
-    let mut user_offset_ptr : &mut usize = &mut _foo;
-    let mut offset = if offset == 0 {
-        None
+    // turn a pointer in user space into a pointer in kernel space if it is not null
+    let offset = if offset.is_null() {
+        offset
     } else {
-        user_offset_ptr = translated_refmut(token, offset as *mut usize);
-        Some(*user_offset_ptr)
+        translated_refmut(token, offset) as *mut usize
     };
+
     // a buffer in kernel
-    const BUFFER_SIZE : usize = 4096;
+    const BUFFER_SIZE: usize = 4096;
     let mut buffer = Vec::<u8>::with_capacity(BUFFER_SIZE);
 
     let mut left_bytes = count;
     let mut write_size = 0;
     loop {
-        unsafe { buffer.set_len(left_bytes.min(BUFFER_SIZE));}
-        let read_size = in_file.kread(offset.as_mut(), buffer.as_mut_slice());
-        if read_size == 0 {break;}
-        unsafe { buffer.set_len(read_size);}
+        unsafe {
+            buffer.set_len(left_bytes.min(BUFFER_SIZE));
+        }
+        let read_size = in_file.kread(unsafe { offset.as_mut() }, buffer.as_mut_slice());
+        if read_size == 0 {
+            break;
+        }
+        unsafe {
+            buffer.set_len(read_size);
+        }
         write_size += out_file.kwrite(None, buffer.as_slice());
         left_bytes -= read_size;
     }
-
-    if let Some(offset) = offset {
-        *user_offset_ptr = offset;
-    }
-    
     info!("[sys_sendfile] written bytes: {}", write_size);
     write_size as isize
 }
