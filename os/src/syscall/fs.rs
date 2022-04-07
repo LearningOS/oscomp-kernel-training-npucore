@@ -277,24 +277,34 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: usize, count: usize) ->
     };
     let token = inner.get_user_token();
     drop(inner);
-    let offset = if offset == 0 {
+
+    let mut _foo : usize = 0;
+    let mut user_offset_ptr : &mut usize = &mut _foo;
+    let mut offset = if offset == 0 {
         None
     } else {
-        Some(translated_refmut(token, offset as *mut usize))
+        user_offset_ptr = translated_refmut(token, offset as *mut usize);
+        Some(*user_offset_ptr)
     };
-    // 32KB here, can't be too large, or our kernel heap will crash
-    let max_packet_size = 32 * 1024;
-    let packet_size = core::cmp::min(max_packet_size, count);
     // a buffer in kernel
-    let mut buffer = Vec::<u8>::with_capacity(packet_size);
-    unsafe {
-        buffer.set_len(packet_size);
-        // use `kread()` to read from `in_file`, `offset` is needed to consider here
-        let read_size = in_file.kread(offset, buffer.as_mut_slice());
-        // the leading `read_size` data in buffer is valid
-        buffer.set_len(read_size);
+    const BUFFER_SIZE : usize = 4096;
+    let mut buffer = Vec::<u8>::with_capacity(BUFFER_SIZE);
+
+    let mut left_bytes = count;
+    let mut write_size = 0;
+    loop {
+        unsafe { buffer.set_len(left_bytes.min(BUFFER_SIZE));}
+        let read_size = in_file.kread(offset.as_mut(), buffer.as_mut_slice());
+        if read_size == 0 {break;}
+        unsafe { buffer.set_len(read_size);}
+        write_size += out_file.kwrite(None, buffer.as_slice());
+        left_bytes -= read_size;
     }
-    let write_size = out_file.kwrite(None, buffer.as_slice());
+
+    if let Some(offset) = offset {
+        *user_offset_ptr = offset;
+    }
+    
     info!("[sys_sendfile] written bytes: {}", write_size);
     write_size as isize
 }
