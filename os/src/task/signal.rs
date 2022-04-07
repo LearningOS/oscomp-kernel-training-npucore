@@ -1,6 +1,6 @@
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec::Vec;
-use core::fmt::{self, Binary, Debug, Formatter, Error};
+use core::fmt::{self, Binary, Debug, Error, Formatter};
 use log::{debug, error, info, trace, warn};
 use riscv::register::{
     mtvec::TrapMode,
@@ -10,7 +10,7 @@ use riscv::register::{
 
 use crate::config::*;
 use crate::mm::{copy_from_user, copy_to_user, translated_ref, translated_refmut};
-use crate::task::{current_trap_cx, exit_current_and_run_next};
+use crate::task::{block_current_and_run_next, current_trap_cx, exit_current_and_run_next};
 use crate::trap::TrapContext;
 
 use super::{current_task, current_user_token};
@@ -33,7 +33,6 @@ bitflags! {
         const	SIGILL		= 1 << ( 3);
         const	SIGTRAP		= 1 << ( 4);
         const	SIGABRT		= 1 << ( 5);
-        const	SIGIOT		= 1 << ( 5);
         const	SIGBUS		= 1 << ( 6);
         const	SIGFPE		= 1 << ( 7);
         const	SIGKILL		= 1 << ( 8);
@@ -182,7 +181,7 @@ impl Debug for SigAction {
 /// Change the action taken by a process on receipt of a specific signal.
 /// (See signal(7) for  an  overview of signals.)
 /// # Fields in Structure of `act` & `oldact`
-/// 
+///
 /// # Arguments
 /// * `signum`: specifies the signal and can be any valid signal except `SIGKILL` and `SIGSTOP`.
 /// * `act`: new action
@@ -228,7 +227,6 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
 pub fn do_signal() {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    let mut exception_signal: Option<Signals> = None;
     while let Some(signal) = inner
         .siginfo
         .signal_pending
@@ -264,42 +262,45 @@ pub fn do_signal() {
                     trap_cx.x[2]
                 );
             }
-        }
-        // action not found
-        else {
-            if signal == Signals::SIGCHLD
-                || signal == Signals::SIGURG
-                || signal == Signals::SIGWINCH
-            {
-                trace!("[do_signal] Ignore {:?}", signal);
-                continue;
-            }
-            if signal == Signals::SIGCONT {
-                // If we have time to do this.
-                continue;
-            }
-            exception_signal = Some(signal);
-            drop(inner);
-            drop(task);
-            break;
-        }
-    }
-    if let Some(signal) = exception_signal {
-        if signal == Signals::SIGSEGV {
-            warn!("[do_signal] Use default handler for SIGSEGV");
-            let scause = scause::read();
-            let stval = stval::read();
-            println!(
-                "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
-                scause.cause(),
-                stval,
-                current_trap_cx().sepc,
-            );
-            // page fault exit code
-            exit_current_and_run_next(-2);
         } else {
-            warn!("[do_signal] Use default handler for {:?}", signal);
-            exit_current_and_run_next(signal.to_signum().unwrap() as i32);
+            // user program doesn't register a handler for this signal, use our default handler
+            match signal {
+                // caused by a specific instruction in user program, print log here before exit
+                Signals::SIGSEGV | Signals::SIGILL => {
+                    let scause = scause::read();
+                    let stval = stval::read();
+                    warn!("[do_signal] process terminated due to {:?}", signal);
+                    println!(
+                        "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
+                        scause.cause(),
+                        stval,
+                        current_trap_cx().sepc,
+                    );
+                    drop(inner);
+                    exit_current_and_run_next(signal.to_signum().unwrap());
+                }
+                // the current process we are handing is sure to be in RUNNING status, so just ignore SIGCONT
+                // where we really wake up this process is where we sent SIGCONT, such as `sys_kill()`
+                Signals::SIGCHLD | Signals::SIGCONT | Signals::SIGURG | Signals::SIGWINCH => {
+                    trace!("[do_signal] Ignore {:?}", signal);
+                    continue;
+                }
+                // stop (or we should say block) current process
+                Signals::SIGTSTP | Signals::SIGTTIN | Signals::SIGTTOU => {
+                    drop(inner);
+                    block_current_and_run_next();
+                    // because this loop require `inner`, and we have `drop(inner)` above, so `break` is compulsory
+                    // this would cause some signals won't be handled immediately when this process resumes
+                    // but it doesn't matter, maybe
+                    break;
+                }
+                // for all other signals, we should terminate current process
+                _ => {
+                    warn!("[do_signal] process terminated due to {:?}", signal);
+                    drop(inner);
+                    exit_current_and_run_next(signal.to_signum().unwrap());
+                }
+            }
         }
     }
 }

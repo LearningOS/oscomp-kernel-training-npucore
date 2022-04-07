@@ -39,7 +39,7 @@ pub struct TaskControlBlockInner {
     pub memory_set: MemorySet,
     pub parent: Option<Weak<TaskControlBlock>>,
     pub children: Vec<Arc<TaskControlBlock>>,
-    pub exit_code: i32,
+    pub exit_code: usize,
     pub fd_table: FdTable,
     pub address: ProcAddress,
     pub heap_bottom: usize,

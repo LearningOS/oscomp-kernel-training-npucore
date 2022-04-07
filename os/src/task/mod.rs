@@ -13,8 +13,7 @@ use lazy_static::*;
 use manager::fetch_task;
 pub use signal::*;
 use switch::__switch;
-pub use task::{exec, AuxHeader, FdTable, Rusage};
-use task::{TaskControlBlock, TaskStatus};
+pub use task::{exec, AuxHeader, FdTable, Rusage, TaskControlBlock, TaskStatus};
 
 pub use manager::{add_task, sleep_interruptible, wake_interruptible, find_task_by_pid};
 pub use pid::{pid_alloc, KernelStack, PidHandle};
@@ -53,13 +52,13 @@ pub fn block_current_and_run_next() {
     drop(task_inner);
     // ---- release current PCB lock
 
-    // push back to wait queue.
+    // push to interruptible queue of scheduler, so that it won't be scheduled.
     sleep_interruptible(task);
     // jump to scheduling cycle
     schedule(task_cx_ptr2);
 }
 
-pub fn exit_current_and_run_next(exit_code: i32) {
+pub fn exit_current_and_run_next(exit_code: usize) -> ! {
     // take from Processor
     let task = take_current_task().unwrap();
     // **** hold current PCB lock
@@ -108,6 +107,7 @@ pub fn exit_current_and_run_next(exit_code: i32) {
     // we do not have to save task context
     let _unused: usize = 0;
     schedule(&_unused as *const _);
+    panic!("Unreachable");
 }
 
 lazy_static! {

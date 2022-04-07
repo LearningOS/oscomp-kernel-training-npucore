@@ -91,15 +91,9 @@ pub fn trap_handler() -> ! {
             }
         }
         Trap::Exception(Exception::IllegalInstruction) => {
-            println!("[kernel] IllegalInstruction in application, continue.");
-            println!(
-                "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
-                scause.cause(),
-                stval,
-                current_trap_cx().sepc,
-            );
-            // illegal instruction exit code
-            exit_current_and_run_next(-3);
+            let task = current_task().unwrap();
+            let mut inner = task.acquire_inner_lock();
+            inner.add_signal(Signals::SIGILL);
         }
         Trap::Interrupt(Interrupt::SupervisorTimer) => {
             set_next_trigger();
