@@ -192,7 +192,7 @@ pub fn sys_getegid() -> isize {
 // Fortunately, that won't make difference when we just try to run busybox sh so far.
 pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
     /* An attempt.*/
-    let task = crate::task::find_process_by_pid(pid);
+    let task = crate::task::find_task_by_pid(pid);
     match task {
         Some(task) => task.setpgid(pgid),
         None => -1,
@@ -201,7 +201,7 @@ pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
 
 pub fn sys_getpgid(pid: usize) -> isize {
     /* An attempt.*/
-    let task = crate::task::find_process_by_pid(pid);
+    let task = crate::task::find_task_by_pid(pid);
     match task {
         Some(task) => task.getpgid() as isize,
         None => -1,

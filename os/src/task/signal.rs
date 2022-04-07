@@ -62,13 +62,16 @@ bitflags! {
 }
 
 impl Signals {
-    /// if signum > 63 (illeagal), return `Err()`, else return `Ok(Option<Signals>)`
+    /// if signum > 64 (illeagal), return `Err()`, else return `Ok(Option<Signals>)`
     /// # Attention
     /// Some signals are not present in `struct Signals` (they are leagal though)
     /// In this case, the `Option<Signals>` will be `None`
     pub fn from_signum(signum: usize) -> Result<Option<Signals>, Error> {
-        if signum <= 63 {
-            Ok(Signals::from_bits(1 << signum))
+        if signum == 0 {
+            return Ok(None);
+        }
+        if signum <= 64 {
+            Ok(Signals::from_bits(1 << (signum - 1)))
         } else {
             Err(core::fmt::Error)
         }
