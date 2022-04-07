@@ -299,7 +299,7 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: usize, count: usize) ->
     write_size as isize
 }
 
-pub fn sys_open(path: *const u8, flags: u32) -> isize {
+pub fn sys_open(path: *const u8, flags: usize) -> isize {
     let task = current_task().unwrap();
     let token = current_user_token();
     let path = translated_str(token, path);
@@ -315,7 +315,7 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
         inner.fd_table[fd] = Some(FileDescriptor::new(
             OpenFlags::from_bits(flags)
                 .unwrap()
-                .contains(OpenFlags::CLOEXEC),
+                .contains(OpenFlags::O_CLOEXEC),
             FileLike::Regular(inode),
         ));
         drop(inner);
@@ -397,7 +397,7 @@ pub fn sys_getdents64(fd: isize, buf: *mut u8, len: usize) -> isize {
         if let Some(file) = open(
             "/",
             work_path.as_str(),
-            OpenFlags::RDONLY,
+            OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
         ) {
             loop {
@@ -518,7 +518,7 @@ pub fn sys_newfstatat(fd: isize, path: *const u8, buf: *mut u8, flag: u32) -> is
         if let Some(file) = open(
             work_path.as_str(),
             path.as_str(),
-            OpenFlags::RDONLY,
+            OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
         ) {
             file.get_newstat(&mut stat);
@@ -568,7 +568,7 @@ pub fn sys_fstat(fd: isize, buf: *mut u8) -> isize {
         if let Some(file) = open(
             "/",
             work_path.as_str(),
-            OpenFlags::RDONLY,
+            OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
         ) {
             file.get_fstat(&mut kstat);
@@ -607,7 +607,7 @@ pub fn sys_fstat(fd: isize, buf: *mut u8) -> isize {
     }
 }
 
-pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isize {
+pub fn sys_open_at(dirfd: isize, path: *const u8, flags: usize, mode: u32) -> isize {
     let task = current_task().unwrap();
     let token = current_user_token();
     // 这里传入的地址为用户的虚地址，因此要使用用户的虚地址进行映射
@@ -656,7 +656,7 @@ pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isiz
         ) {
             let fd = inner.alloc_fd();
             inner.fd_table[fd] = Some(FileDescriptor::new(
-                oflags.contains(OpenFlags::CLOEXEC),
+                oflags.contains(OpenFlags::O_CLOEXEC),
                 FileLike::Regular(inode),
             ));
             fd as isize
@@ -674,11 +674,11 @@ pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isiz
                 FileLike::Regular(f) => {
                     //let oflags = OpenFlags::from_bits(flags).unwrap();
                     // 需要新建文件
-                    if oflags.contains(OpenFlags::CREATE) {
+                    if oflags.contains(OpenFlags::O_CREAT) {
                         if let Some(tar_f) = f.create(path.as_str(), DiskInodeType::File) {
                             let fd = inner.alloc_fd();
                             inner.fd_table[fd] = Some(FileDescriptor::new(
-                                oflags.contains(OpenFlags::CLOEXEC),
+                                oflags.contains(OpenFlags::O_CLOEXEC),
                                 FileLike::Regular(tar_f),
                             ));
                             return fd as isize;
@@ -691,7 +691,7 @@ pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isiz
                     if let Some(tar_f) = f.find(path.as_str(), oflags) {
                         let fd = inner.alloc_fd();
                         inner.fd_table[fd] = Some(FileDescriptor::new(
-                            oflags.contains(OpenFlags::CLOEXEC),
+                            oflags.contains(OpenFlags::O_CLOEXEC),
                             FileLike::Regular(tar_f),
                         ));
                         fd as isize
@@ -745,7 +745,7 @@ pub fn sys_mkdir(dirfd: isize, path: *const u8, mode: u32) -> isize {
         if let Some(inode) = open(
             inner.get_work_path().as_str(),
             path.as_str(),
-            OpenFlags::CREATE,
+            OpenFlags::O_CREAT,
             DiskInodeType::Directory,
         ) {
             return 0;

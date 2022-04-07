@@ -247,11 +247,11 @@ lazy_static! {
 pub fn init_rootfs() {
     println!("[fs] build rootfs ... start");
     println!("[fs] build rootfs: creating /proc");
-    let file = open("/", "proc", OpenFlags::CREATE, DiskInodeType::Directory).unwrap();
+    let file = open("/", "proc", OpenFlags::O_CREAT, DiskInodeType::Directory).unwrap();
     println!("[fs] build rootfs: init /proc");
-    let file = open("/proc", "mounts", OpenFlags::CREATE, DiskInodeType::File).unwrap();
-    let meminfo = open("/proc", "meminfo", OpenFlags::CREATE, DiskInodeType::File).unwrap();
-    let file = open("/", "ls", OpenFlags::CREATE, DiskInodeType::File).unwrap();
+    let file = open("/proc", "mounts", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
+    let meminfo = open("/proc", "meminfo", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
+    let file = open("/", "ls", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
     println!("[fs] build rootfs ... finish");
 }
 
@@ -293,15 +293,28 @@ pub fn list_files(work_path: &str, path: &str) {
 }
 
 bitflags! {
-    pub struct OpenFlags: u32 {
-        const RDONLY = 0;
-        const WRONLY = 1 << 0;
-        const RDWR = 1 << 1;
-        const CREATE = 1 << 6;
-        const TRUNC = 1 << 10;
-        const DIRECTROY = 0200000;
-        const LARGEFILE  = 0100000;
-        const CLOEXEC = 02000000;
+    pub struct OpenFlags: usize {
+        const O_RDONLY      =   0o0;
+        const O_WRONLY      =   0o1;
+        const O_RDWR        =   0o2;
+        const O_CREAT       =   0o100;
+        const O_EXCL        =   0o200;
+        const O_NOCTTY      =   0o400;
+        const O_TRUNC       =   0o1000;
+        const O_APPEND      =   0o2000;
+        const O_NONBLOCK    =   0o4000;
+        const O_DSYNC       =   0o10000;
+        const O_SYNC        =   0o4010000;
+        const O_RSYNC       =   0o4010000;
+        const O_DIRECTORY   =   0o200000;
+        const O_NOFOLLOW    =   0o400000;
+        const O_CLOEXEC     =   0o2000000;
+        const O_ASYNC       =   0o20000;
+        const O_DIRECT      =   0o40000;
+        const O_LARGEFILE   =   0o100000;
+        const O_NOATIME     =   0o1000000;
+        const O_PATH        =   0o10000000;
+        const O_TMPFILE     =   0o20200000;
     }
 }
 
@@ -311,7 +324,7 @@ impl OpenFlags {
     pub fn read_write(&self) -> (bool, bool) {
         if self.is_empty() {
             (true, false)
-        } else if self.contains(Self::WRONLY) {
+        } else if self.contains(Self::O_WRONLY) {
             (false, true)
         } else {
             (true, true)
@@ -339,7 +352,7 @@ pub fn open(
     // print!("\n");
     // shell应当保证此处输入的path不为空
     let (readable, writable) = flags.read_write();
-    if flags.contains(OpenFlags::CREATE) {
+    if flags.contains(OpenFlags::O_CREAT) {
         if let Some(inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
             // clear size
             inode.remove();
@@ -363,7 +376,7 @@ pub fn open(
         }
     } else {
         cur_inode.find_vfile_bypath(pathv).map(|inode| {
-            if flags.contains(OpenFlags::TRUNC) {
+            if flags.contains(OpenFlags::O_TRUNC) {
                 inode.clear();
             }
             Arc::new(OSInode::new(readable, writable, inode))

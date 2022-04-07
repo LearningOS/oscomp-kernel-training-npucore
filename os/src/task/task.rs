@@ -594,7 +594,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
         let ret = if let Some(app_inode) = crate::fs::open(
             inner.get_work_path().as_str(),
             path.as_str(),
-            crate::fs::OpenFlags::RDONLY,
+            crate::fs::OpenFlags::O_RDONLY,
             crate::fs::DiskInodeType::File,
         ) {
             drop(inner);
