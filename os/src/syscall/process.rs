@@ -7,8 +7,9 @@ use crate::mm::{
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
 use crate::task::{
-    add_task, current_task, current_user_token, exit_current_and_run_next,
-    suspend_current_and_run_next, Rusage, block_current_and_run_next, find_task_by_pid, signal::*};
+    add_task, block_current_and_run_next, current_task, current_user_token,
+    exit_current_and_run_next, find_task_by_pid, signal::*, suspend_current_and_run_next, Rusage,
+};
 use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone, NSEC_PER_SEC};
 use crate::trap::TrapContext;
 use alloc::string::String;
@@ -46,7 +47,8 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
         todo!()
     } else if (pid as isize) == -1 {
         todo!()
-    } else { // (pid as isize) < -1
+    } else {
+        // (pid as isize) < -1
         todo!()
     }
 }
@@ -337,14 +339,19 @@ pub fn sys_wait4(pid: isize, status: *mut i32, option: usize) -> isize {
 
 #[allow(unused)]
 pub struct RLimit {
-    rlim_cur: usize,  /* Soft limit */
-    rlim_max: usize,  /* Hard limit (ceiling for rlim_cur) */
+    rlim_cur: usize, /* Soft limit */
+    rlim_max: usize, /* Hard limit (ceiling for rlim_cur) */
 }
 
 /// It can be used to both set and get the resource limits of an arbitrary process.
 /// # WARNING
 /// Fake implementation
-pub fn sys_prlimit(pid: usize, resource: usize, new_limit: *const RLimit, old_limit: *mut RLimit) -> isize {
+pub fn sys_prlimit(
+    pid: usize,
+    resource: usize,
+    new_limit: *const RLimit,
+    old_limit: *mut RLimit,
+) -> isize {
     warn!("[sys_prlimit] fake implementation! Do nothing and return 0.");
     SUCCESS
 }
@@ -395,11 +402,11 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
     // let memory_set = &mut task.acquire_inner_lock().memory_set;
     // let start_vpn = addr / PAGE_SIZE;
     // for i in 0..(len / PAGE_SIZE) {
-        // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
-        // if memory_set.set_pte_flags(start_vpn.into(), MapPermission::from_bits((prot as u8) << 1).unwrap()) == -1 {
-        // if fail
-        //     panic!("sys_mprotect: No such pte");
-        // }
+    // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
+    // if memory_set.set_pte_flags(start_vpn.into(), MapPermission::from_bits((prot as u8) << 1).unwrap()) == -1 {
+    // if fail
+    //     panic!("sys_mprotect: No such pte");
+    // }
     // }
     // fence here if we have multi harts
     0

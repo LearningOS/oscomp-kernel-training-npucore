@@ -6,6 +6,7 @@ use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
 use crate::fs::{File, FileDescriptor, FileLike, Stdin, Stdout};
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::syscall::errno::ENOENT;
 use crate::syscall::errno::ENOEXEC;
 use crate::task::current_task;
 use crate::timer::{ITimerVal, TimeVal};
@@ -616,7 +617,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             info!("[exec] argc = {}", args_vec.len());
             let before_exec = crate::mm::unallocated_frames();
             unsafe {
-                // run the file as elf if the magic number matches or return to ENOEXEC.
+                // run the file as elf if the magic number matches or returns ENOEXEC.
                 let buffer = core::slice::from_raw_parts(start as *const u8, len);
                 if buffer[0..4.min(buffer.len())] == [0x7f, 0x45, 0x4c, 0x46] {
                     task.exec(buffer, args_vec);
@@ -688,19 +689,44 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             0 as isize
         } else {
             //else: let ret = if let Some(app_inode) != crate::fs::open(...):
-            -1
+            ENOENT
         };
         ret
     }
     let mut ret = elf_exec(&mut path, &mut args_vec);
-    {
-        if ret == ENOEXEC {
-            unsafe {
-                core::arch::asm!("sfence.vma");
+    ret = {
+        match ret {
+            ENOEXEC => {
+                unsafe {
+                    core::arch::asm!("sfence.vma");
+                }
+                elf_exec(&mut path, &mut args_vec)
             }
-            ret = elf_exec(&mut path, &mut args_vec);
+            ENOENT => {
+                let bin_name = path[..]
+                    .split('/')
+                    .collect::<Vec<_>>()
+                    .last()
+                    .unwrap()
+                    .to_string();
+                if ["ls" /*,"rm" ,"touch", "false" */].contains(&(bin_name.as_str())) {
+                    elf_exec(
+                        {
+                            path = "busybox".to_string();
+                            &mut path
+                        },
+                        {
+                            args_vec.insert(0, "busybox".to_string());
+                            &mut args_vec
+                        },
+                    )
+                } else {
+                    ENOENT
+                }
+            }
+            _ => -1,
         }
-    }
+    };
     ret
     /*
     [ERROR] Unsupported syscall: utimensat , calling over arguments:
@@ -718,7 +744,7 @@ pub enum TaskStatus {
     Ready,
     Running,
     Zombie,
-    Interruptible
+    Interruptible,
 }
 
 pub struct ProcAddress {

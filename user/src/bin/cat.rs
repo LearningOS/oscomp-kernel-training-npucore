@@ -18,14 +18,15 @@ pub fn main(argc: usize, argv: &[&str]) -> i32 {
     let fd = fd as usize;
     let mut buf = [0u8; 16];
     let mut s = String::new();
+    let mut size = 0;
     loop {
-        let size = read(fd, &mut buf) as usize;
+        size = read(fd, &mut buf) as usize;
         if size == 0 {
             break;
         }
         s.push_str(core::str::from_utf8(&buf[..size]).unwrap());
     }
-    println!("{}", s);
+    print!("{}", s);
     close(fd);
     0
 }

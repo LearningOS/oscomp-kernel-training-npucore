@@ -1,4 +1,4 @@
-use crate::{fs::File, task::signal::Signals, timer::TimeSpec};
+use crate::{fs::File, mm::copy_to_user_array, task::signal::Signals, timer::TimeSpec};
 use alloc::vec::Vec;
 use core::{
     cmp::max,
@@ -47,9 +47,52 @@ pub struct PollFd {
     /// File descriptor
     fd: u32,
     /// Requested events
-    events: u16,
+    events: PollEvent,
     /// Returned events
-    revents: u16,
+    revents: PollEvent,
+}
+
+bitflags! {
+    struct PollEvent:u16 {
+    /// There is data to read.
+    const POLLIN = 0x001;
+    /// There is urgent data to read.
+    const POLLPRI = 0x002;
+    /// Writing now will not block.
+    const POLLOUT = 0x004;
+
+    // These values are defined in XPG4.2.
+    /// Normal data may be read.
+    const POLLRDNORM = 0x040;
+    /// Priority data may be read.
+    const POLLRDBAND = 0x080;
+    /// Writing now will not block.
+    const POLLWRNORM = 0x100;
+    /// Priority data may be written.
+    const POLLWRBAND = 0x200;
+
+
+    /// Linux Extension.
+    const POLLMSG = 0x400;
+    /// Linux Extension.
+    const POLLREMOVE = 0x1000;
+    /// Linux Extension.
+    const POLLRDHUP = 0x2000;
+
+    /* Event types always implicitly polled for.
+    These bits need not be set in `events',
+    but they will appear in `revents' to indicate the status of the file descriptor.*/
+
+    /// Implicitly polled for only.
+    /// Error condition.
+    const POLLERR = 0x008;
+    /// Implicitly polled for only.
+    /// Hung up.
+    const POLLHUP = 0x010;
+    /// Implicitly polled for only.
+    /// Invalid polling request.
+    const POLLNVAL = 0x020;
+    }
 }
 
 impl PollFd {
@@ -74,8 +117,8 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
         nfds,
         PollFd {
             fd: 0,
-            events: 0,
-            revents: 0,
+            events: PollEvent::empty(),
+            revents: PollEvent::empty(),
         },
     );
     let task = current_task().unwrap();
@@ -90,6 +133,12 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
     drop(token);
     drop(inner);
     drop(task);
+    log::info!("[ppoll] polling files:");
+    for i in poll_fd.iter_mut() {
+        i.revents = PollEvent::empty();
+        log::info!("[ppoll] {:?}", i);
+    }
+
     if poll_fd.len() != 0 {
         loop {
             let mut i = 0;
@@ -115,9 +164,15 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                 match j.unwrap().file {
                     super::FileLike::Abstract(file) => {
                         no_abs = false;
-                        if (poll_fd[i].events as usize & POLLIN) != 0 && file.r_ready() {
-                            poll_fd[i].revents = POLLIN as u16;
-                            done = 1 + i as isize;
+                        if file.hang_up() {
+                            poll_fd[i].revents |= PollEvent::POLLHUP;
+                            done += 1 as isize;
+                            break;
+                        }
+                        if (poll_fd[i].events.contains(PollEvent::POLLIN)) && file.r_ready() {
+                            poll_fd[i].revents |= PollEvent::POLLIN;
+                            //poll_fd[i].revents |= PollEvent::POLLHUP;
+                            done += 1 as isize;
                             break;
                         }
                     }
@@ -131,6 +186,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                 }
                 break done;
             } else {
+                copy_to_user_array(token, &poll_fd[0], poll_fd_p as *mut PollFd, nfds);
                 drop(inner);
                 drop(task);
                 suspend_current_and_run_next();

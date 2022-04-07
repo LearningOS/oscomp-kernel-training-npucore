@@ -198,7 +198,7 @@ impl OSInode {
                     return EINVAL;
                 }
                 inner.offset = offset as usize;
-            },
+            }
             SeekWhence::SEEK_CUR => {
                 let new_offset = inner.offset as isize + offset;
                 if new_offset >= 0 {
@@ -206,7 +206,7 @@ impl OSInode {
                 } else {
                     return EINVAL;
                 }
-            },
+            }
             SeekWhence::SEEK_END => {
                 let new_offset = inner.inode.get_size() as isize + offset;
                 if new_offset >= 0 {
@@ -214,7 +214,7 @@ impl OSInode {
                 } else {
                     return EINVAL;
                 }
-            },
+            }
             // whence is duplicated
             _ => return EINVAL,
         }

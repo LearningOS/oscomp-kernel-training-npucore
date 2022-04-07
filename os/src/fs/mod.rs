@@ -56,6 +56,9 @@ pub trait File: Send + Sync {
     fn w_ready(&self) -> bool {
         true
     }
+    fn hang_up(&self) -> bool {
+        false
+    }
 }
 
 pub use dev_fs::*;

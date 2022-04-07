@@ -222,7 +222,6 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
     ))) as isize
 }
 
-
 /// If offset is not NULL, then it points to a variable holding the
 /// file offset from which sendfile() will start reading data from
 /// in_fd.
@@ -267,7 +266,7 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: usize, count: usize) ->
                 return EBADF;
             }
             file.clone()
-        },
+        }
         FileLike::Regular(file) => {
             // fd is not open for writing
             if !file.writable() {
@@ -804,6 +803,9 @@ pub fn fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
             F_GETFD => return file.get_cloexec() as isize,
             F_SETFD => {
                 file.set_cloexec((arg & 1) == 1);
+                if arg != 1 && arg != 0 {
+                    warn!("[fcntl] Unsupported flag exists.{}", arg);
+                }
                 return 0;
             }
             F_DUPFD_CLOEXEC => {
@@ -815,7 +817,10 @@ pub fn fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
                     return -1;
                 }
             }
-            _ => return 0, // WARNING!!!
+            _ => {
+                warn!("[fcntl] Unsupported command!");
+                return 0;
+            } // WARNING!!!
         }
     } else {
         return -1;

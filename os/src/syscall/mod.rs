@@ -158,24 +158,27 @@ pub fn syscall_name(id: usize) -> &'static str {
     }
 }
 use crate::{
-    fs::{FdSet},
-    task::{Rusage},
+    fs::FdSet,
+    task::Rusage,
     timer::{ITimerVal, TimeSpec},
 };
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
+    let mut show_info = false;
     if ![
+        //black list
         SYSCALL_YIELD,
         SYSCALL_READ,
         SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
         SYSCALL_WRITEV,
-        SYSCALL_PPOLL,
+        //SYSCALL_PPOLL,
         SYSCALL_GETPPID,
         SYSCALL_CLOCK_GETTIME,
     ]
     .contains(&syscall_id)
     {
+        show_info = true;
         info!(
             "[syscall] pid: {}, syscall_id: {} ({}), \nargs: {:?}",
             sys_getpid(),
@@ -184,7 +187,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args
         );
     }
-    match syscall_id {
+    let ret = match syscall_id {
         SYSCALL_GETCWD => sys_getcwd(args[0], args[1]),
         SYSCALL_DUP => sys_dup(args[0]),
         SYSCALL_DUP3 => sys_dup3(args[0], args[1], args[2]),
@@ -226,9 +229,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_KILL => sys_kill(args[0], args[1]),
         SYSCALL_YIELD => sys_yield(),
         SYSCALL_SIGACTION => sys_sigaction(args[0], args[1], args[2]),
-        SYSCALL_SIGPROCMASK => {
-            sys_sigprocmask(args[0], args[1], args[2])
-        }
+        SYSCALL_SIGPROCMASK => sys_sigprocmask(args[0], args[1], args[2]),
         SYSCALL_SIGRETURN => sys_sigreturn(),
         SYSCALL_NANOSLEEP => sys_nanosleep(
             args[0] as *const crate::timer::TimeSpec,
@@ -254,7 +255,12 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_CLONE => sys_fork(),
         SYSCALL_EXECVE => sys_exec(args[0] as *const u8, args[1] as *const usize),
         SYSCALL_WAIT4 => sys_wait4(args[0] as isize, args[1] as *mut i32, args[2]),
-        SYSCALL_PRLIMIT => sys_prlimit(args[0], args[1], args[2] as *const RLimit, args[3] as *mut RLimit),
+        SYSCALL_PRLIMIT => sys_prlimit(
+            args[0],
+            args[1],
+            args[2] as *const RLimit,
+            args[3] as *mut RLimit,
+        ),
         SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0]),
         SYSCALL_GETUID => sys_getuid(),
         SYSCALL_GETEUID => sys_geteuid(),
@@ -287,5 +293,16 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             info!("Exiting.");
             sys_exit(-1)
         }
+    };
+
+    if show_info {
+        info!(
+            "[syscall] pid: {}, syscall_id: {} ({}) returned {}",
+            sys_getpid(),
+            syscall_name(syscall_id),
+            syscall_id,
+            ret
+        );
     }
+    ret
 }
