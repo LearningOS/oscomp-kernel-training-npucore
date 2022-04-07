@@ -1,19 +1,18 @@
-use alloc::collections::{BTreeMap, BinaryHeap};
-use alloc::vec::Vec;
-use core::fmt::{self, Binary, Debug, Error, Formatter};
+use alloc::collections::BTreeMap;
+use core::fmt::{self, Debug, Error, Formatter};
 use log::{debug, error, info, trace, warn};
 use riscv::register::{
-    mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
     sie, stval, stvec,
 };
 
 use crate::config::*;
 use crate::mm::{copy_from_user, copy_to_user, translated_ref, translated_refmut};
+use crate::syscall::errno::*;
 use crate::task::{block_current_and_run_next, current_trap_cx, exit_current_and_run_next};
 use crate::trap::TrapContext;
 
-use super::{current_task, current_user_token};
+use super::current_task;
 
 /// Default action.
 pub const SIG_DFL: usize = 0;
@@ -188,42 +187,40 @@ impl Debug for SigAction {
 /// # Arguments
 /// * `signum`: specifies the signal and can be any valid signal except `SIGKILL` and `SIGSTOP`.
 /// * `act`: new action
-/// * `oldact`: new action
+/// * `oldact`: old action
 pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -> isize {
-    let task = current_task();
-    let token = current_user_token();
-    if let Some(task) = task {
-        let mut inner = task.acquire_inner_lock();
-        // Copy the old to the oldset.
-        let key = Signals::from_bits(1 << (signum - 1));
-        trace!("[sigaction] signal: {:?}", key);
-        match key {
-            Some(Signals::SIGKILL) | Some(Signals::SIGSTOP) | None => -1,
-            Some(key) => {
-                if oldact as usize != 0 {
-                    if let Some(sigact) = inner.siginfo.signal_handler.remove(&key) {
-                        copy_to_user(token, &sigact, oldact);
-                        trace!("[sigaction] *oldact: {:?}", sigact);
-                    } else {
-                        copy_to_user(token, &SigAction::new(), oldact);
-                        trace!("[sigaction] *oldact: not found");
-                    }
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    let result = Signals::from_signum(signum);
+    match result {
+        Err(_) | Ok(Some(Signals::SIGKILL)) | Ok(Some(Signals::SIGSTOP)) | Ok(None) => {
+            warn!("[sigaction] bad signum: {}", signum);
+            EINVAL
+        },
+        Ok(Some(signal)) => {
+            trace!("[sigaction] signal: {:?}", signal);
+            let token = inner.get_user_token();
+            if oldact as usize != 0 {
+                if let Some(sigact) = inner.siginfo.signal_handler.remove(&signal) {
+                    copy_to_user(token, &sigact, oldact);
+                    trace!("[sigaction] *oldact: {:?}", sigact);
+                } else {
+                    copy_to_user(token, &SigAction::new(), oldact);
+                    trace!("[sigaction] *oldact: not found");
                 }
-                if act as usize != 0 {
-                    let sigact = &mut SigAction::new();
-                    copy_from_user(token, act, sigact);
-                    sigact.sa_mask.remove(Signals::SIGSTOP | Signals::SIGKILL);
-                    // push to PCB, ignore mask and flags now
-                    if !(sigact.sa_handler == SIG_DFL || sigact.sa_handler == SIG_IGN) {
-                        inner.siginfo.signal_handler.insert(key, *sigact);
-                    };
-                    trace!("[sigaction] *act: {:?}", sigact);
-                }
-                0
             }
+            if act as usize != 0 {
+                let sigact = &mut SigAction::new();
+                copy_from_user(token, act, sigact);
+                sigact.sa_mask.remove(Signals::SIGSTOP | Signals::SIGKILL);
+                // push to PCB, ignore mask and flags now
+                if !(sigact.sa_handler == SIG_DFL || sigact.sa_handler == SIG_IGN) {
+                    inner.siginfo.signal_handler.insert(signal, *sigact);
+                };
+                trace!("[sigaction] *act: {:?}", sigact);
+            }
+            SUCCESS
         }
-    } else {
-        -1
     }
 }
 
