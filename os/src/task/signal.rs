@@ -19,10 +19,6 @@ pub const SIG_DFL: usize = 0;
 /// Ignore signal.  
 pub const SIG_IGN: usize = 1;
 
-pub const SIG_BLOCK: usize = 0;
-pub const SIG_UNBLOCK: usize = 1;
-pub const SIG_SETMASK: usize = 2;
-
 bitflags! {
     /// Signal
     pub struct Signals: usize{
@@ -196,7 +192,7 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
         Err(_) | Ok(Some(Signals::SIGKILL)) | Ok(Some(Signals::SIGSTOP)) | Ok(None) => {
             warn!("[sigaction] bad signum: {}", signum);
             EINVAL
-        },
+        }
         Ok(Some(signal)) => {
             trace!("[sigaction] signal: {:?}", signal);
             let token = inner.get_user_token();
@@ -266,7 +262,7 @@ pub fn do_signal() {
             // user program doesn't register a handler for this signal, use our default handler
             match signal {
                 // caused by a specific instruction in user program, print log here before exit
-                Signals::SIGSEGV | Signals::SIGILL => {
+                Signals::SIGILL | Signals::SIGSEGV => {
                     let scause = scause::read();
                     let stval = stval::read();
                     warn!("[do_signal] process terminated due to {:?}", signal);
@@ -305,43 +301,51 @@ pub fn do_signal() {
     }
 }
 
+bitflags! {
+    pub struct SigMaskHow: usize {
+        const SIG_BLOCK     = 0;
+        const SIG_UNBLOCK   = 1;
+        const SIG_SETMASK   = 2;
+    }
+}
+
 /// fetch and/or change the signal mask of the calling thread.
 pub fn sigprocmask(how: usize, set: *const Signals, oldset: *mut Signals) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
-    // Copy the old to the oldset.
+    // If oldset is non-NULL, the previous value of the signal mask is stored in oldset
     if oldset as usize != 0 {
         *translated_refmut(token, oldset) = inner.sigmask;
         trace!("[sigprocmask] *oldset: ({:?})", inner.sigmask);
     }
-    // Assign the sigmask.
+    // If set is NULL, then the signal mask is unchanged
     if set as usize != 0 {
-        let s = *translated_ref(token, set);
-        trace!("[sigprocmask] *set: ({:?})", s);
-        let ret = match how {
-            SIG_BLOCK => {
-                inner.sigmask = inner.sigmask.union(s);
-                trace!("[sigprocmask] how: SIG_BLOCK");
-                0
-            } /*add the signals not yet blocked in the given set to the mask.*/
-            SIG_UNBLOCK => {
-                inner.sigmask = inner.sigmask.difference(s);
-                trace!("[sigprocmask] how: SIG_UNBLOCK");
-                0
-            } /*remove the blocked signals in the set from the sigmask. NOTE: unblocking a signal not blocked is allowed. */
-            SIG_SETMASK => {
-                inner.sigmask = s;
-                trace!("[sigprocmask] how: SIG_SETMASK");
-                0
-            } /*set the signal mask to what we see.*/
-            _ => -1, // "how" variable NOT recognized
+        let how = SigMaskHow::from_bits(how);
+        let signal_set = *translated_ref(token, set);
+        trace!("[sigprocmask] how: {:?}, *set: ({:?})", how, signal_set);
+        match how {
+            // add the signals not yet blocked in the given set to the mask
+            Some(SigMaskHow::SIG_BLOCK) => {
+                inner.sigmask = inner.sigmask.union(signal_set);
+            }
+            // remove the blocked signals in the set from the sigmask
+            // NOTE: unblocking a signal not blocked is allowed
+            Some(SigMaskHow::SIG_UNBLOCK) => {
+                inner.sigmask = inner.sigmask.difference(signal_set);
+            }
+            // set the signal mask to what we see
+            Some(SigMaskHow::SIG_SETMASK) => {
+                inner.sigmask = signal_set;
+            }
+            // `how` was invalid
+            _ => return EINVAL,
         };
+        // unblock SIGILL & SIGSEGV, otherwise infinite loop may occurred
+        // unblock SIGKILL & SIGSTOP, they can't be masked according to standard
         inner.sigmask = inner
             .sigmask
-            .difference(Signals::SIGKILL | Signals::SIGSTOP);
-        ret
-    } else {
-        0
+            .difference(Signals::SIGILL | Signals::SIGSEGV | Signals::SIGKILL | Signals::SIGSTOP);
     }
+    SUCCESS
 }
