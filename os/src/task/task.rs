@@ -40,7 +40,7 @@ pub struct TaskControlBlockInner {
     pub memory_set: MemorySet,
     pub parent: Option<Weak<TaskControlBlock>>,
     pub children: Vec<Arc<TaskControlBlock>>,
-    pub exit_code: i32,
+    pub exit_code: usize,
     pub fd_table: FdTable,
     pub address: ProcAddress,
     pub heap_bottom: usize,
@@ -199,44 +199,44 @@ impl TaskControlBlockInner {
 }
 
 impl TaskControlBlock {
-    pub(in crate::task) fn find_child_process_by_pgid(
-        &self,
-        pgid: usize,
-    ) -> Vec<Arc<TaskControlBlock>> {
-        let mut v = Vec::new();
-        let mut inc: Vec<Arc<TaskControlBlock>>;
-        let task = self.acquire_inner_lock();
-        for i in &task.children {
-            if i.getpgid() == pgid {
-                v.push(i.clone());
-            } else {
-                inc = i.find_child_process_by_pgid(pgid);
-                v.append(&mut inc);
-            }
-        }
-        v
-    }
-    pub(in crate::task) fn find_child_process_by_pid(
-        &self,
-        pid: usize,
-    ) -> Option<Arc<TaskControlBlock>> {
-        let mut ret = None;
-        let task = self.acquire_inner_lock();
-        for i in &task.children {
-            if i.getpid() == pid {
-                return Some(i.clone());
-            } else {
-                ret = i.find_child_process_by_pid(pid);
-                match ret {
-                    None => {}
-                    _ => {
-                        return ret;
-                    }
-                }
-            }
-        }
-        ret
-    }
+    // pub(in crate::task) fn find_child_process_by_pgid(
+    //     &self,
+    //     pgid: usize,
+    // ) -> Vec<Arc<TaskControlBlock>> {
+    //     let mut v = Vec::new();
+    //     let mut inc: Vec<Arc<TaskControlBlock>>;
+    //     let task = self.acquire_inner_lock();
+    //     for i in &task.children {
+    //         if i.getpgid() == pgid {
+    //             v.push(i.clone());
+    //         } else {
+    //             inc = i.find_child_process_by_pgid(pgid);
+    //             v.append(&mut inc);
+    //         }
+    //     }
+    //     v
+    // }
+    // pub(in crate::task) fn find_child_process_by_pid(
+    //     &self,
+    //     pid: usize,
+    // ) -> Option<Arc<TaskControlBlock>> {
+    //     let mut ret = None;
+    //     let task = self.acquire_inner_lock();
+    //     for i in &task.children {
+    //         if i.getpid() == pid {
+    //             return Some(i.clone());
+    //         } else {
+    //             ret = i.find_child_process_by_pid(pid);
+    //             match ret {
+    //                 None => {}
+    //                 _ => {
+    //                     return ret;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     ret
+    // }
     pub fn acquire_inner_lock(&self) -> MutexGuard<TaskControlBlockInner> {
         self.inner.lock()
     }

@@ -1,4 +1,4 @@
-use super::TaskControlBlock;
+use super::{current_task, TaskControlBlock};
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -33,10 +33,12 @@ impl TaskManager {
                 != task.as_ref() as *const TaskControlBlock
         });
     }
-    pub fn find(&self, pid: usize) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.iter().chain(self.interruptible_queue.iter()).find(|task| {
-            task.pid.0 == pid
-        }).cloned()
+    pub fn find_by_pid(&self, pid: usize) -> Option<Arc<TaskControlBlock>> {
+        self.ready_queue
+            .iter()
+            .chain(self.interruptible_queue.iter())
+            .find(|task| task.pid.0 == pid)
+            .cloned()
     }
 }
 
@@ -76,7 +78,12 @@ pub fn wake_interruptible(task: Arc<TaskControlBlock>) {
 }
 
 pub fn find_task_by_pid(pid: usize) -> Option<Arc<TaskControlBlock>> {
-    TASK_MANAGER.lock().find(pid)
+    let task = current_task().unwrap();
+    if task.pid.0 == pid {
+        Some(task)
+    } else {
+        TASK_MANAGER.lock().find_by_pid(pid)
+    }
 }
 
 pub struct WaitQueue {

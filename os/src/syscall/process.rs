@@ -1,5 +1,4 @@
 use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE};
-use crate::fs::{open, DiskInodeType, OpenFlags};
 use crate::mm::{
     copy_from_user, copy_to_user, mmap, munmap, sbrk, translated_byte_buffer, translated_ref,
     translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
@@ -8,7 +7,8 @@ use crate::show_frame_consumption;
 use crate::syscall::errno::*;
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
-    exit_current_and_run_next, find_task_by_pid, signal::*, suspend_current_and_run_next, Rusage,
+    exit_current_and_run_next, find_task_by_pid, signal::*, suspend_current_and_run_next,
+    wake_interruptible, Rusage, TaskStatus,
 };
 use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone, NSEC_PER_SEC};
 use crate::trap::TrapContext;
@@ -18,9 +18,8 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
 
-pub fn sys_exit(exit_code: i32) -> ! {
-    exit_current_and_run_next(exit_code);
-    panic!("Unreachable in sys_exit!");
+pub fn sys_exit(exit_code: usize) -> ! {
+    exit_current_and_run_next((exit_code & 0xff) << 8);
 }
 
 pub fn sys_yield() -> isize {
@@ -38,6 +37,11 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
             if let Some(signal) = signal {
                 let mut inner = task.acquire_inner_lock();
                 inner.add_signal(signal);
+                // wake up target process if it is sleeping
+                if inner.task_status == TaskStatus::Interruptible {
+                    inner.task_status = TaskStatus::Ready;
+                    wake_interruptible(task.clone());
+                }
             }
             SUCCESS
         } else {
@@ -191,7 +195,7 @@ pub fn sys_getegid() -> isize {
 // Fortunately, that won't make difference when we just try to run busybox sh so far.
 pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
     /* An attempt.*/
-    let task = crate::task::find_process_by_pid(pid);
+    let task = crate::task::find_task_by_pid(pid);
     match task {
         Some(task) => task.setpgid(pgid),
         None => -1,
@@ -200,7 +204,7 @@ pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
 
 pub fn sys_getpgid(pid: usize) -> isize {
     /* An attempt.*/
-    let task = crate::task::find_process_by_pid(pid);
+    let task = crate::task::find_task_by_pid(pid);
     match task {
         Some(task) => task.getpgid() as isize,
         None => -1,
@@ -279,7 +283,7 @@ bitflags! {
 }
 /// If there is not a child process whose pid is same as given, return -1.
 /// Else if there is a child process but it is still running, return -2.
-pub fn sys_wait4(pid: isize, status: *mut i32, option: usize) -> isize {
+pub fn sys_wait4(pid: isize, status: *mut usize, option: usize) -> isize {
     let option = WaitOption::from_bits(option).unwrap();
     info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
     let task = current_task().unwrap();
@@ -323,7 +327,7 @@ pub fn sys_wait4(pid: isize, status: *mut i32, option: usize) -> isize {
             // ++++ release child PCB lock
             if status as usize != 0 {
                 // this may NULL!!!
-                *translated_refmut(inner.memory_set.token(), status) = (exit_code & 0xff) << 8;
+                *translated_refmut(inner.memory_set.token(), status) = exit_code;
             }
             return found_pid as isize;
         } else {

@@ -1,28 +1,23 @@
-use alloc::collections::{BTreeMap, BinaryHeap};
-use alloc::vec::Vec;
-use core::fmt::{self, Binary, Debug, Formatter, Error};
+use alloc::collections::BTreeMap;
+use core::fmt::{self, Debug, Error, Formatter};
 use log::{debug, error, info, trace, warn};
 use riscv::register::{
-    mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
     sie, stval, stvec,
 };
 
 use crate::config::*;
 use crate::mm::{copy_from_user, copy_to_user, translated_ref, translated_refmut};
-use crate::task::{current_trap_cx, exit_current_and_run_next};
+use crate::syscall::errno::*;
+use crate::task::{block_current_and_run_next, current_trap_cx, exit_current_and_run_next};
 use crate::trap::TrapContext;
 
-use super::{current_task, current_user_token};
+use super::current_task;
 
 /// Default action.
 pub const SIG_DFL: usize = 0;
 /// Ignore signal.  
 pub const SIG_IGN: usize = 1;
-
-pub const SIG_BLOCK: usize = 0;
-pub const SIG_UNBLOCK: usize = 1;
-pub const SIG_SETMASK: usize = 2;
 
 bitflags! {
     /// Signal
@@ -33,7 +28,6 @@ bitflags! {
         const	SIGILL		= 1 << ( 3);
         const	SIGTRAP		= 1 << ( 4);
         const	SIGABRT		= 1 << ( 5);
-        const	SIGIOT		= 1 << ( 5);
         const	SIGBUS		= 1 << ( 6);
         const	SIGFPE		= 1 << ( 7);
         const	SIGKILL		= 1 << ( 8);
@@ -63,13 +57,16 @@ bitflags! {
 }
 
 impl Signals {
-    /// if signum > 63 (illeagal), return `Err()`, else return `Ok(Option<Signals>)`
+    /// if signum > 64 (illeagal), return `Err()`, else return `Ok(Option<Signals>)`
     /// # Attention
     /// Some signals are not present in `struct Signals` (they are leagal though)
     /// In this case, the `Option<Signals>` will be `None`
     pub fn from_signum(signum: usize) -> Result<Option<Signals>, Error> {
-        if signum <= 63 {
-            Ok(Signals::from_bits(1 << signum))
+        if signum == 0 {
+            return Ok(None);
+        }
+        if signum <= 64 {
+            Ok(Signals::from_bits(1 << (signum - 1)))
         } else {
             Err(core::fmt::Error)
         }
@@ -182,53 +179,50 @@ impl Debug for SigAction {
 /// Change the action taken by a process on receipt of a specific signal.
 /// (See signal(7) for  an  overview of signals.)
 /// # Fields in Structure of `act` & `oldact`
-/// 
+///
 /// # Arguments
 /// * `signum`: specifies the signal and can be any valid signal except `SIGKILL` and `SIGSTOP`.
 /// * `act`: new action
-/// * `oldact`: new action
+/// * `oldact`: old action
 pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -> isize {
-    let task = current_task();
-    let token = current_user_token();
-    if let Some(task) = task {
-        let mut inner = task.acquire_inner_lock();
-        // Copy the old to the oldset.
-        let key = Signals::from_bits(1 << (signum - 1));
-        trace!("[sigaction] signal: {:?}", key);
-        match key {
-            Some(Signals::SIGKILL) | Some(Signals::SIGSTOP) | None => -1,
-            Some(key) => {
-                if oldact as usize != 0 {
-                    if let Some(sigact) = inner.siginfo.signal_handler.remove(&key) {
-                        copy_to_user(token, &sigact, oldact);
-                        trace!("[sigaction] *oldact: {:?}", sigact);
-                    } else {
-                        copy_to_user(token, &SigAction::new(), oldact);
-                        trace!("[sigaction] *oldact: not found");
-                    }
-                }
-                if act as usize != 0 {
-                    let sigact = &mut SigAction::new();
-                    copy_from_user(token, act, sigact);
-                    sigact.sa_mask.remove(Signals::SIGSTOP | Signals::SIGKILL);
-                    // push to PCB, ignore mask and flags now
-                    if !(sigact.sa_handler == SIG_DFL || sigact.sa_handler == SIG_IGN) {
-                        inner.siginfo.signal_handler.insert(key, *sigact);
-                    };
-                    trace!("[sigaction] *act: {:?}", sigact);
-                }
-                0
-            }
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    let result = Signals::from_signum(signum);
+    match result {
+        Err(_) | Ok(Some(Signals::SIGKILL)) | Ok(Some(Signals::SIGSTOP)) | Ok(None) => {
+            warn!("[sigaction] bad signum: {}", signum);
+            EINVAL
         }
-    } else {
-        -1
+        Ok(Some(signal)) => {
+            trace!("[sigaction] signal: {:?}", signal);
+            let token = inner.get_user_token();
+            if oldact as usize != 0 {
+                if let Some(sigact) = inner.siginfo.signal_handler.remove(&signal) {
+                    copy_to_user(token, &sigact, oldact);
+                    trace!("[sigaction] *oldact: {:?}", sigact);
+                } else {
+                    copy_to_user(token, &SigAction::new(), oldact);
+                    trace!("[sigaction] *oldact: not found");
+                }
+            }
+            if act as usize != 0 {
+                let sigact = &mut SigAction::new();
+                copy_from_user(token, act, sigact);
+                sigact.sa_mask.remove(Signals::SIGSTOP | Signals::SIGKILL);
+                // push to PCB, ignore mask and flags now
+                if !(sigact.sa_handler == SIG_DFL || sigact.sa_handler == SIG_IGN) {
+                    inner.siginfo.signal_handler.insert(signal, *sigact);
+                };
+                trace!("[sigaction] *act: {:?}", sigact);
+            }
+            SUCCESS
+        }
     }
 }
 
 pub fn do_signal() {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    let mut exception_signal: Option<Signals> = None;
     while let Some(signal) = inner
         .siginfo
         .signal_pending
@@ -264,43 +258,54 @@ pub fn do_signal() {
                     trap_cx.x[2]
                 );
             }
-        }
-        // action not found
-        else {
-            if signal == Signals::SIGCHLD
-                || signal == Signals::SIGURG
-                || signal == Signals::SIGWINCH
-            {
-                trace!("[do_signal] Ignore {:?}", signal);
-                continue;
+        } else {
+            // user program doesn't register a handler for this signal, use our default handler
+            match signal {
+                // caused by a specific instruction in user program, print log here before exit
+                Signals::SIGILL | Signals::SIGSEGV => {
+                    let scause = scause::read();
+                    let stval = stval::read();
+                    warn!("[do_signal] process terminated due to {:?}", signal);
+                    println!(
+                        "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
+                        scause.cause(),
+                        stval,
+                        current_trap_cx().sepc,
+                    );
+                    drop(inner);
+                    exit_current_and_run_next(signal.to_signum().unwrap());
+                }
+                // the current process we are handing is sure to be in RUNNING status, so just ignore SIGCONT
+                // where we really wake up this process is where we sent SIGCONT, such as `sys_kill()`
+                Signals::SIGCHLD | Signals::SIGCONT | Signals::SIGURG | Signals::SIGWINCH => {
+                    trace!("[do_signal] Ignore {:?}", signal);
+                    continue;
+                }
+                // stop (or we should say block) current process
+                Signals::SIGTSTP | Signals::SIGTTIN | Signals::SIGTTOU => {
+                    drop(inner);
+                    block_current_and_run_next();
+                    // because this loop require `inner`, and we have `drop(inner)` above, so `break` is compulsory
+                    // this would cause some signals won't be handled immediately when this process resumes
+                    // but it doesn't matter, maybe
+                    break;
+                }
+                // for all other signals, we should terminate current process
+                _ => {
+                    warn!("[do_signal] process terminated due to {:?}", signal);
+                    drop(inner);
+                    exit_current_and_run_next(signal.to_signum().unwrap());
+                }
             }
-            if signal == Signals::SIGCONT {
-                // If we have time to do this.
-                continue;
-            }
-            exception_signal = Some(signal);
-            drop(inner);
-            drop(task);
-            break;
         }
     }
-    if let Some(signal) = exception_signal {
-        if signal == Signals::SIGSEGV {
-            warn!("[do_signal] Use default handler for SIGSEGV");
-            let scause = scause::read();
-            let stval = stval::read();
-            println!(
-                "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
-                scause.cause(),
-                stval,
-                current_trap_cx().sepc,
-            );
-            // page fault exit code
-            exit_current_and_run_next(-2);
-        } else {
-            warn!("[do_signal] Use default handler for {:?}", signal);
-            exit_current_and_run_next(signal.to_signum().unwrap() as i32);
-        }
+}
+
+bitflags! {
+    pub struct SigMaskHow: usize {
+        const SIG_BLOCK     = 0;
+        const SIG_UNBLOCK   = 1;
+        const SIG_SETMASK   = 2;
     }
 }
 
@@ -309,38 +314,38 @@ pub fn sigprocmask(how: usize, set: *const Signals, oldset: *mut Signals) -> isi
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
-    // Copy the old to the oldset.
+    // If oldset is non-NULL, the previous value of the signal mask is stored in oldset
     if oldset as usize != 0 {
         *translated_refmut(token, oldset) = inner.sigmask;
         trace!("[sigprocmask] *oldset: ({:?})", inner.sigmask);
     }
-    // Assign the sigmask.
+    // If set is NULL, then the signal mask is unchanged
     if set as usize != 0 {
-        let s = *translated_ref(token, set);
-        trace!("[sigprocmask] *set: ({:?})", s);
-        let ret = match how {
-            SIG_BLOCK => {
-                inner.sigmask = inner.sigmask.union(s);
-                trace!("[sigprocmask] how: SIG_BLOCK");
-                0
-            } /*add the signals not yet blocked in the given set to the mask.*/
-            SIG_UNBLOCK => {
-                inner.sigmask = inner.sigmask.difference(s);
-                trace!("[sigprocmask] how: SIG_UNBLOCK");
-                0
-            } /*remove the blocked signals in the set from the sigmask. NOTE: unblocking a signal not blocked is allowed. */
-            SIG_SETMASK => {
-                inner.sigmask = s;
-                trace!("[sigprocmask] how: SIG_SETMASK");
-                0
-            } /*set the signal mask to what we see.*/
-            _ => -1, // "how" variable NOT recognized
+        let how = SigMaskHow::from_bits(how);
+        let signal_set = *translated_ref(token, set);
+        trace!("[sigprocmask] how: {:?}, *set: ({:?})", how, signal_set);
+        match how {
+            // add the signals not yet blocked in the given set to the mask
+            Some(SigMaskHow::SIG_BLOCK) => {
+                inner.sigmask = inner.sigmask.union(signal_set);
+            }
+            // remove the blocked signals in the set from the sigmask
+            // NOTE: unblocking a signal not blocked is allowed
+            Some(SigMaskHow::SIG_UNBLOCK) => {
+                inner.sigmask = inner.sigmask.difference(signal_set);
+            }
+            // set the signal mask to what we see
+            Some(SigMaskHow::SIG_SETMASK) => {
+                inner.sigmask = signal_set;
+            }
+            // `how` was invalid
+            _ => return EINVAL,
         };
+        // unblock SIGILL & SIGSEGV, otherwise infinite loop may occurred
+        // unblock SIGKILL & SIGSTOP, they can't be masked according to standard
         inner.sigmask = inner
             .sigmask
-            .difference(Signals::SIGKILL | Signals::SIGSTOP);
-        ret
-    } else {
-        0
+            .difference(Signals::SIGILL | Signals::SIGSEGV | Signals::SIGKILL | Signals::SIGSTOP);
     }
+    SUCCESS
 }

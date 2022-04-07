@@ -9,7 +9,7 @@ use lazy_static::__Deref;
 
 use crate::{
     mm::{copy_from_user, translated_byte_buffer, translated_ref, translated_refmut},
-    task::{current_task, sigprocmask, suspend_current_and_run_next, SIG_SETMASK},
+    task::{current_task, sigprocmask, suspend_current_and_run_next, SigMaskHow},
     timer::TimeVal,
 };
 
@@ -108,7 +108,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
     let mut has_mask = false;
     if sigmask as usize != 0 {
         has_mask = true;
-        sigprocmask(SIG_SETMASK, sigmask, oldsig);
+        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), sigmask, oldsig);
     }
     let mut done: isize = 0;
     let mut no_abs: bool = true;
@@ -182,7 +182,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
             }
             if no_abs || done != 0 {
                 if has_mask {
-                    sigprocmask(SIG_SETMASK, oldsig, null_mut::<Signals>());
+                    sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
                 }
                 break done;
             } else {
@@ -316,7 +316,7 @@ pub fn pselect(
     let mut has_mask = false;
     if sigmask as usize != 0 {
         has_mask = true;
-        sigprocmask(SIG_SETMASK, sigmask, oldsig);
+        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), sigmask, oldsig);
     }
     let mut ret = 2048;
     loop {
@@ -422,7 +422,7 @@ pub fn pselect(
         }
     }
     if has_mask {
-        sigprocmask(SIG_SETMASK, oldsig, null_mut::<Signals>());
+        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
     }
     log::warn!("[pselect] quiting pselect. {}", ret);
     // look up according to TimeVal
