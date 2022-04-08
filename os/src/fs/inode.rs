@@ -293,7 +293,7 @@ pub fn list_files(work_path: &str, path: &str) {
 }
 
 bitflags! {
-    pub struct OpenFlags: usize {
+    pub struct OpenFlags: u32 {
         const O_RDONLY      =   0o0;
         const O_WRONLY      =   0o1;
         const O_RDWR        =   0o2;

@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
 
-pub fn sys_exit(exit_code: usize) -> ! {
+pub fn sys_exit(exit_code: u32) -> ! {
     exit_current_and_run_next((exit_code & 0xff) << 8);
 }
 
@@ -273,7 +273,7 @@ pub fn sys_exec(path: *const u8, mut args: *const usize) -> isize {
 }
 
 bitflags! {
-    struct WaitOption: usize {
+    struct WaitOption: u32 {
         const WNOHANG    = 1;
         const WSTOPPED   = 2;
         const WEXITED    = 4;
@@ -283,7 +283,7 @@ bitflags! {
 }
 /// If there is not a child process whose pid is same as given, return -1.
 /// Else if there is a child process but it is still running, return -2.
-pub fn sys_wait4(pid: isize, status: *mut usize, option: usize) -> isize {
+pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> isize {
     let option = WaitOption::from_bits(option).unwrap();
     info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
     let task = current_task().unwrap();

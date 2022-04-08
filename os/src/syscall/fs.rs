@@ -309,7 +309,7 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: *mut usize, count: usiz
     write_size as isize
 }
 
-pub fn sys_open(path: *const u8, flags: usize) -> isize {
+pub fn sys_open(path: *const u8, flags: u32) -> isize {
     let task = current_task().unwrap();
     let token = current_user_token();
     let path = translated_str(token, path);
@@ -346,19 +346,20 @@ pub fn sys_close(fd: usize) -> isize {
     SUCCESS
 }
 
-bitflags! {
-    struct PipeFlags: usize {
-        const O_CLOEXEC     =   02000000;
-        const O_DIRECT	    =   00040000;
-        const O_NONBLOCK    =   00004000;
-    }
-}
-
 /// # Warning
 /// Only O_CLOEXEC is supported now
-pub fn sys_pipe2(pipefd: usize, flags: usize) -> isize {
-    let flags = match PipeFlags::from_bits(flags) {
-        Some(flags) => flags,
+pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
+    let flags = match OpenFlags::from_bits(flags) {
+        Some(flags) => {
+            // only O_CLOEXEC | O_DIRECT | O_NONBLOCK are valid in pipe2()
+            if flags.difference(OpenFlags::O_CLOEXEC | OpenFlags::O_DIRECT | OpenFlags::O_NONBLOCK).is_empty() {
+                flags
+            // some flags are invalid in pipe2(), they are all valid OpenFlags though
+            } else {
+                return EINVAL;
+            }
+        },
+        // contains invalid OpenFlags
         None => return EINVAL,
     };
     let task = current_task().unwrap();
@@ -366,12 +367,12 @@ pub fn sys_pipe2(pipefd: usize, flags: usize) -> isize {
     let (pipe_read, pipe_write) = make_pipe();
     let read_fd = inner.alloc_fd();
     inner.fd_table[read_fd] = Some(FileDescriptor::new(
-        flags.contains(PipeFlags::O_CLOEXEC),
+        flags.contains(OpenFlags::O_CLOEXEC),
         FileLike::Abstract(pipe_read),
     ));
     let write_fd = inner.alloc_fd();
     inner.fd_table[write_fd] = Some(FileDescriptor::new(
-        flags.contains(PipeFlags::O_CLOEXEC),
+        flags.contains(OpenFlags::O_CLOEXEC),
         FileLike::Abstract(pipe_write),
     ));
     let token = inner.get_user_token();
@@ -617,7 +618,7 @@ pub fn sys_fstat(fd: isize, buf: *mut u8) -> isize {
     }
 }
 
-pub fn sys_open_at(dirfd: isize, path: *const u8, flags: usize, mode: u32) -> isize {
+pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isize {
     let task = current_task().unwrap();
     let token = current_user_token();
     // 这里传入的地址为用户的虚地址，因此要使用用户的虚地址进行映射

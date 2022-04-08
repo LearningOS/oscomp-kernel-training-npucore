@@ -58,7 +58,7 @@ pub fn block_current_and_run_next() {
     schedule(task_cx_ptr2);
 }
 
-pub fn exit_current_and_run_next(exit_code: usize) -> ! {
+pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     // take from Processor
     let task = take_current_task().unwrap();
     // **** hold current PCB lock

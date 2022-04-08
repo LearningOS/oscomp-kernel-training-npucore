@@ -273,7 +273,7 @@ pub fn do_signal() {
                         current_trap_cx().sepc,
                     );
                     drop(inner);
-                    exit_current_and_run_next(signal.to_signum().unwrap());
+                    exit_current_and_run_next(signal.to_signum().unwrap() as u32);
                 }
                 // the current process we are handing is sure to be in RUNNING status, so just ignore SIGCONT
                 // where we really wake up this process is where we sent SIGCONT, such as `sys_kill()`
@@ -294,7 +294,7 @@ pub fn do_signal() {
                 _ => {
                     warn!("[do_signal] process terminated due to {:?}", signal);
                     drop(inner);
-                    exit_current_and_run_next(signal.to_signum().unwrap());
+                    exit_current_and_run_next(signal.to_signum().unwrap() as u32);
                 }
             }
         }
