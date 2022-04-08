@@ -270,9 +270,10 @@ pub fn do_signal() {
                         "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
                         scause.cause(),
                         stval,
-                        current_trap_cx().sepc,
+                        inner.get_trap_cx().sepc,
                     );
                     drop(inner);
+                    drop(task);
                     exit_current_and_run_next(signal.to_signum().unwrap() as u32);
                 }
                 // the current process we are handing is sure to be in RUNNING status, so just ignore SIGCONT
@@ -294,6 +295,7 @@ pub fn do_signal() {
                 _ => {
                     warn!("[do_signal] process terminated due to {:?}", signal);
                     drop(inner);
+                    drop(task);
                     exit_current_and_run_next(signal.to_signum().unwrap() as u32);
                 }
             }

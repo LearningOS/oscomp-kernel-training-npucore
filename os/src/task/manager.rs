@@ -29,8 +29,7 @@ impl TaskManager {
     }
     pub fn drop_interruptible(&mut self, task: Arc<TaskControlBlock>) {
         self.interruptible_queue.retain(|task_in_queue| {
-            task_in_queue.as_ref() as *const TaskControlBlock
-                != task.as_ref() as *const TaskControlBlock
+            Arc::as_ptr(task_in_queue) != Arc::as_ptr(&task)
         });
     }
     pub fn find_by_pid(&self, pid: usize) -> Option<Arc<TaskControlBlock>> {
