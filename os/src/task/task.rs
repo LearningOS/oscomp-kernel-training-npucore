@@ -6,8 +6,7 @@ use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
 use crate::fs::{File, FileDescriptor, FileLike, Stdin, Stdout};
 use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
-use crate::syscall::errno::ENOENT;
-use crate::syscall::errno::ENOEXEC;
+use crate::syscall::errno::*;
 use crate::task::current_task;
 use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
@@ -579,6 +578,7 @@ impl TaskControlBlock {
         inner.pgid
     }
 }
+// should return 0 in success
 pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
     debug!("[exec] arg_vec:{:?}", args_vec);
     macro_rules! unmap_exec_buf {
@@ -686,7 +686,8 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             crate::show_frame_consumption!("task_exec", before_exec);
             // on success, we should not return.
             drop(app_inode);
-            0 as isize
+            // should return 0 in success
+            SUCCESS
         } else {
             //else: let ret = if let Some(app_inode) != crate::fs::open(...):
             ENOENT
@@ -694,6 +695,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
         ret
     }
     let mut ret = elf_exec(&mut path, &mut args_vec);
+    // should return 0 in success
     ret = {
         match ret {
             ENOEXEC => {
@@ -724,9 +726,12 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     ENOENT
                 }
             }
-            _ => -1,
+            SUCCESS => SUCCESS,
+            // elf_exec() never return other values
+            _ => unreachable!(),
         }
     };
+    // should return 0 in success
     ret
     /*
     [ERROR] Unsupported syscall: utimensat , calling over arguments:
