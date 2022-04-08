@@ -302,7 +302,7 @@ pub fn do_signal() {
 }
 
 bitflags! {
-    pub struct SigMaskHow: usize {
+    pub struct SigMaskHow: u32 {
         const SIG_BLOCK     = 0;
         const SIG_UNBLOCK   = 1;
         const SIG_SETMASK   = 2;
@@ -310,7 +310,7 @@ bitflags! {
 }
 
 /// fetch and/or change the signal mask of the calling thread.
-pub fn sigprocmask(how: usize, set: *const Signals, oldset: *mut Signals) -> isize {
+pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
     let token = inner.get_user_token();

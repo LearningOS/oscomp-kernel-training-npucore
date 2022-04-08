@@ -6,11 +6,15 @@ use crate::sbi::set_timer;
 use riscv::register::time;
 
 pub const TICKS_PER_SEC: usize = 100;
+
 pub const MSEC_PER_SEC: usize = 1000;
+
 pub const USEC_PER_SEC: usize = 1_000_000;
+pub const USEC_PER_MSEC: usize = 1_000;
+
 pub const NSEC_PER_SEC: usize = 1_000_000_000;
 pub const NSEC_PER_MSEC: usize = 1_000_000;
-pub const USEC_PER_MSEC: usize = 1_000;
+pub const NSEC_PER_USEC: usize = 1_000;
 
 /// Return current time measured by ticks, which is NOT divided by frequency.
 pub fn get_time() -> usize {
@@ -48,8 +52,8 @@ pub fn set_next_trigger() {
 
 #[derive(Clone, Copy, Debug)]
 pub struct TimeSpec {
-    pub tv_sec: u32,
-    pub tv_nsec: u32,
+    pub tv_sec: usize,
+    pub tv_nsec: usize,
 }
 
 impl Add for TimeSpec {
@@ -58,8 +62,8 @@ impl Add for TimeSpec {
     fn add(self, other: Self) -> Self {
         let mut sec = self.tv_sec + other.tv_sec;
         let mut nsec = self.tv_nsec + other.tv_nsec;
-        sec += nsec / NSEC_PER_SEC as u32;
-        nsec %= NSEC_PER_SEC as u32;
+        sec += nsec / NSEC_PER_SEC;
+        nsec %= NSEC_PER_SEC;
         Self {
             tv_sec: sec,
             tv_nsec: nsec,
@@ -90,36 +94,36 @@ impl TimeSpec {
     }
     pub fn from_tick(tick: usize) -> Self {
         Self {
-            tv_sec: (tick / CLOCK_FREQ) as u32,
-            tv_nsec: ((tick % CLOCK_FREQ) * NSEC_PER_SEC / CLOCK_FREQ) as u32,
+            tv_sec: tick / CLOCK_FREQ,
+            tv_nsec: (tick % CLOCK_FREQ) * NSEC_PER_SEC / CLOCK_FREQ,
         }
     }
     pub fn from_s(s: usize) -> Self {
         Self {
-            tv_sec: s as u32,
+            tv_sec: s,
             tv_nsec: 0,
         }
     }
     pub fn from_ms(ms: usize) -> Self {
         Self {
-            tv_sec: (ms / MSEC_PER_SEC) as u32,
-            tv_nsec: ((ms % MSEC_PER_SEC) * NSEC_PER_MSEC) as u32,
+            tv_sec: ms / MSEC_PER_SEC,
+            tv_nsec: (ms % MSEC_PER_SEC) * NSEC_PER_MSEC,
         }
     }
-    pub fn from_us(ns: usize) -> Self {
+    pub fn from_us(us: usize) -> Self {
         Self {
-            tv_sec: (ns / USEC_PER_SEC) as u32,
-            tv_nsec: ((ns % USEC_PER_SEC) * (NSEC_PER_SEC / USEC_PER_SEC)) as u32,
+            tv_sec: us / USEC_PER_SEC,
+            tv_nsec: (us % USEC_PER_SEC) * NSEC_PER_USEC,
         }
     }
     pub fn from_ns(ns: usize) -> Self {
         Self {
-            tv_sec: (ns / NSEC_PER_SEC) as u32,
-            tv_nsec: (ns % NSEC_PER_SEC) as u32,
+            tv_sec: ns / NSEC_PER_SEC,
+            tv_nsec: ns % NSEC_PER_SEC,
         }
     }
     pub fn to_ns(&self) -> usize {
-        self.tv_sec as usize * NSEC_PER_SEC + self.tv_nsec as usize
+        self.tv_sec * NSEC_PER_SEC + self.tv_nsec
     }
     pub fn is_zero(&self) -> bool {
         self.tv_sec == 0 && self.tv_nsec == 0
@@ -169,7 +173,7 @@ impl TimeVal {
         }
     }
     pub fn to_us(&self) -> usize {
-        self.tv_sec as usize * USEC_PER_SEC + self.tv_usec as usize
+        self.tv_sec * USEC_PER_SEC + self.tv_usec
     }
     pub fn is_zero(&self) -> bool {
         self.tv_sec == 0 && self.tv_usec == 0
@@ -210,8 +214,8 @@ impl Sub for TimeVal {
 
 #[derive(Clone)]
 pub struct TimeZone {
-    pub tz_minute_west: u32,
-    pub tz_dst_time: u32,
+    pub tz_minuteswest: u32,
+    pub tz_dsttime: u32,
 }
 
 #[derive(Clone, Copy, Debug)]

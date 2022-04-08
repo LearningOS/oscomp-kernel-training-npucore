@@ -229,7 +229,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_KILL => sys_kill(args[0], args[1]),
         SYSCALL_YIELD => sys_yield(),
         SYSCALL_SIGACTION => sys_sigaction(args[0], args[1], args[2]),
-        SYSCALL_SIGPROCMASK => sys_sigprocmask(args[0], args[1], args[2]),
+        SYSCALL_SIGPROCMASK => sys_sigprocmask(args[0] as u32, args[1], args[2]),
         SYSCALL_SIGRETURN => sys_sigreturn(),
         SYSCALL_NANOSLEEP => sys_nanosleep(
             args[0] as *const crate::timer::TimeSpec,

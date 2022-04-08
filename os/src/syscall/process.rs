@@ -445,7 +445,7 @@ pub fn sys_sigaction(signum: usize, act: usize, oldact: usize) -> isize {
 }
 
 /// Note: code translation should be done in syscall rather than the call handler as the handler may be reused by kernel code which use kernel structs
-pub fn sys_sigprocmask(how: usize, set: usize, oldset: usize) -> isize {
+pub fn sys_sigprocmask(how: u32, set: usize, oldset: usize) -> isize {
     info!(
         "[sys_sigprocmask] how: {:?}; set: {:X}, oldset: {:X}",
         how, set, oldset
