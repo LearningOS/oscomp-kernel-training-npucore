@@ -1,45 +1,17 @@
-use crate::{fs::File, mm::copy_to_user_array, task::signal::Signals, timer::TimeSpec};
-use alloc::vec::Vec;
-use core::{
-    cmp::max,
-    ptr::{null, null_mut},
+use crate::{
+    fs::File,
+    task::{current_user_token, signal::Signals},
+    timer::TimeSpec,
 };
-use k210_hal::cache::Uncache;
-use lazy_static::__Deref;
+use alloc::vec::Vec;
+use core::ptr::{null, null_mut};
 
 use crate::{
-    mm::{copy_from_user, translated_byte_buffer, translated_ref, translated_refmut},
+    mm::{copy_from_user_array, copy_to_user_array},
     task::{current_task, sigprocmask, suspend_current_and_run_next, SigMaskHow},
-    timer::TimeVal,
 };
 
 ///  A scheduling  scheme  whereby  the  local  process  periodically  checks  until  the  pre-specified events (for example, read, write) have occurred.
-use super::{FileDescriptor, OSInode};
-
-/* Event types that can be polled for.  These bits may be set in `events'
-to indicate the interesting event types; they will appear in `revents'
-to indicate the status of the file descriptor.  */
-/// There is data to read.
-const POLLIN: usize = 0x001;
-
-/// There is urgent data to read.
-const POLLPRI: usize = 0x002;
-
-/// Writing now will not block.  
-const POLLOUT: usize = 0x004;
-
-/* Event types always implicitly polled for.  These bits need not be set in
-`events', but they will appear in `revents' to indicate the status of
-the file descriptor.  */
-/// Error condition.
-const POLLERR: usize = 0x008;
-
-/// Hung up.
-const POLLHUP: usize = 0x010;
-
-/// Invalid polling request.
-const POLLNVAL: usize = 0x020;
-
 /// The PollFd struct in 32-bit style.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -54,6 +26,9 @@ pub struct PollFd {
 
 bitflags! {
     struct PollEvent:u16 {
+    /* Event types that can be polled for.  These bits may be set in `events'
+    to indicate the interesting event types; they will appear in `revents'
+    to indicate the status of the file descriptor.  */
     /// There is data to read.
     const POLLIN = 0x001;
     /// There is urgent data to read.
@@ -104,7 +79,7 @@ pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
 ///
 pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Signals) -> isize {
     /*support only POLLIN for currently*/
-    let mut oldsig = &mut Signals::empty();
+    let oldsig = &mut Signals::empty();
     let mut has_mask = false;
     if sigmask as usize != 0 {
         has_mask = true;
@@ -121,18 +96,16 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
             revents: PollEvent::empty(),
         },
     );
-    let task = current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
+    let token = current_user_token();
     //    println!("poll_fd:{:?}, Hi!", poll_fd);
-    for i in 0..nfds {
-        copy_from_user(token, poll_fd_p as *const PollFd, &mut poll_fd[i]);
-    }
+    copy_from_user_array(
+        token,
+        poll_fd_p as *const PollFd,
+        poll_fd.as_mut_ptr(),
+        nfds,
+    );
     //return 1;
     //poll_fd.len()
-    drop(token);
-    drop(inner);
-    drop(task);
     log::info!("[ppoll] polling files:");
     for i in poll_fd.iter_mut() {
         i.revents = PollEvent::empty();
@@ -182,7 +155,11 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
             }
             if no_abs || done != 0 {
                 if has_mask {
-                    sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
+                    sigprocmask(
+                        SigMaskHow::SIG_SETMASK.bits(),
+                        oldsig,
+                        null_mut::<Signals>(),
+                    );
                 }
                 break done;
             } else {
@@ -422,7 +399,11 @@ pub fn pselect(
         }
     }
     if has_mask {
-        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
+        sigprocmask(
+            SigMaskHow::SIG_SETMASK.bits(),
+            oldsig,
+            null_mut::<Signals>(),
+        );
     }
     log::warn!("[pselect] quiting pselect. {}", ret);
     // look up according to TimeVal
