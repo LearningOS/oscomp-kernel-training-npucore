@@ -1,14 +1,12 @@
-use super::{elf_cache::try_remove_elf, memory_set::MapArea, PhysAddr, PhysPageNum};
+use super::{elf_cache::try_remove_elf, PhysAddr, PhysPageNum};
 use crate::{
     config::{MEMORY_END, PAGE_SIZE},
-    fs::FileLike,
+
 };
 // KISS
-use alloc::{string::String, sync::Arc, vec::Vec};
-use core::fmt::{self, Debug, Error, Formatter, Result};
-use k210_hal::cache::Uncache;
+use alloc::{sync::Arc, vec::Vec};
+use core::fmt::{self, Debug, Formatter};
 use lazy_static::*;
-use log::info;
 use spin::RwLock;
 
 pub struct FrameTracker {
@@ -75,14 +73,14 @@ impl FrameAllocator for StackFrameAllocator {
     fn alloc(&mut self) -> Option<PhysPageNum> {
         if let Some(ppn) = self.recycled.pop() {
             let __ppn: PhysPageNum = ppn.into();
-            log::info!("[frame_alloc] {:?}", __ppn);
+            log::trace!("[frame_alloc] {:?}", __ppn);
             Some(ppn.into())
         } else if self.current == self.end {
             None
         } else {
             self.current += 1;
             let __ppn: PhysPageNum = (self.current - 1).into();
-            log::info!("[frame_alloc] {:?}", __ppn);
+            log::trace!("[frame_alloc] {:?}", __ppn);
             Some((self.current - 1).into())
         }
     }
