@@ -1,10 +1,9 @@
 use super::{finfo, Dirent, File, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN};
-use crate::color_text;
 use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
 use crate::{drivers::BLOCK_DEVICE, println};
-use _core::usize;
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
@@ -97,9 +96,9 @@ impl OSInode {
         let st_mod: u32 = {
             if vfile.is_dir() {
                 //println!("is dir");
-                finfo::S_IFDIR | finfo::S_IRWXU | finfo::S_IRWXG | finfo::S_IRWXO
+                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
             } else {
-                finfo::S_IFREG | finfo::S_IRWXU | finfo::S_IRWXG | finfo::S_IRWXO
+                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
             }
         };
         kstat.fill_info(0, ino, st_mod, 1, size, atime, mtime, ctime);
@@ -111,9 +110,9 @@ impl OSInode {
         let (size, atime, mtime, ctime, ino) = vfile.stat();
         let st_mod: u32 = {
             if vfile.is_dir() {
-                finfo::S_IFDIR | finfo::S_IRWXU | finfo::S_IRWXG | finfo::S_IRWXO
+                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
             } else {
-                finfo::S_IFREG | finfo::S_IRWXU | finfo::S_IRWXG | finfo::S_IRWXO
+                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
             }
         };
         stat.fill_info(0, ino, st_mod, 1, size, atime, mtime, ctime);
@@ -244,16 +243,16 @@ lazy_static! {
 }
 */
 
-pub fn init_rootfs() {
-    println!("[fs] build rootfs ... start");
-    println!("[fs] build rootfs: creating /proc");
-    let file = open("/", "proc", OpenFlags::O_CREAT, DiskInodeType::Directory).unwrap();
-    println!("[fs] build rootfs: init /proc");
-    let file = open("/proc", "mounts", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
-    let meminfo = open("/proc", "meminfo", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
-    let file = open("/", "ls", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
-    println!("[fs] build rootfs ... finish");
-}
+// pub fn init_rootfs() {
+//     println!("[fs] build rootfs ... start");
+//     println!("[fs] build rootfs: creating /proc");
+//     let file = open("/", "proc", OpenFlags::O_CREAT, DiskInodeType::Directory).unwrap();
+//     println!("[fs] build rootfs: init /proc");
+//     let file = open("/proc", "mounts", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
+//     let meminfo = open("/proc", "meminfo", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
+//     let file = open("/", "ls", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
+//     println!("[fs] build rootfs ... finish");
+// }
 
 pub fn list_apps() {
     println!("/**** APPS ****");
@@ -267,30 +266,30 @@ pub fn list_apps() {
 
 // TODO: 对所有的Inode加锁！
 // 在这一层实现互斥访问
-pub fn list_files(work_path: &str, path: &str) {
-    let work_inode = {
-        if work_path == "/" || (path.len() > 0 && path.chars().nth(0).unwrap() == '/') {
-            //println!("curr is root");
-            ROOT_INODE.clone()
-        } else {
-            let wpath: Vec<&str> = work_path.split('/').collect();
-            ROOT_INODE.find_vfile_bypath(wpath).unwrap()
-        }
-    };
-    let mut pathv: Vec<&str> = path.split('/').collect();
-    let cur_inode = work_inode.find_vfile_bypath(pathv).unwrap();
+// pub fn list_files(work_path: &str, path: &str) {
+//     let work_inode = {
+//         if work_path == "/" || (path.len() > 0 && path.chars().nth(0).unwrap() == '/') {
+//             //println!("curr is root");
+//             ROOT_INODE.clone()
+//         } else {
+//             let wpath: Vec<&str> = work_path.split('/').collect();
+//             ROOT_INODE.find_vfile_bypath(wpath).unwrap()
+//         }
+//     };
+//     let mut pathv: Vec<&str> = path.split('/').collect();
+//     let cur_inode = work_inode.find_vfile_bypath(pathv).unwrap();
 
-    let mut file_vec = cur_inode.ls_lite().unwrap();
-    file_vec.sort();
-    for i in 0..file_vec.len() {
-        if file_vec[i].1 & ATTRIBUTE_DIRECTORY != 0 {
-            println!("{}  ", color_text!(file_vec[i].0, 96));
-        } else {
-            // TODO: 统一配色！
-            println!("{}  ", file_vec[i].0);
-        }
-    }
-}
+//     let mut file_vec = cur_inode.ls_lite().unwrap();
+//     file_vec.sort();
+//     for i in 0..file_vec.len() {
+//         if file_vec[i].1 & ATTRIBUTE_DIRECTORY != 0 {
+//             println!("{}  ", color_text!(file_vec[i].0, 96));
+//         } else {
+//             // TODO: 统一配色！
+//             println!("{}  ", file_vec[i].0);
+//         }
+//     }
+// }
 
 bitflags! {
     pub struct OpenFlags: u32 {
@@ -405,9 +404,9 @@ pub fn ch_dir(work_path: &str, path: &str) -> isize {
     }
 }
 
-pub fn clear_cache() {
-    ROOT_INODE.clear_cache();
-}
+// pub fn clear_cache() {
+//     ROOT_INODE.clear_cache();
+// }
 
 // TODO: 不急
 // 复制文件/目录
@@ -512,5 +511,37 @@ impl File for OSInode {
                 len
             }
         }
+    }
+}
+
+bitflags! {
+    pub struct StatMode: u32 {
+        const S_IFMT    =   0o170000; //bit mask for the file type bit field
+        const S_IFSOCK  =   0o140000; //socket
+        const S_IFLNK   =   0o120000; //symbolic link
+        const S_IFREG   =   0o100000; //regular file
+        const S_IFBLK   =   0o060000; //block device
+        const S_IFDIR   =   0o040000; //directory
+        const S_IFCHR   =   0o020000; //character device
+        const S_IFIFO   =   0o010000; //FIFO
+
+        const S_ISUID   =   0o4000; //set-user-ID bit (see execve(2))
+        const S_ISGID   =   0o2000; //set-group-ID bit (see below)
+        const S_ISVTX   =   0o1000; //sticky bit (see below)
+
+        const S_IRWXU   =   0o0700; //owner has read, write, and execute permission
+        const S_IRUSR   =   0o0400; //owner has read permission
+        const S_IWUSR   =   0o0200; //owner has write permission
+        const S_IXUSR   =   0o0100; //owner has execute permission
+
+        const S_IRWXG   =   0o0070; //group has read, write, and execute permission
+        const S_IRGRP   =   0o0040; //group has read permission
+        const S_IWGRP   =   0o0020; //group has write permission
+        const S_IXGRP   =   0o0010; //group has execute permission
+
+        const S_IRWXO   =   0o0007; //others (not in group) have read, write,and execute permission
+        const S_IROTH   =   0o0004; //others have read permission
+        const S_IWOTH   =   0o0002; //others have write permission
+        const S_IXOTH   =   0o0001; //others have execute permission
     }
 }

@@ -1,8 +1,7 @@
-use crate::fs::{ch_dir, list_files, make_pipe, open, pselect, DiskInodeType, OpenFlags, PollFd};
+use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, PollFd};
 use crate::fs::{
     ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Kstat, NewStat, NullZero, MNT_TABLE, TTY,
 };
-use crate::lang_items::Bytes;
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user_array, translated_byte_buffer,
     translated_byte_buffer_append_to_existed_vec, translated_ref, translated_refmut,
