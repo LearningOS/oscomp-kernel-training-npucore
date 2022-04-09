@@ -2,12 +2,11 @@ use super::{
     frame_alloc, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne, VirtAddr,
     VirtPageNum,
 };
-use crate::task::{current_task, current_user_token};
+use core::fmt::Error;
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
 use bitflags::*;
-use core::fmt::Result;
 use log::{debug, error, info, trace, warn};
 bitflags! {
     /// Page Table Entry flags
@@ -205,12 +204,12 @@ impl PageTable {
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
-    pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result {
+    pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result<(), Error> {
         if let Some(pte) = self.find_pte_refmut(vpn) {
             pte.set_permission(flags);
             Ok(())
         } else {
-            Err(core::fmt::Error)
+            Err(Error)
         }
     }
 }
@@ -299,41 +298,17 @@ pub struct UserBuffer {
 }
 
 impl UserBuffer {
-    pub fn clear(&mut self) {
-        self.buffers.iter_mut().for_each(|buffer| {
-            buffer.fill(0);
-        })
-    }
-    pub fn write(&mut self, src: &[u8]) -> usize {
-        let mut start = 0;
-        let src_len = src.len();
-        for buffer in self.buffers.iter_mut() {
-            let end = start + buffer.len();
-            if end > src_len {
-                buffer[..src_len - start].copy_from_slice(&src[start..]);
-                return src_len;
-            } else {
-                buffer.copy_from_slice(&src[start..end]);
-            }
-            start = end;
+    pub fn new(buffers: Vec<&'static mut [u8]>) -> Self {
+        Self {
+            len: buffers.iter().map(|buffer| buffer.len()).sum(),
+            buffers,
         }
+    }
+
+    pub fn len(&self) -> usize {
         self.len
     }
-    // pub fn read_as_vec(&self, vec: &mut Vec<u8>, vlen: usize) -> usize {
-    //     let len = self.len();
-    //     let mut current = 0;
-    //     for sub_buff in self.buffers.iter() {
-    //         let sblen = (*sub_buff).len();
-    //         for j in 0..sblen {
-    //             vec.push((*sub_buff)[j]);
-    //             current += 1;
-    //             if current == len {
-    //                 return len;
-    //             }
-    //         }
-    //     }
-    //     return len;
-    // }
+
     pub fn read(&self, dst: &mut [u8]) -> usize {
         let mut start = 0;
         let dst_len = dst.len();
@@ -350,66 +325,65 @@ impl UserBuffer {
         self.len
     }
 
-    pub fn new(buffers: Vec<&'static mut [u8]>) -> Self {
-        Self {
-            len: buffers.iter().map(|buffer| buffer.len()).sum(),
-            buffers,
+    pub fn write(&mut self, src: &[u8]) -> usize {
+        let mut start = 0;
+        let src_len = src.len();
+        for buffer in self.buffers.iter_mut() {
+            let end = start + buffer.len();
+            if end > src_len {
+                buffer[..src_len - start].copy_from_slice(&src[start..]);
+                return src_len;
+            } else {
+                buffer.copy_from_slice(&src[start..end]);
+            }
+            start = end;
         }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            buffers: Vec::new(),
-            len: 0,
-        }
-    }
-
-    pub fn len(&self) -> usize {
         self.len
     }
 
-    pub fn write_at(&mut self, offset: usize, buff: &[u8]) -> isize {
-        let len = buff.len();
-        if offset + len > self.len() {
-            return -1;
+    /// Write to `self` starting at `offset`, and return written bytes.
+    /// This funtion will try to write as much as possible data 
+    /// in the limit of `self.len()` and `src.len()`.
+    /// It guarantees that won't read/write out of bound.
+    pub fn write_at(&mut self, offset: usize, src: &[u8]) -> usize {
+        if offset >= self.len {
+            return 0;
         }
-        let mut head = 0; // offset of slice in UBuffer
-        let mut current = 0; // current offset of buff
-
-        for sub_buff in self.buffers.iter_mut() {
-            let sblen = (*sub_buff).len();
-            if head + sblen < offset {
-                continue;
-            } else if head < offset {
-                for j in (offset - head)..sblen {
-                    (*sub_buff)[j] = buff[current];
-                    current += 1;
-                    if current == len {
-                        return len as isize;
+        let mut start = 0;
+        let src_len = src.len();
+        for buffer in self.buffers.iter_mut() {
+            let end = start + buffer.len();
+            // if true, the data of this buffer should be copied
+            if end > offset {
+                // this branch will only be visited once in the first time
+                if start < offset {
+                    // in first copied buffer, the copy starts at `buffer_offset`
+                    let buffer_offset = offset - start;
+                    if end - offset > src_len {
+                        buffer[buffer_offset..buffer_offset + src_len].copy_from_slice(&src[..]);
+                        return src_len;
+                    } else {
+                        buffer[buffer_offset..].copy_from_slice(&src[..end - offset])
                     }
-                }
-            } else {
-                //head + sblen > offset and head > offset
-                for j in 0..sblen {
-                    (*sub_buff)[j] = buff[current];
-                    current += 1;
-                    if current == len {
-                        return len as isize;
+                // in successive copied buffers, the copy always starts at zero offset
+                } else {
+                    if end - offset > src_len {
+                        buffer[..src_len - start].copy_from_slice(&src[start - offset..]);
+                        return src_len;
+                    } else {
+                        buffer.copy_from_slice(&src[(start - offset)..(end - offset)]);
                     }
                 }
             }
-            head += sblen;
+            start = end;
         }
+        self.len
+    }
 
-        //for b in self.buffers.iter_mut() {
-        //    if offset > head && offset < head + b.len() {
-        //        (**b)[offset - head] = char;
-        //        //b.as_mut_ptr()
-        //    } else {
-        //        head += b.len();
-        //    }
-        //}
-        0
+    pub fn clear(&mut self) {
+        self.buffers.iter_mut().for_each(|buffer| {
+            buffer.fill(0);
+        })
     }
 }
 
@@ -449,18 +423,25 @@ impl Iterator for UserBufferIterator {
     }
 }
 
+/// Copy `*src: T` to kernel space.
+/// `src` is a pointer in user space, `dst` is a pointer in kernel space.
 pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
+    // if all data of `*src` is in the same page, read directly
     if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
         unsafe { *dst = *translated_ref(token, src) };
+    // or we should use UserBuffer to read across user space pages
     } else {
         UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
             .read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
     }
 }
 
+/// Copy array `*src: [T;len]` to kernel space.
+/// `src` is a pointer in user space, `dst` is a pointer in kernel space.
 pub fn copy_from_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
     let size = core::mem::size_of::<T>() * len;
+    // if all data of `*src` is in the same page, read directly
     if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
         let page_table = PageTable::from_token(token);
         let src_pa = page_table
@@ -470,25 +451,33 @@ pub fn copy_from_user_array<T: 'static + Copy>(token: usize, src: *const T, dst:
             core::slice::from_raw_parts_mut(dst as *mut T, len)
                 .copy_from_slice(core::slice::from_raw_parts(src_pa.0 as *const T, len))
         };
+    // or we should use UserBuffer to read across user space pages
     } else {
         UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
             .read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
     }
 }
 
+/// Copy `*src: T` to user space.
+/// `src` is a pointer in kernel space, `dst` is a pointer in user space.
 pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
     // A nice predicate. Well done!
+    // Re: Thanks!
     if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
         unsafe { *translated_refmut(token, dst) = *src };
+    // use UserBuffer to write across user space pages
     } else {
-        UserBuffer::new(translated_byte_buffer(token, dst as *const u8, size))
-            .write(unsafe { core::slice::from_raw_parts_mut(src as *mut u8, size) });
+        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
+            .write(unsafe { core::slice::from_raw_parts(src as *const u8, size) });
     }
 }
 
+/// Copy array `*src: [T;len]` to user space.
+/// `src` is a pointer in kernel space, `dst` is a pointer in user space.
 pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
     let size = core::mem::size_of::<T>() * len;
+    // if all data of `*dst` is in the same page, write directly
     if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
         let page_table = PageTable::from_token(token);
         let dst_pa = page_table
@@ -498,41 +487,9 @@ pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *
             core::slice::from_raw_parts_mut(dst_pa.0 as *mut T, len)
                 .copy_from_slice(core::slice::from_raw_parts(src as *const T, len))
         };
+    // or we should use UserBuffer to write across user space pages
     } else {
-        UserBuffer::new(translated_byte_buffer(token, dst as *const u8, size))
-            .write(unsafe { core::slice::from_raw_parts_mut(src as *mut u8, size) });
+        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
+            .write(unsafe { core::slice::from_raw_parts(src as *const u8, size) });
     }
 }
-
-// pub fn translated_array_copy<T>(token: usize, ptr: *mut T, len: usize) -> Vec<T>
-// where
-//     T: Copy,
-// {
-//     let page_table = PageTable::from_token(token);
-//     let mut ref_array: Vec<T> = Vec::new();
-//     let mut va = ptr as usize;
-//     let step = core::mem::size_of::<T>();
-//     //println!("step = {}, len = {}", step, len);
-//     for _i in 0..len {
-//         let u_buf = UserBuffer::new(translated_byte_buffer(token, va as *const u8, step));
-//         let mut bytes_vec: Vec<u8> = Vec::new();
-//         u_buf.read_as_vec(&mut bytes_vec, step);
-//         //println!("loop, va = 0x{:X}, vec = {:?}", va, bytes_vec);
-//         unsafe {
-//             ref_array
-//                 .push(*(bytes_vec.as_slice() as *const [u8] as *const u8 as usize as *const T));
-//         }
-//         va += step;
-//     }
-//     ref_array
-// }
-
-// fn trans_to_bytes<T>(ptr: *const T) -> &'static [u8] {
-//     let size = core::mem::size_of::<T>();
-//     unsafe { core::slice::from_raw_parts(ptr as usize as *const u8, size) }
-// }
-
-// fn trans_to_bytes_mut<T>(ptr: *const T) -> &'static mut [u8] {
-//     let size = core::mem::size_of::<T>();
-//     unsafe { core::slice::from_raw_parts_mut(ptr as usize as *mut u8, size) }
-// }
