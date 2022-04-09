@@ -1,11 +1,11 @@
-#[allow(unused)]
+#![allow(unused)]
 
 pub const USER_STACK_BOTTOM: usize = SIGNAL_TRAMPOLINE;
 pub const USER_STACK_TOP: usize = USER_STACK_BOTTOM - USER_STACK_SIZE;
 pub const USER_STACK_SIZE: usize = PAGE_SIZE * 20;
 pub const KERNEL_STACK_SIZE: usize = PAGE_SIZE * 2;
 pub const USER_HEAP_SIZE: usize = PAGE_SIZE * 20;
-pub const KERNEL_HEAP_SIZE: usize = PAGE_SIZE * 0x200; //was 0x30_0000 by THU
+pub const KERNEL_HEAP_SIZE: usize = PAGE_SIZE * 0x200;
 // pub const USER_SIGNAL_STACK_BOTTOM: usize = USER_STACK_TOP - PAGE_SIZE;
 // pub const USER_SIGNAL_STACK_TOP: usize =  USER_SIGNAL_STACK_BOTTOM - USER_SIGNAL_STACK_SIZE;
 // pub const USER_SIGNAL_STACK_SIZE: usize = PAGE_SIZE;
@@ -40,15 +40,11 @@ pub const AT_HWCAP: usize = 16; /* arch dependent hints at CPU capabilities */
 pub const AT_CLKTCK: usize = 17; /* frequency at which times() increments */
 /* AT_* values 18 through 22 are reserved */
 pub const AT_SECURE: usize = 23; /* secure mode boolean */
-pub const AT_BASE_PLATFORM: usize = 24; /* string identifying real platform, may
-                                         * differ from AT_PLATFORM. */
+pub const AT_BASE_PLATFORM: usize = 24; /* string identifying real platform, may differ from AT_PLATFORM. */
 pub const AT_RANDOM: usize = 25; /* address of 16 random bytes */
 pub const AT_HWCAP2: usize = 26; /* extension of AT_HWCAP */
-
 pub const AT_EXECFN: usize = 31; /* filename of program */
-/* Pointer to the global system page used for system calls and other
-nice things.  */
-pub const AT_SYSINFO: usize = 32;
+pub const AT_SYSINFO: usize = 32; /* Pointer to the global system page used for system calls and other nice things.  */
 pub const AT_SYSINFO_EHDR: usize = 33;
 
 pub use crate::board::{CLOCK_FREQ, MMIO};
