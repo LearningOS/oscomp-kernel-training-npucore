@@ -349,35 +349,33 @@ impl UserBuffer {
         if offset >= self.len {
             return 0;
         }
-        let mut start = 0;
-        let src_len = src.len();
+        let mut write_bytes = 0usize;
+        let mut dst_start = 0usize;
         for buffer in self.buffers.iter_mut() {
-            let end = start + buffer.len();
-            // if true, the data of this buffer should be copied
-            if end > offset {
-                // this branch will only be visited once in the first time
-                if start < offset {
-                    // in first copied buffer, the copy starts at `buffer_offset`
-                    let buffer_offset = offset - start;
-                    if end - offset > src_len {
-                        buffer[buffer_offset..buffer_offset + src_len].copy_from_slice(&src[..]);
-                        return src_len;
-                    } else {
-                        buffer[buffer_offset..].copy_from_slice(&src[..end - offset])
-                    }
-                // in successive copied buffers, the copy always starts at zero offset
-                } else {
-                    if end - offset > src_len {
-                        buffer[..src_len - start].copy_from_slice(&src[start - offset..]);
-                        return src_len;
-                    } else {
-                        buffer.copy_from_slice(&src[(start - offset)..(end - offset)]);
-                    }
-                }
+            let dst_end = dst_start + buffer.len();
+            //we can image mapping 'src' categories to 'dst' categories
+            //then we just need to intersect two intervals to get the corresponding interval
+            let copy_dst_start = dst_start.max(offset);
+            //we may worry about overflow,
+            //but we can guarantee that offset(we have checked before) and 
+            //src.len()(because of limited memory) won't be too large
+            let copy_dst_end = dst_end.min(src.len() + offset);
+            if copy_dst_start >= copy_dst_end {
+                dst_start = dst_end;//don't forget to update dst_start
+                continue;
             }
-            start = end;
+            //mapping 'dst' categories to 'src' categories
+            let copy_src_start = copy_dst_start - offset;
+            let copy_src_end = copy_dst_end - offset;
+            //mapping 'dst' categories to 'buffer' categories
+            let copy_buffer_start = copy_dst_start - dst_start;
+            let copy_buffer_end = copy_dst_end - dst_start;
+            buffer[copy_buffer_start..copy_buffer_end]
+                .copy_from_slice(&src[copy_src_start..copy_src_end]);
+            write_bytes += copy_dst_end - copy_dst_start;
+            dst_start = dst_end;//don't forget to update dst_start
         }
-        self.len
+        write_bytes
     }
 
     pub fn clear(&mut self) {
