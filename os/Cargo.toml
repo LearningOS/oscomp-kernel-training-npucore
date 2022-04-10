@@ -27,7 +27,7 @@ board_qemu = []
 board_k210 = []
 
 [profile.dev]
-opt-level = 3
+opt-level = 1
 debug = true
 debug-assertions = false
 overflow-checks = false
