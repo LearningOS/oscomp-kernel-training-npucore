@@ -64,6 +64,7 @@ const SYSCALL_MPROTECT: usize = 226;
 const SYSCALL_WAIT4: usize = 260; // wait is implemented as wait4(pid, status, options, 0) in lib.
 const SYSCALL_PRLIMIT: usize = 261;
 const SYSCALL_RENAMEAT2: usize = 276;
+const SYSCALL_FACCESSAT2: usize = 439;
 
 // Not standard POSIX sys_call
 const SYSCALL_LS: usize = 500;
@@ -150,6 +151,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_WAIT4 => "wait4",
         SYSCALL_PRLIMIT => "prlimit",
         SYSCALL_RENAMEAT2 => "renameat2",
+        SYSCALL_FACCESSAT2 => "faccessat2",
         // non-standard
         SYSCALL_LS => "ls",
         SYSCALL_SHUTDOWN => "shutdown",
@@ -168,10 +170,10 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![
         //black list
         SYSCALL_YIELD,
-        SYSCALL_READ,
-        SYSCALL_WRITE,
+        // SYSCALL_READ,
+        // SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
-        SYSCALL_WRITEV,
+        // SYSCALL_WRITEV,
         //SYSCALL_PPOLL,
         SYSCALL_GETPPID,
         SYSCALL_CLOCK_GETTIME,
@@ -286,6 +288,12 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[5] as *const crate::task::Signals,
         ),
         SYSCALL_PPOLL => sys_ppoll(args[0], args[1], args[2], args[3]),
+        SYSCALL_FACCESSAT2 => sys_faccessat2(
+            args[0] as u32,
+            args[1] as *const u8,
+            args[2] as u32,
+            args[3] as u32,
+        ),
         _ => {
             error!(
                 "Unsupported syscall:{} ({}), calling over arguments:",

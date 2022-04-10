@@ -11,7 +11,7 @@ pub extern "C" fn _start() -> ! {
 #[no_mangle]
 fn main() -> i32 {
     if fork() == 0 {
-        exec("user_shell\0", &[0 as *const u8]);
+        exec("bash\0", &[0 as *const u8]);
     } else {
         loop {
             let mut exit_code: i32 = 0;

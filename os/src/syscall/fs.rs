@@ -480,6 +480,9 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: usize) -> isize {
     if oldfd == newfd {
         return EINVAL;
     }
+    if newfd >= inner.fd_table.len() {
+        inner.fd_table.resize(newfd + 1, None);
+    }
     inner.fd_table[newfd] = Some(inner.fd_table[oldfd].as_ref().unwrap().clone());
     newfd as isize
 }
@@ -672,48 +675,45 @@ pub fn sys_open_at(dirfd: isize, path: *const u8, flags: u32, mode: u32) -> isiz
             fd as isize
         } else {
             //panic!("open failed");
-            -1
+            ENOENT
         }
     } else {
         let fd_usz = dirfd as usize;
-        if fd_usz >= inner.fd_table.len() && fd_usz > FD_LIMIT {
-            return -1;
+        if fd_usz >= inner.fd_table.len() || inner.fd_table[fd_usz].is_none() {
+            return EBADF;
         }
-        if let Some(file) = &inner.fd_table[fd_usz] {
-            match &file.file {
-                FileLike::Regular(f) => {
-                    //let oflags = OpenFlags::from_bits(flags).unwrap();
-                    // 需要新建文件
-                    if oflags.contains(OpenFlags::O_CREAT) {
-                        if let Some(tar_f) = f.create(path.as_str(), DiskInodeType::File) {
-                            let fd = inner.alloc_fd();
-                            inner.fd_table[fd] = Some(FileDescriptor::new(
-                                oflags.contains(OpenFlags::O_CLOEXEC),
-                                FileLike::Regular(tar_f),
-                            ));
-                            return fd as isize;
-                        } else {
-                            //panic!("open failed");
-                            return -1;
-                        }
-                    }
-                    // 正常打开文件
-                    if let Some(tar_f) = f.find(path.as_str(), oflags) {
+        let file_descriptor = inner.fd_table[fd_usz].as_ref().unwrap();
+        match &file_descriptor.file {
+            FileLike::Regular(f) => {
+                //let oflags = OpenFlags::from_bits(flags).unwrap();
+                // 需要新建文件
+                if oflags.contains(OpenFlags::O_CREAT) {
+                    if let Some(tar_f) = f.create(path.as_str(), DiskInodeType::File) {
                         let fd = inner.alloc_fd();
                         inner.fd_table[fd] = Some(FileDescriptor::new(
                             oflags.contains(OpenFlags::O_CLOEXEC),
                             FileLike::Regular(tar_f),
                         ));
-                        fd as isize
+                        return fd as isize;
                     } else {
                         //panic!("open failed");
-                        return -1;
+                        return ENOENT;
                     }
                 }
-                _ => return -1, // 如果是抽象类文件，不能open
+                // 正常打开文件
+                if let Some(tar_f) = f.find(path.as_str(), oflags) {
+                    let fd = inner.alloc_fd();
+                    inner.fd_table[fd] = Some(FileDescriptor::new(
+                        oflags.contains(OpenFlags::O_CLOEXEC),
+                        FileLike::Regular(tar_f),
+                    ));
+                    fd as isize
+                } else {
+                    //panic!("open failed");
+                    return ENOENT;
+                }
             }
-        } else {
-            return -1;
+            _ => todo!(),
         }
     }
 }
@@ -894,4 +894,9 @@ pub fn sys_pselect(
 pub fn sys_umask(mask: usize) -> isize {
     warn!("[sys_umask] fake implementation! Do nothing and return 0.");
     0
+}
+
+pub fn sys_faccessat2(dirfd: u32, pathname: *const u8, mode: u32, flags: u32) -> isize {
+    warn!("[sys_faccessat2] fake implementation! Do nothing and return 0.");
+    SUCCESS
 }
