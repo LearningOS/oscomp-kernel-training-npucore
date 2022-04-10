@@ -1,5 +1,6 @@
 use super::File;
-use crate::mm::UserBuffer;
+use crate::{mm::UserBuffer, syscall::errno::SUCCESS};
+use core::{fmt, ops::DerefMut};
 use crate::sbi::console_getchar;
 use crate::task::suspend_current_and_run_next;
 use k210_hal::{clock::Clocks, fpioa, pac, prelude::*};
@@ -18,8 +19,15 @@ pub struct Stdin;
 pub struct Stdout;
 
 lazy_static! {
-    pub static ref STDOUTLOCK: Mutex<usize> = Mutex::new(0);
-    pub static ref STDINLOCK: Mutex<usize> = Mutex::new(0);
+    pub static ref STDOUTLOCK: Mutex<u8> = Mutex::new(0);
+    pub static ref STDINLOCK: Mutex<u8> = Mutex::new(0);
+}
+
+impl Stdin {
+    #[inline(always)]
+    fn char_legality(c : u8) -> bool {
+        c != 0 && c != 255
+    }
 }
 
 impl File for Stdin {
@@ -30,16 +38,11 @@ impl File for Stdin {
         false
     }
     fn r_ready(&self) -> bool {
-        //println!("!!!!{}", *STDINLOCK.lock().deref());
         let mut lock = STDINLOCK.lock();
-        let mut c: usize;
-        if *(lock.deref()) == (0 as usize) || *(lock.deref()) == (usize::max_value() - 1 as usize) {
-            *lock.deref_mut() = console_getchar();
-            if *lock.deref() != 0 {
-                true
-            } else {
-                false
-            }
+        let c = lock.deref_mut();
+        if Stdin::char_legality(*c) == false {
+            *c = console_getchar() as u8;
+            Stdin::char_legality(*c)
         } else {
             true
         }
@@ -49,60 +52,32 @@ impl File for Stdin {
     }
     /// We assume that an empty buffer is given to the function, and we should write to it from the beginning.
     fn read(&self, mut user_buf: UserBuffer) -> usize {
-        let mut lock = STDINLOCK.lock();
-        // busy loop
-        let mut c: usize;
-        let mut count = 0;
         if user_buf.len() > 1 {
             return 0;
         }
+        let mut lock = STDINLOCK.lock();
+        let c = lock.deref_mut();
+
         fn wr_buf(user_buf: &mut UserBuffer, ch: &u8, i: usize) {
             unsafe {
                 user_buf.buffers[i].as_mut_ptr().write_volatile(*ch);
             }
         }
-        fn blocking_read(user_buf: &mut UserBuffer) -> usize {
-            let mut i: usize = 1; // the write starts from 1 because the preceeding seek gets the first character.
-            if i < user_buf.len() {
-                let c: u8 = console_getchar() as u8;
-                //log::error!("{}", c);
-                while c != 0 && c != 255u8 && i < user_buf.len() {
-                    wr_buf(user_buf, &c, i);
-                    i += 1;
-                }
-            }
-            i
-        }
-        let mut ret: usize = 0;
-        let mut tmp: usize = 0;
+
+        if Stdin::char_legality(*c) {
+            wr_buf(&mut user_buf, c, 0);
+            *c = 0;
+            return 1;
+        } 
         loop {
-            tmp = *lock.deref();
-            if tmp == 0 || tmp as u8 == 255 {
-                //如果缓冲没有字符
-                tmp = console_getchar();
-                *lock.deref_mut() = tmp;
-                if tmp != 0 && tmp as u8 != 255 {
-                    c = tmp;
-                    wr_buf(&mut user_buf, &(c as u8), 0);
-
-                    ret = blocking_read(&mut user_buf);
-
-                    *lock.deref_mut() = 0 as usize;
-                    break;
-                }
-                suspend_current_and_run_next();
-                continue;
-            } else {
-                c = *lock.deref();
-                wr_buf(&mut user_buf, &(c as u8), 0);
-
-                ret = blocking_read(&mut user_buf);
-
-                *lock.deref_mut() = 0 as usize;
-                break;
+            *c = console_getchar() as u8;
+            if Stdin::char_legality(*c) {
+                wr_buf(&mut user_buf, c, 0);
+                *c = 0;
+                return 1;
             }
+            suspend_current_and_run_next();
         }
-        return ret;
     }
     fn write(&self, _user_buf: UserBuffer) -> usize {
         panic!("Cannot write to stdin!");
@@ -264,8 +239,6 @@ impl File for Stdout {
 //         0 // default: always return 0
 //     }
 // }
-
-use core::{fmt, ops::DerefMut};
 
 // //struct Stdout;
 
