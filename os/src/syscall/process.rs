@@ -148,16 +148,15 @@ pub struct UTSName {
 pub fn sys_uname(buf: *mut u8) -> isize {
     let token = current_user_token();
     let mut buffer = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<UTSName>()));
-    // Stupid but efficient.
-    buffer.write(core::concat!(
-        "Linux\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
-        "debian\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
-        "5.10.0-7-riscv64\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
-        "#1 SMP Debian 5.10.40-1 (2021-05-28)\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
-        "riscv64\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
-        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
-    ).as_bytes());
-    0
+    // A little stupid but still efficient.
+    const FIELD_OFFSET: usize = 65;
+    buffer.write_at(FIELD_OFFSET * 0, b"Linux\0");
+    buffer.write_at(FIELD_OFFSET * 1, b"debian\0");
+    buffer.write_at(FIELD_OFFSET * 2, b"5.10.0-7-riscv64\0");
+    buffer.write_at(FIELD_OFFSET * 3, b"#1 SMP Debian 5.10.40-1 (2021-05-28)\0");
+    buffer.write_at(FIELD_OFFSET * 4, b"riscv64\0");
+    buffer.write_at(FIELD_OFFSET * 5, b"\0");
+    SUCCESS
 }
 
 pub fn sys_getpid() -> isize {
