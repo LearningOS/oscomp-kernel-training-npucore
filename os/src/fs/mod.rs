@@ -9,6 +9,16 @@ pub mod stdio;
 use crate::mm::UserBuffer;
 use alloc::sync::Arc;
 pub use poll::{ppoll, pselect, FdSet, PollFd};
+pub use dev_fs::*;
+pub use finfo::*; //{Dirent, FdSet, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN, *};
+pub use inode::{
+    /*find_par_inode_id, */ ch_dir, list_apps, open,
+    DiskInodeType, OSInode, OpenFlags, StatMode
+};
+//pub use iovec::{IoVec, IoVecs};
+pub use mount::MNT_TABLE;
+pub use pipe::{make_pipe, Pipe};
+pub use stdio::{Stdin, Stdout};
 
 #[derive(Clone)]
 pub struct FileDescriptor {
@@ -60,14 +70,3 @@ pub trait File: Send + Sync {
         false
     }
 }
-
-pub use dev_fs::*;
-pub use finfo::*; //{Dirent, FdSet, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN, *};
-pub use inode::{
-    /*find_par_inode_id, */ ch_dir, list_apps, open,
-    DiskInodeType, OSInode, OpenFlags,
-};
-//pub use iovec::{IoVec, IoVecs};
-pub use mount::MNT_TABLE;
-pub use pipe::{make_pipe, Pipe};
-pub use stdio::{Stdin, Stdout};

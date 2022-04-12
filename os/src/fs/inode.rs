@@ -6,7 +6,6 @@ use crate::{drivers::BLOCK_DEVICE, println};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use bitflags::*;
 use lazy_static::*;
 use simple_fat32::{FAT32Manager, VFile, ATTRIBUTE_ARCHIVE, ATTRIBUTE_DIRECTORY};
 use spin::Mutex;
@@ -296,10 +295,12 @@ bitflags! {
         const O_RDONLY      =   0o0;
         const O_WRONLY      =   0o1;
         const O_RDWR        =   0o2;
+
         const O_CREAT       =   0o100;
         const O_EXCL        =   0o200;
         const O_NOCTTY      =   0o400;
         const O_TRUNC       =   0o1000;
+        
         const O_APPEND      =   0o2000;
         const O_NONBLOCK    =   0o4000;
         const O_DSYNC       =   0o10000;

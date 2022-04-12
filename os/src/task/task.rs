@@ -136,12 +136,32 @@ impl TaskControlBlockInner {
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
-    pub fn alloc_fd(&mut self) -> usize {
-        if let Some(fd) = (0..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
-            fd
+    /// Try to alloc the lowest valid fd in `fd_table`
+    pub fn alloc_fd(&mut self) -> Option<usize> {
+        self.alloc_fd_at(0)
+    }
+    /// Try to alloc fd at `hint`, if `hint` is allocated, will alloc lowest valid fd above.
+    pub fn alloc_fd_at(&mut self, hint: usize) -> Option<usize> {
+        // [Warning] temporarily use hardcoded implementation, should adapt to `prlimit()` in future
+        const FD_LIMIT: usize = 128;
+        if hint < self.fd_table.len() {
+            if let Some(fd) = (hint..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
+                Some(fd)
+            } else {
+                if self.fd_table.len() < FD_LIMIT {
+                    self.fd_table.push(None);
+                    Some(self.fd_table.len() - 1)
+                } else {
+                    None
+                }
+            }
         } else {
-            self.fd_table.push(None);
-            self.fd_table.len() - 1
+            if hint < FD_LIMIT {
+                self.fd_table.resize(hint + 1, None);
+                Some(hint)
+            } else {
+                None
+            }
         }
     }
     pub fn get_work_path(&self) -> String {
