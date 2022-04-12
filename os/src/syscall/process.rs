@@ -15,6 +15,7 @@ use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use num_enum::FromPrimitive;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
 
@@ -341,21 +342,68 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
 }
 
 #[allow(unused)]
+#[derive(Clone, Copy)]
 pub struct RLimit {
     rlim_cur: usize, /* Soft limit */
     rlim_max: usize, /* Hard limit (ceiling for rlim_cur) */
 }
 
+#[derive(Debug, Eq, PartialEq, FromPrimitive)]
+#[repr(u32)]
+pub enum Resource {
+    CPU = 0,
+    FSIZE = 1,
+    DATA = 2,
+    STACK = 3,
+    CORE = 4,
+    RSS = 5,
+    NPROC = 6,
+    NOFILE = 7,
+    MEMLOCK = 8,
+    AS = 9,
+    LOCKS = 10,
+    SIGPENDING = 11,
+    MSGQUEUE = 12,
+    NICE = 13,
+    RTPRIO = 14,
+    RTTIME = 15,
+    NLIMITS = 16,
+    #[num_enum(default)]
+    ILLEAGAL,
+}
+
 /// It can be used to both set and get the resource limits of an arbitrary process.
 /// # WARNING
-/// Fake implementation
+/// Partial implementation
 pub fn sys_prlimit(
     pid: usize,
-    resource: usize,
+    resource: u32,
     new_limit: *const RLimit,
     old_limit: *mut RLimit,
 ) -> isize {
-    warn!("[sys_prlimit] fake implementation! Do nothing and return 0.");
+    if pid == 0 {
+        let task = current_task().unwrap();
+        let inner = task.acquire_inner_lock();
+        let token = inner.get_user_token();
+        drop(inner);
+        if !old_limit.is_null() {
+            match Resource::from_primitive(resource) {
+                Resource::NPROC => {
+                    copy_to_user(token, &(RLimit {rlim_cur:32, rlim_max: 32}), old_limit);
+                }
+                Resource::NOFILE => {
+                    copy_to_user(token, &(RLimit {rlim_cur:64, rlim_max: 128}), old_limit);
+                },
+                Resource::ILLEAGAL => return EINVAL,
+                _ => todo!(),
+            }
+        }
+        if !new_limit.is_null() {
+            todo!();
+        }
+    } else {
+        todo!();
+    }
     SUCCESS
 }
 

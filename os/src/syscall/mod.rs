@@ -264,7 +264,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_PRLIMIT => sys_prlimit(
             args[0],
-            args[1],
+            args[1] as u32,
             args[2] as *const RLimit,
             args[3] as *mut RLimit,
         ),
