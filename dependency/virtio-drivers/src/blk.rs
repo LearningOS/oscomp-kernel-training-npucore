@@ -1,6 +1,8 @@
 use super::*;
 use crate::header::VirtIOHeader;
 use crate::queue::VirtQueue;
+use _core::{ptr::{slice_from_raw_parts_mut, slice_from_raw_parts}};
+use alloc::vec::{self, Vec};
 use bitflags::*;
 use core::hint::spin_loop;
 use log::*;
@@ -49,7 +51,25 @@ impl VirtIOBlk<'_> {
     pub fn ack_interrupt(&mut self) -> bool {
         self.header.ack_interrupt()
     }
-
+    /// Split buf into bufs(because buf may use 2 pages)
+    pub fn get_bufs_mut(buf: &mut [u8]) -> Vec<&mut [u8]>{
+        let bottom = buf.as_ptr() as usize;
+        let top = bottom + BLK_SIZE;
+        if bottom / 4096 * 4096 != (top - 1) / 4096 * 4096 {
+            let page_limit = bottom / 4096 * 4096 + 4096;
+            let buf1 = slice_from_raw_parts_mut(buf.as_mut_ptr(), page_limit - bottom);
+            let buf2 = slice_from_raw_parts_mut(unsafe{buf.as_mut_ptr().add(page_limit - bottom)}, top - page_limit);
+            let mut ret:Vec<&mut [u8]> = Vec::new();
+            ret.push(unsafe {buf1.as_mut().unwrap()});
+            ret.push(unsafe {buf2.as_mut().unwrap()});
+            ret
+        }
+        else {
+            let mut ret:Vec<&mut [u8]> = Vec::new();
+            ret.push(buf);
+            ret
+        }
+    }
     /// Read a block.
     pub fn read_block(&mut self, block_id: usize, buf: &mut [u8]) -> Result {
         assert_eq!(buf.len(), BLK_SIZE);
@@ -59,7 +79,9 @@ impl VirtIOBlk<'_> {
             sector: block_id as u64,
         };
         let mut resp = BlkResp::default();
-        self.queue.add(&[req.as_buf()], &[buf, resp.as_buf_mut()])?;
+        let mut bufs = VirtIOBlk::<'_>::get_bufs_mut(buf);
+        bufs.push(resp.as_buf_mut());
+        self.queue.add(&[req.as_buf()], bufs.as_slice())?;
         self.header.notify(0);
         while !self.queue.can_pop() {
             spin_loop();
@@ -115,7 +137,25 @@ impl VirtIOBlk<'_> {
         self.header.notify(0);
         Ok(token)
     }
-
+    /// Split buf into bufs(because buf may use 2 pages)
+    pub fn get_bufs(buf: &[u8]) -> Vec<&[u8]>{
+        let bottom = buf.as_ptr() as usize;
+        let top = bottom + BLK_SIZE;
+        if bottom / 4096 * 4096 != (top - 1) / 4096 * 4096 {
+            let page_limit = bottom / 4096 * 4096 + 4096;
+            let buf1 = slice_from_raw_parts(buf.as_ptr(), page_limit - bottom);
+            let buf2 = slice_from_raw_parts(unsafe{buf.as_ptr().add(page_limit - bottom)}, top - page_limit);
+            let mut ret:Vec<&[u8]> = Vec::new();
+            ret.push(unsafe {buf1.as_ref().unwrap()});
+            ret.push(unsafe {buf2.as_ref().unwrap()});
+            ret
+        }
+        else {
+            let mut ret:Vec<&[u8]> = Vec::new();
+            ret.push(buf);
+            ret
+        }
+    }
     /// Write a block.
     pub fn write_block(&mut self, block_id: usize, buf: &[u8]) -> Result {
         assert_eq!(buf.len(), BLK_SIZE);
@@ -125,7 +165,10 @@ impl VirtIOBlk<'_> {
             sector: block_id as u64,
         };
         let mut resp = BlkResp::default();
-        self.queue.add(&[req.as_buf(), buf], &[resp.as_buf_mut()])?;
+        let mut bufs: Vec::<&[u8]> = Vec::new();
+        bufs.push(req.as_buf());
+        bufs.append(&mut VirtIOBlk::<'_>::get_bufs(buf));
+        self.queue.add(bufs.as_slice(), &[resp.as_buf_mut()])?;
         self.header.notify(0);
         while !self.queue.can_pop() {
             spin_loop();
