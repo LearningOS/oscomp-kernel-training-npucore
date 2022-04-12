@@ -2,6 +2,7 @@ use super::{
     BLOCK_SZ,
     BlockDevice,
 };
+use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -10,7 +11,7 @@ use spin::RwLock;
 use riscv::register::time;
 
 pub struct BlockCache {
-    pub cache: [u8; BLOCK_SZ],
+    pub cache: Box::<[u8; BLOCK_SZ]>,
     block_id: usize,
     block_device: Arc<dyn BlockDevice>,
     modified: bool,
@@ -24,9 +25,9 @@ impl BlockCache {
         block_id: usize, 
         block_device: Arc<dyn BlockDevice>
     ) -> Self {
-        let mut cache = [0u8; BLOCK_SZ];
+        let mut cache = Box::<[u8; BLOCK_SZ]>::new([0u8; BLOCK_SZ]);
         //println!("cache new: blk_id = {}", block_id);
-        block_device.read_block(block_id, &mut cache);
+        block_device.read_block(block_id, cache.as_mut_slice());
         // TODO: 时间戳
         //let mut time_stamp = time::read();
         let time_stamp = 0;
@@ -70,7 +71,7 @@ impl BlockCache {
         if self.modified {
             //println!("drop cache, id = {}", self.block_id);
             self.modified = false;
-            self.block_device.write_block(self.block_id, &self.cache);
+            self.block_device.write_block(self.block_id, self.cache.as_slice());
         }
     }
 }
