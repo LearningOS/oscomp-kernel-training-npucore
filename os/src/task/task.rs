@@ -4,8 +4,8 @@ use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::config::*;
-use crate::fs::{File, FileDescriptor, FileLike, Stdin, Stdout};
-use crate::mm::{translated_refmut, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::fs::{File, FileDescriptor, FileLike, TTY};
+use crate::mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::*;
 use crate::task::current_task;
 use crate::timer::{ITimerVal, TimeVal};
@@ -17,7 +17,7 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use log::{debug, error, info, trace, warn};
-use riscv::register::scause::{self, Exception, Interrupt, Trap};
+use riscv::register::scause::{Interrupt, Trap};
 use spin::{Mutex, MutexGuard};
 
 pub struct TaskControlBlock {
@@ -298,17 +298,17 @@ impl TaskControlBlock {
                     // 0 -> stdin
                     Some(FileDescriptor::new(
                         false,
-                        FileLike::Abstract(Arc::new(Stdin)),
+                        FileLike::Abstract(TTY.clone()),
                     )),
                     // 1 -> stdout
                     Some(FileDescriptor::new(
                         false,
-                        FileLike::Abstract(Arc::new(Stdout)),
+                        FileLike::Abstract(TTY.clone()),
                     )),
                     // 2 -> stderr
                     Some(FileDescriptor::new(
                         false,
-                        FileLike::Abstract(Arc::new(Stdout)),
+                        FileLike::Abstract(TTY.clone()),
                     )),
                 ],
                 address: ProcAddress::new(),
@@ -420,7 +420,7 @@ impl TaskControlBlock {
         );
         crate::mm::KERNEL_SPACE
             .lock()
-            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor());
+            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor()).unwrap();
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -428,20 +428,20 @@ impl TaskControlBlock {
 
         ////////////// envp[] ///////////////////
         let env = [
-            "SHELL=/user_shell",
+            "SHELL=/bash",
             "PWD=/",
-            "USER=root",
-            "MOTD_SHOWN=pam",
-            "LANG=C.UTF-8",
-            "INVOCATION_ID=e9500a871cf044d9886a157f53826684",
-            "TERM=vt220",
-            "SHLVL=2",
-            "JOURNAL_STREAM=8:9265",
-            "OLDPWD=/root",
-            "_=busybox",
             "LOGNAME=root",
-            "HOME=/",
-            "PATH=/",
+            "MOTD_SHOWN=pam",
+            "HOME=/root",
+            "LANG=C.UTF-8",
+            //"INVOCATION_ID=e9500a871cf044d9886a157f53826684",
+            "TERM=vt220",
+            "USER=root",
+            "SHLVL=0",
+            //"JOURNAL_STREAM=8:9265",
+            "OLDPWD=/root",
+            &("_=".to_string() + &args[0]),
+            "PATH=/:/bin",
         ]
         .iter()
         .map(|&x| x.to_string())
@@ -605,7 +605,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
         ($buffer:ident) => {
             crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
                 crate::mm::VirtAddr::from($buffer.as_ptr() as usize).floor(),
-            );
+            ).unwrap();
         };
     }
     pub fn elf_exec(path: &mut String, args_vec: &mut Vec<String>) -> isize {
@@ -639,7 +639,7 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
             unsafe {
                 // run the file as elf if the magic number matches or returns ENOEXEC.
                 let buffer = core::slice::from_raw_parts(start as *const u8, len);
-                if buffer[0..4.min(buffer.len())] == [0x7f, 0x45, 0x4c, 0x46] {
+                if buffer[0..4.min(buffer.len())] == [0x7f, b'E', b'L', b'F'] {
                     task.exec(buffer, args_vec);
                 } else {
                     //test sh
@@ -650,55 +650,54 @@ pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
                     //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
 
                     *args_vec.first_mut().unwrap() = path.to_string();
-                    let path_bin: String;
-                    let bin_given: bool = buffer[0..2.min(buffer.len())] == ['#' as u8, '!' as u8]; // see if it tells us the path using #!
-                    info!("bin_given:{}", bin_given);
-                    if bin_given {
-                        let last = buffer[0..85.min(buffer.len())]
-                            .iter()
-                            .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
-                        //assign_to_bin. not done.
-                        path_bin = String::from_utf8_lossy(
-                            &buffer[2..if last.is_some() { last.unwrap() } else { 2 }], //what if it is #!
-                        )
-                        .to_string();
-                        if path_bin.is_empty() {
-                            unmap_exec_buf!(buffer);
-                            // #! must be followed by a path or at least a name
-                            return ENOEXEC;
-                        }
-                        info!("path_bin:{}", path_bin);
-                        //end of assign_to_bin
-                        if ["/bin/sh", "/bin/bash"].contains(&&(path_bin[..])) {
-                            info!("[exec]path_bin==/bin/sh");
-                            *path = String::from("/busybox");
-                            args_vec.insert(0, String::from("sh"));
-                            args_vec.insert(0, path.to_string());
-                        } else {
-                            info!("[exec]path_bin!=/bin/sh");
-                            let cmd = path_bin.split(' ').collect::<Vec<_>>();
-                            //args_vec[0] = path.clone();
-                            *path = cmd[0].to_string();
-                            let bin_name = path[..]
-                                .split('/')
-                                .collect::<Vec<_>>()
-                                .last()
-                                .unwrap()
-                                .to_string();
-                            if cmd.len() > 1 {
-                                for j in (1..cmd.len()).rev() {
-                                    args_vec.insert(0, cmd[j].to_string());
-                                }
-                            }
-                            args_vec.insert(0, bin_name);
-                            info!("[exec] args_vec{:?}", args_vec);
-                        }
-                    } else {
+                    // let path_bin: String;
+                    // let shell: bool = buffer[0..2.min(buffer.len())] == [b'#', b'!']; // see if it tells us the path using #!
+                    // info!("bin_given:{}", shell);
+                    // if shell {
+                    //     let last = buffer[0..85.min(buffer.len())]
+                    //         .iter()
+                    //         .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
+                    //     //assign_to_bin. not done.
+                    //     path_bin = String::from_utf8_lossy(
+                    //         &buffer[2..if last.is_some() { last.unwrap() } else { 2 }], //what if it is #!
+                    //     )
+                    //     .to_string();
+                    //     if path_bin.is_empty() {
+                    //         unmap_exec_buf!(buffer);
+                    //         // #! must be followed by a path or at least a name
+                    //         return ENOEXEC;
+                    //     }
+                    //     info!("path_bin:{}", path_bin);
+                    //     //end of assign_to_bin
+                    //     if ["/bin/sh", "/bin/bash"].contains(&&(path_bin[..])) {
+                    //         info!("[exec]path_bin==/bin/sh");
+                    //         *path = String::from("/bash");
+                    //         args_vec.insert(0, path.to_string());
+                    //     } else {
+                    //         info!("[exec]path_bin!=/bin/sh");
+                    //         let cmd = path_bin.split(' ').collect::<Vec<_>>();
+                    //         //args_vec[0] = path.clone();
+                    //         *path = cmd[0].to_string();
+                    //         let bin_name = path[..]
+                    //             .split('/')
+                    //             .collect::<Vec<_>>()
+                    //             .last()
+                    //             .unwrap()
+                    //             .to_string();
+                    //         if cmd.len() > 1 {
+                    //             for j in (1..cmd.len()).rev() {
+                    //                 args_vec.insert(0, cmd[j].to_string());
+                    //             }
+                    //         }
+                    //         args_vec.insert(0, bin_name);
+                    //         info!("[exec] args_vec{:?}", args_vec);
+                    //     }
+                    // } else {
                         //completely no info, fall back to busybox.
-                        *path = String::from("/busybox");
-                        args_vec.insert(0, String::from("sh"));
-                        args_vec.insert(0, String::from("busybox"));
-                    }
+                        *path = String::from("/bin/bash");
+                        args_vec.insert(0, String::from("/bin/bash"));
+                        //args_vec.insert(0, String::from("busybox"));
+                    // }
                     unmap_exec_buf!(buffer);
                     return crate::syscall::errno::ENOEXEC;
                 }

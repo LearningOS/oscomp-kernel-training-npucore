@@ -80,7 +80,7 @@ sdcard:
     else
 		@echo "Are you sure write to E:/ ? [y/N] " && read ans && [ $${ans:-N} = y ]
 		@sudo mount ../fat32-fuse/fat32.img ../fat32-fuse/fs
-		@powershell.exe 'cd ../fat32-fuse; copy -path "$$(pwd)/fs/*" -destination "E:/" -force'
+		@powershell.exe 'cd ../fat32-fuse; copy -Recurse -path "$$(pwd)/fs/*" -destination "E:/" -force'
 		@sudo umount ../fat32-fuse/fs
     endif
 

@@ -1,15 +1,14 @@
-mod dev_fs;
+mod dev;
 pub mod finfo;
 mod inode;
 mod mount;
 mod pipe;
 mod poll;
-pub mod stdio;
 
-use crate::mm::UserBuffer;
+use crate::{mm::UserBuffer, syscall::errno::ENOTTY};
 use alloc::sync::Arc;
 pub use poll::{ppoll, pselect, FdSet, PollFd};
-pub use dev_fs::*;
+pub use dev::*;
 pub use finfo::*; //{Dirent, FdSet, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN, *};
 pub use inode::{
     /*find_par_inode_id, */ ch_dir, list_apps, open,
@@ -18,7 +17,6 @@ pub use inode::{
 //pub use iovec::{IoVec, IoVecs};
 pub use mount::MNT_TABLE;
 pub use pipe::{make_pipe, Pipe};
-pub use stdio::{Stdin, Stdout};
 
 #[derive(Clone)]
 pub struct FileDescriptor {
@@ -58,7 +56,8 @@ pub trait File: Send + Sync {
         todo!()
     }
     fn ioctl(&self, _cmd: u32, _arg: usize) -> isize {
-        0
+        log::warn!("[ioctl] not implemented yet!!!");
+        ENOTTY
     }
     fn r_ready(&self) -> bool {
         true

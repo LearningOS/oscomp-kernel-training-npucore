@@ -10,13 +10,15 @@ pub extern "C" fn _start() -> ! {
 
 #[no_mangle]
 fn main() -> i32 {
+    let path = "/bin/bash\0";
     if fork() == 0 {
-        exec("bash\0", &[0 as *const u8]);
+        exec(path, &[path.as_ptr() as *const u8]);
     } else {
         loop {
             let mut exit_code: i32 = 0;
             let pid = wait(&mut exit_code);
-            if pid == -1 {
+            // ECHLD is -10
+            if pid == -10 {
                 yield_();
                 continue;
             }

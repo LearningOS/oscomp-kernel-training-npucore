@@ -18,6 +18,13 @@ then
 fi
 sudo mount ${U_FAT32} ${U_FAT32_DIR}/fs
 
+# build root
+sudo mkdir -p ${U_FAT32_DIR}/fs/etc
+sudo mkdir -p ${U_FAT32_DIR}/fs/bin
+sudo mkdir -p ${U_FAT32_DIR}/fs/root
+sudo sh -c "echo -e "root:x:0:0:root:/root:/bash\n" > ${U_FAT32_DIR}/fs/etc/passwd"
+sudo touch ${U_FAT32_DIR}/fs/root/.bash_history
+
 for programname in $(ls ../user/src/bin)
 do
     sudo cp -r ../user/target/riscv64gc-unknown-none-elf/release/${programname%.rs} ${U_FAT32_DIR}/fs/${programname%.rs}
@@ -25,16 +32,12 @@ done
 
 for programname in $(ls ../user/riscv64)
 do
-    sudo cp -r ../user/riscv64/$programname ${U_FAT32_DIR}/fs/"$programname"
+    sudo cp -r ../user/riscv64/$programname ${U_FAT32_DIR}/fs/
 done
 
-for programname in $(ls ../user/busybox_lua_testsuites)
-do 
-    sudo cp -r ../user/busybox_lua_testsuites/$programname ${U_FAT32_DIR}/fs/"$programname"
+for programname in $(ls -A ../user/busybox_lua_testsuites)
+do
+    sudo cp -r ../user/busybox_lua_testsuites/$programname ${U_FAT32_DIR}/fs/
 done
-
-# build root
-sudo mkdir -p ${U_FAT32_DIR}/fs/etc
-sudo sh -c "echo "root:x:0:0:root:/root:/bin/bash" > ${U_FAT32_DIR}/fs/etc/passwd"
 
 sudo umount ${U_FAT32_DIR}/fs

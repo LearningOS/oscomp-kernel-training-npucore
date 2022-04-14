@@ -1,6 +1,6 @@
 use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode};
 use crate::fs::{
-    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Kstat, NewStat, NullZero, MNT_TABLE, TTY,
+    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Kstat, NewStat, Zero, Null, MNT_TABLE, TTY,
 };
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user_array, translated_byte_buffer,
@@ -211,14 +211,18 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
         |buffer, iovec| {
             // for debug
             {
-                let mut temp = Vec::<u8>::with_capacity(iovec.iov_len);
-                copy_from_user_array(token, iovec.iov_base, temp.as_mut_ptr(), iovec.iov_len);
-                unsafe { temp.set_len(iovec.iov_len); }
-                info!(
-                    "[sys_writev] Iterating... content: {:?}, iovlen: {}",
-                    core::str::from_utf8(temp.as_slice()),
-                    iovec.iov_len
-                );
+                if !iovec.iov_base.is_null() {
+                    let mut temp = Vec::<u8>::with_capacity(iovec.iov_len);
+                    copy_from_user_array(token, iovec.iov_base, temp.as_mut_ptr(), iovec.iov_len);
+                    unsafe {
+                        temp.set_len(iovec.iov_len);
+                    }
+                    info!(
+                        "[sys_writev] Iterating... content: {:?}, iovlen: {}",
+                        core::str::from_utf8(temp.as_slice()),
+                        iovec.iov_len
+                    );
+                }
             }
             // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
             translated_byte_buffer_append_to_existed_vec(
@@ -555,14 +559,17 @@ pub fn sys_readlinkat(dirfd: usize, pathname: *const u8, buf: *mut u8, bufsiz: u
     }
 }
 
-pub fn sys_newfstatat(fd: usize, path: *const u8, buf: *mut u8, flag: u32) -> isize {
+pub fn sys_newfstatat(fd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
     let path = translated_str(token, path);
     let mut userbuf = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<NewStat>()));
     let mut stat = NewStat::empty();
-
+    info!(
+        "[sys_newfstatat] fd = {}, path = {:?}, flags: {:?}",
+        fd, path, StatMode::from_bits(flags)
+    );
     if fd == AT_FDCWD {
         let work_path = inner.current_path.clone();
         if let Some(file) = open(
@@ -572,10 +579,6 @@ pub fn sys_newfstatat(fd: usize, path: *const u8, buf: *mut u8, flag: u32) -> is
             DiskInodeType::Directory,
         ) {
             file.get_newstat(&mut stat);
-            info!(
-                "[sys_newfstatat] fd = {}, path = {:?}, buff addr = 0x{:X}, size = {}",
-                fd, path, buf as usize, stat.st_size
-            );
             userbuf.write(stat.as_bytes());
             SUCCESS
         } else {
@@ -647,9 +650,9 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     let mut inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
     let path = translated_str(token, path);
-
+    // TODO: should check flags and mode here
     let flags = OpenFlags::from_bits(flags).unwrap();
-    let mode = StatMode::from_bits(mode).unwrap();
+    let mode = StatMode::from_bits(mode);
 
     if path.contains("/dev") {
         info!(
@@ -664,9 +667,9 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
             if path.contains("tty") {
                 FileLike::Abstract(TTY.clone())
             } else if path.contains("null") {
-                FileLike::Abstract(Arc::new(NullZero::new(true)))
+                FileLike::Abstract(Arc::new(Null))
             } else if path.contains("zero") {
-                FileLike::Abstract(Arc::new(NullZero::new(false)))
+                FileLike::Abstract(Arc::new(Zero))
             } else {
                 warn!("[sys_openat] device file not supported: {}", path);
                 return ENOENT;
@@ -854,7 +857,7 @@ pub enum Command {
     ILLEAGAL,
 }
 
-pub fn fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
+pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
     const FD_CLOEXEC: usize = 1;
 
     let task = current_task().unwrap();
@@ -878,6 +881,7 @@ pub fn fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
                 // cmd is F_DUPFD and arg is negative or is greater than the maximum allowable value
                 None => return EINVAL,
             };
+            drop(inner);
             // take advantage of `DUPFD == 0`
             sys_dup3(fd, newfd, OpenFlags::O_CLOEXEC.bits() & cmd)
         }
@@ -895,11 +899,7 @@ pub fn fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
                 FileLike::Regular(_) => OpenFlags::O_RDWR.bits() as isize,
                 FileLike::Abstract(file) => {
                     // I think for most abstract file, they are either readable or writable
-                    if file.readable() {
-                        OpenFlags::O_RDONLY.bits() as isize
-                    } else {
-                        OpenFlags::O_WRONLY.bits() as isize
-                    }
+                    OpenFlags::O_RDWR.bits() as isize
                 }
             }
         }
