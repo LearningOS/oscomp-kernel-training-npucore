@@ -6,21 +6,20 @@ pub mod signal;
 mod switch;
 mod task;
 
-use crate::fs::{open, DiskInodeType, OpenFlags, File};
+use crate::fs::{open, DiskInodeType, File, OpenFlags};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 use lazy_static::*;
 use manager::fetch_task;
 pub use signal::*;
 use switch::__switch;
-pub use task::{exec, AuxHeader, FdTable, Rusage, TaskControlBlock, TaskStatus};
+pub use task::{execve, FdTable, Rusage, TaskControlBlock, TaskStatus};
 
-pub use manager::{add_task, sleep_interruptible, wake_interruptible, find_task_by_pid};
+pub use manager::{add_task, find_task_by_pid, sleep_interruptible, wake_interruptible};
 pub use pid::{pid_alloc, KernelStack, PidHandle};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
 };
-
 
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
@@ -67,7 +66,7 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
         let parent_task = inner.parent.as_ref().unwrap().upgrade().unwrap(); // this will acquire inner of current task
         let mut parent_inner = parent_task.acquire_inner_lock();
         parent_inner.add_signal(Signals::SIGCHLD);
-        
+
         if parent_inner.task_status == TaskStatus::Interruptible {
             // wake up parent if parent is waiting.
             parent_inner.task_status = TaskStatus::Ready;
@@ -128,25 +127,78 @@ lazy_static! {
     });
 }
 
-/// Literal definition.
-/// Note: The process lookup is done over tree enumeration, at a high cost.
-// pub fn find_process_by_pid(pid: usize) -> Option<Arc<TaskControlBlock>> {
-//     if pid == INITPROC.getpid() {
-//         Some(INITPROC.clone())
-//     } else {
-//         INITPROC.find_child_process_by_pid(pid)
-//     }
-// }
-
-// pub fn find_process_by_pgid(pgid: usize) -> alloc::vec::Vec<Arc<TaskControlBlock>> {
-//     let mut v = alloc::vec::Vec::new();
-//     if pgid == INITPROC.getpgid() {
-//         v.push(INITPROC.clone());
-//     }
-//     v.append(&mut INITPROC.find_child_process_by_pgid(pgid));
-//     v
-// }
-
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+#[derive(Clone, Copy)]
+#[allow(non_camel_case_types, unused)]
+#[repr(usize)]
+pub enum AuxvType {
+    NULL = 0,
+    IGNORE = 1,
+    EXECFD = 2,
+    PHDR = 3,
+    PHENT = 4,
+    PHNUM = 5,
+    PAGESZ = 6,
+    BASE = 7,
+    FLAGS = 8,
+    ENTRY = 9,
+    NOTELF = 10,
+    UID = 11,
+    EUID = 12,
+    GID = 13,
+    EGID = 14,
+    PLATFORM = 15,
+    HWCAP = 16,
+    CLKTCK = 17,
+    FPUCW = 18,
+    DCACHEBSIZE = 19,
+    ICACHEBSIZE = 20,
+    UCACHEBSIZE = 21,
+    IGNOREPPC = 22,
+    SECURE = 23,
+    BASE_PLATFORM = 24,
+    RANDOM = 25,
+    HWCAP2 = 26,
+    EXECFN = 31,
+    SYSINFO = 32,
+    SYSINFO_EHDR = 33,
+    L1I_CACHESHAPE = 34,
+    L1D_CACHESHAPE = 35,
+    L2_CACHESHAPE = 36,
+    L3_CACHESHAPE = 37,
+    L1I_CACHESIZE = 40,
+    L1I_CACHEGEOMETRY = 41,
+    L1D_CACHESIZE = 42,
+    L1D_CACHEGEOMETRY = 43,
+    L2_CACHESIZE = 44,
+    L2_CACHEGEOMETRY = 45,
+    L3_CACHESIZE = 46,
+    L3_CACHEGEOMETRY = 47,
+    MINSIGSTKSZ = 51,
+}
+
+#[derive(Clone, Copy)]
+#[allow(unused)]
+pub struct AuxvEntry {
+    auxv_type: AuxvType,
+    auxv_val: usize,
+}
+
+impl AuxvEntry {
+    fn new(auxv_type: AuxvType, auxv_val: usize) -> Self {
+        Self {
+            auxv_type,
+            auxv_val,
+        }
+    }
+}
+
+pub struct ELFInfo {
+    pub entry: usize,
+    pub phnum: usize,
+    pub phent: usize,
+    pub phdr: usize,
 }

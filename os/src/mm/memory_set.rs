@@ -6,7 +6,7 @@ use super::{StepByOne, VPNRange};
 use crate::config::*;
 use crate::fs::{File, FileLike};
 use crate::syscall::errno::*;
-use crate::task::{current_task, AuxHeader};
+use crate::task::{current_task, ELFInfo};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -318,61 +318,23 @@ impl MemorySet {
     }
     /// Include sections in elf and trampoline and TrapContext and user stack,
     /// also returns user_sp and entry point.
-    pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize, usize, Vec<AuxHeader>) {
+    pub fn from_elf(elf_data: &[u8]) -> (Self, usize, usize, ELFInfo) {
         let mut memory_set = Self::new_bare();
         // map trampoline
         memory_set.map_trampoline();
         // map signaltrampoline
         memory_set.map_signaltrampoline();
-        // map program headers of elf, with U flag
+
         let elf = xmas_elf::ElfFile::new(elf_data).unwrap();
-        let elf_header = elf.header;
-        assert_eq!(
-            // assert magic number is equal to ELF.
-            // to verify the elf file format.
-            elf_header.pt1.magic,
-            [0x7f, 0x45, 0x4c, 0x46],
-            "invalid elf!"
-        );
-        let ph_count = elf_header.pt2.ph_count();
-        let mut max_end_vpn = VirtPageNum(0);
-        let mut head_va = 0; // top va of ELF which points to ELF header
-
-        let mut auxv: Vec<AuxHeader> = [
-            // push ELF related auxillary vectors to auxv: Vec<AuxHeader>
-            //(aux_type,value)
-            (AT_PHENT, elf.header.pt2.ph_entry_size() as usize as usize),
-            (AT_PHNUM, ph_count as usize),
-            (AT_PAGESZ, PAGE_SIZE as usize),
-            (AT_BASE, 0 as usize),
-            (AT_FLAGS, 0 as usize),
-            (AT_ENTRY, elf.header.pt2.entry_point() as usize),
-            (AT_UID, 0 as usize),
-            (AT_EUID, 0 as usize),
-            (AT_GID, 0 as usize),
-            (AT_EGID, 0 as usize),
-            (AT_PLATFORM, 0 as usize),
-            (AT_HWCAP, 0 as usize),
-            (AT_CLKTCK, 100 as usize),
-            (AT_SECURE, 0 as usize),
-            (AT_NOTELF, 0x112d as usize),
-        ]
-        .iter()
-        .map(|cur| -> AuxHeader {
-            AuxHeader {
-                aux_type: cur.0,
-                value: cur.1,
-            }
-        })
-        .collect::<Vec<AuxHeader>>();
-
-        let mut count = 0;
+        let mut program_break = 0;
+        let mut load_addr: Option<usize> = None; // top va of ELF which points to ELF header
+        let mut load_segment_count = 0;
         for ph in elf.program_iter() {
             // Map only when the sections that is to be loaded.
             if ph.get_type().unwrap() == xmas_elf::program::Type::Load {
                 let start_va: VirtAddr = (ph.virtual_addr() as usize).into();
                 let end_va: VirtAddr = ((ph.virtual_addr() + ph.mem_size()) as usize).into();
-                let offset = start_va.0 - start_va.floor().0 * PAGE_SIZE;
+                let page_offset = start_va.page_offset();
 
                 let mut map_perm = MapPermission::U;
                 let ph_flags = ph.flags();
@@ -386,15 +348,16 @@ impl MemorySet {
                     map_perm |= MapPermission::X;
                 }
                 let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm, None);
-                max_end_vpn = map_area.vpn_range.get_end();
-                if offset == 0 && ph.file_size() != 0 && !map_perm.contains(MapPermission::W) {
+                if page_offset == 0 && ph.file_size() != 0 && !map_perm.contains(MapPermission::W) {
                     assert_eq!(ph.offset() % 0x1000, 0);
                     assert_eq!(
                         VirtAddr::from(ph.file_size() as usize).ceil().0,
                         map_area.vpn_range.get_end().0 - map_area.vpn_range.get_start().0
                     );
 
-                    head_va = start_va.into();
+                    if load_addr.is_none() {
+                        load_addr = Some(start_va.into());
+                    }
                     let kernel_start_vpn =
                         (VirtAddr::from(MMAP_BASE + (ph.offset() as usize))).floor();
                     map_area
@@ -410,7 +373,7 @@ impl MemorySet {
                     memory_set
                         .push_with_offset(
                             map_area,
-                            offset,
+                            page_offset,
                             Some(
                                 &elf.input
                                     [ph.offset() as usize..(ph.offset() + ph.file_size()) as usize],
@@ -418,23 +381,13 @@ impl MemorySet {
                         )
                         .unwrap();
                 }
-                count = count + 1;
-                trace!("[elf] LOAD SEGMENT PUSHED. start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}", start_va.0, end_va.0, offset);
+                program_break = end_va.ceil().0;
+                load_segment_count = load_segment_count + 1;
+                trace!("[elf] LOAD SEGMENT PUSHED. start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}", start_va.0, end_va.0, page_offset);
             }
         }
 
-        // Get ph_head addr for auxv
-        let ph_head_addr = head_va + elf.header.pt2.ph_offset() as usize;
-        auxv.push(AuxHeader {
-            aux_type: AT_PHDR,
-            value: ph_head_addr as usize,
-        });
-
-        let max_end_va: VirtAddr = max_end_vpn.into();
-        let mut user_heap_bottom: usize = max_end_va.into();
-        // guard page
-        user_heap_bottom += PAGE_SIZE;
-        memory_set.heap_area_idx = Some(count);
+        memory_set.heap_area_idx = Some(load_segment_count);
 
         // Map USER_STACK
         memory_set.insert_framed_area(
@@ -460,13 +413,16 @@ impl MemorySet {
             TRAMPOLINE
         );
 
-        //return
         (
             memory_set,
             USER_STACK_BOTTOM,
-            user_heap_bottom,
-            elf.header.pt2.entry_point() as usize,
-            auxv,
+            program_break,
+            ELFInfo {
+                entry: elf.header.pt2.entry_point() as usize,
+                phnum: elf.header.pt2.ph_count() as usize,
+                phent: elf.header.pt2.ph_entry_size() as usize,
+                phdr: load_addr.unwrap() + elf.header.pt2.ph_offset() as usize,
+            },
         )
     }
     pub fn from_existed_user(user_space: &mut MemorySet) -> MemorySet {
