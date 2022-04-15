@@ -3,6 +3,7 @@ use super::{
     VirtPageNum,
 };
 use core::fmt::Error;
+use _core::ops::{Index, IndexMut};
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
@@ -382,6 +383,41 @@ impl UserBuffer {
         self.buffers.iter_mut().for_each(|buffer| {
             buffer.fill(0);
         })
+    }
+}
+
+//There may be better implementations here to cover more types
+impl Index<usize> for UserBuffer {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!((index as usize) < self.len);
+        let mut left = index;
+        for buffer in &self.buffers {
+            if (left as usize) < buffer.len() {
+                return &buffer[left];
+            }
+            else {
+                left -= buffer.len();
+            }
+        }
+        unreachable!();
+    }
+}
+impl IndexMut<usize> for UserBuffer {
+
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        assert!((index as usize) < self.len);
+        let mut left = index;
+        for buffer in &mut self.buffers {
+            if (left as usize) < buffer.len() {
+                return &mut buffer[left];
+            }
+            else {
+                left -= buffer.len();
+            }
+        }
+        unreachable!();
     }
 }
 
