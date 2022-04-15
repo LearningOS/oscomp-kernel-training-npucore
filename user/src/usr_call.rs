@@ -37,8 +37,8 @@ pub fn getpid() -> isize {
 pub fn fork() -> isize {
     sys_fork()
 }
-pub fn exec(path: &str, args: &[*const u8]) -> isize {
-    sys_exec(path, args)
+pub fn exec(path: &str, args: &[*const u8], envp: &[*const u8]) -> isize {
+    sys_exec(path, args, envp)
 }
 pub fn wait(exit_code: &mut i32) -> isize {
     sys_waitpid(-1, exit_code as *mut _)

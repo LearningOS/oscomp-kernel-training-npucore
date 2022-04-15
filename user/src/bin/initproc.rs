@@ -11,8 +11,23 @@ pub extern "C" fn _start() -> ! {
 #[no_mangle]
 fn main() -> i32 {
     let path = "/bin/bash\0";
+    let environ = [
+        "SHELL=/bash\0".as_ptr(),
+        "PWD=/\0".as_ptr(),
+        "LOGNAME=root\0".as_ptr(),
+        "MOTD_SHOWN=pam\0".as_ptr(),
+        "HOME=/root\0".as_ptr(),
+        "LANG=C.UTF-8\0".as_ptr(),
+        "TERM=vt220\0".as_ptr(),
+        "USER=root\0".as_ptr(),
+        "SHLVL=0\0".as_ptr(),
+        "OLDPWD=/root\0".as_ptr(),
+        "_=/bin/bash\0".as_ptr(),
+        "PATH=/:/bin\0".as_ptr(),
+        core::ptr::null(),
+    ];
     if fork() == 0 {
-        exec(path, &[path.as_ptr() as *const u8]);
+        exec(path, &[path.as_ptr() as *const u8, core::ptr::null()], &environ);
     } else {
         loop {
             let mut exit_code: i32 = 0;

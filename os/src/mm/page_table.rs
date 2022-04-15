@@ -462,7 +462,7 @@ impl Iterator for UserBufferIterator {
 pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
     // if all data of `*src` is in the same page, read directly
-    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
+    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size - 1) {
         unsafe { *dst = *translated_ref(token, src) };
     // or we should use UserBuffer to read across user space pages
     } else {
@@ -476,7 +476,7 @@ pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut 
 pub fn copy_from_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
     let size = core::mem::size_of::<T>() * len;
     // if all data of `*src` is in the same page, read directly
-    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size) {
+    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size - 1) {
         let page_table = PageTable::from_token(token);
         let src_pa = page_table
             .translate_va(VirtAddr::from(src as usize))
@@ -498,7 +498,7 @@ pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T)
     let size = core::mem::size_of::<T>();
     // A nice predicate. Well done!
     // Re: Thanks!
-    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
+    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size - 1) {
         unsafe { *translated_refmut(token, dst) = *src };
     // use UserBuffer to write across user space pages
     } else {
@@ -512,7 +512,7 @@ pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T)
 pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
     let size = core::mem::size_of::<T>() * len;
     // if all data of `*dst` is in the same page, write directly
-    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
+    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size - 1) {
         let page_table = PageTable::from_token(token);
         let dst_pa = page_table
             .translate_va(VirtAddr::from(dst as usize))
@@ -525,5 +525,34 @@ pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *
     } else {
         UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
             .write(unsafe { core::slice::from_raw_parts(src as *const u8, size) });
+    }
+}
+
+// Automatically add `\0` in the end. I think this function can be improve...
+pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
+    let size = src.len();
+    // if all data of `*dst` is in the same page, write directly
+    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
+        let page_table = PageTable::from_token(token);
+        let dst_pa = page_table
+            .translate_va(VirtAddr::from(dst as usize))
+            .unwrap();
+        unsafe {
+            let mut dst_ptr = dst_pa.0 as *mut u8;
+            core::slice::from_raw_parts_mut(dst_ptr, size)
+                .copy_from_slice(core::slice::from_raw_parts(src.as_ptr(), size));
+            *dst_ptr.add(size) = b'\0';
+        }
+    // or we should use UserBuffer to write across user space pages
+    } else {
+        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
+            .write(unsafe { core::slice::from_raw_parts(src.as_ptr(), size) });
+        let page_table = PageTable::from_token(token);
+        let dst_pa = page_table
+            .translate_va(VirtAddr::from(dst as usize + size))
+            .unwrap();
+        unsafe {
+            *(dst_pa.0 as *mut u8) = b'\0';
+        }
     }
 }

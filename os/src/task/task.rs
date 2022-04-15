@@ -1,15 +1,20 @@
 use core::fmt::{self, Debug, Formatter};
 
 use super::signal::*;
+use super::AuxvEntry;
+use super::AuxvType;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::config::*;
-use crate::fs::{File, FileDescriptor, FileLike, TTY};
-use crate::mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
+use crate::fs::{open, DiskInodeType, File, FileDescriptor, FileLike, OSInode, OpenFlags, TTY};
+use crate::mm::PageTable;
+use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::*;
 use crate::task::current_task;
+use crate::timer::TICKS_PER_SEC;
 use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
+use crate::{config::*, show_frame_consumption};
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -218,44 +223,6 @@ impl TaskControlBlockInner {
 }
 
 impl TaskControlBlock {
-    // pub(in crate::task) fn find_child_process_by_pgid(
-    //     &self,
-    //     pgid: usize,
-    // ) -> Vec<Arc<TaskControlBlock>> {
-    //     let mut v = Vec::new();
-    //     let mut inc: Vec<Arc<TaskControlBlock>>;
-    //     let task = self.acquire_inner_lock();
-    //     for i in &task.children {
-    //         if i.getpgid() == pgid {
-    //             v.push(i.clone());
-    //         } else {
-    //             inc = i.find_child_process_by_pgid(pgid);
-    //             v.append(&mut inc);
-    //         }
-    //     }
-    //     v
-    // }
-    // pub(in crate::task) fn find_child_process_by_pid(
-    //     &self,
-    //     pid: usize,
-    // ) -> Option<Arc<TaskControlBlock>> {
-    //     let mut ret = None;
-    //     let task = self.acquire_inner_lock();
-    //     for i in &task.children {
-    //         if i.getpid() == pid {
-    //             return Some(i.clone());
-    //         } else {
-    //             ret = i.find_child_process_by_pid(pid);
-    //             match ret {
-    //                 None => {}
-    //                 _ => {
-    //                     return ret;
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     ret
-    // }
     pub fn acquire_inner_lock(&self) -> MutexGuard<TaskControlBlockInner> {
         self.inner.lock()
     }
@@ -263,11 +230,12 @@ impl TaskControlBlock {
     /// Currently used for initproc loading only. bin_path must be used changed if used elsewhere.
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, user_sp, user_heap, entry_point, auxv) = MemorySet::from_elf(elf_data);
+        let (memory_set, user_sp, user_heap, elf_info) = MemorySet::from_elf(elf_data);
 
         crate::mm::KERNEL_SPACE
             .lock()
-            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor());
+            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor())
+            .unwrap();
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -296,20 +264,11 @@ impl TaskControlBlock {
                 exit_code: 0,
                 fd_table: vec![
                     // 0 -> stdin
-                    Some(FileDescriptor::new(
-                        false,
-                        FileLike::Abstract(TTY.clone()),
-                    )),
+                    Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
                     // 1 -> stdout
-                    Some(FileDescriptor::new(
-                        false,
-                        FileLike::Abstract(TTY.clone()),
-                    )),
+                    Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
                     // 2 -> stderr
-                    Some(FileDescriptor::new(
-                        false,
-                        FileLike::Abstract(TTY.clone()),
-                    )),
+                    Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
                 ],
                 address: ProcAddress::new(),
                 heap_bottom: user_heap,
@@ -324,7 +283,7 @@ impl TaskControlBlock {
         // prepare TrapContext in user space
         let trap_cx = task_control_block.acquire_inner_lock().get_trap_cx();
         *trap_cx = TrapContext::app_init_context(
-            entry_point,
+            elf_info.entry,
             user_sp,
             KERNEL_SPACE.lock().token(),
             kernel_stack_top,
@@ -332,187 +291,177 @@ impl TaskControlBlock {
         );
         task_control_block
     }
-    pub fn exec(&self, elf_data: &[u8], args: &mut Vec<String>) {
+
+    pub fn load_elf(&self, elf_data: &[u8], argv_vec: &Vec<String>, envp_vec: &Vec<String>) {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        debug!("args.len():{}", args.len());
-        let (memory_set, mut user_sp, user_heap, entry_point, mut auxv) =
-            MemorySet::from_elf(elf_data);
-        let envp_base: usize;
-        let argv_base: usize;
-        let auxv_base: usize;
-        let mut p: usize;
+        let (memory_set, mut user_sp, program_break, elf_info) = MemorySet::from_elf(elf_data);
+        let token = (&memory_set).token();
 
-        /////////////////////// start of macro definition ///////////////////////
-        macro_rules! auxv_push {
-            ($ty:expr,$val:expr) => {
-                auxv.push(AuxHeader {
-                    aux_type: $ty,
-                    value: $val,
-                });
-            };
-        }
-        macro_rules! usr_sp_mov {
-            ($step:expr) => {
-                user_sp -= $step
-            };
-            ($step:ty,$times:expr) => {
-                usr_sp_mov!(($times * core::mem::size_of::<$step>()));
-            };
-        }
-        macro_rules! usr_sp_align {
-            ($name:ty) => {
-                usr_sp_align!(core::mem::size_of::<$name>());
-            };
-            ($times:expr) => {
-                usr_sp_mov!(user_sp % $times);
-            };
-            ($name:ident,$times:expr) => {
-                usr_sp_mov!(user_sp % ($times * core::mem::size_of::<$name>()));
-            };
-        }
-        /// Note: pointer p is shared globally. After the copy, it will point to the vec[len()]
-        macro_rules! byte_copy {
-            ($iter_name:expr) => {
-                p = user_sp;
-                for c in $iter_name {
-                    *translated_refmut(memory_set.token(), p as *mut u8) = (*c) as u8;
-                    p += 1;
-                }
-                *translated_refmut(memory_set.token(), p as *mut u8) = 0;
-            };
-        }
-        macro_rules! arg_copy_arr {
-            ($env:ident,$arr:ident) => {
-                $arr[$env.len()] = 0;
-                for i in 0..$env.len() {
-                    user_sp -= $env[i].len() + 1;
-                    $arr[i] = user_sp;
-                    byte_copy!($env[i].as_bytes());
-                    *translated_refmut(memory_set.token(), p as *mut u8) = 0;
-                }
-            };
-        }
-        macro_rules! usr_arg_push {
-            ($name:ident,$base:ident,$trg:ident) => {
-                usr_arg_push!($name, $base, $trg, 1, usize);
-                *translated_refmut(
-                    memory_set.token(),
-                    (user_sp + core::mem::size_of::<usize>() * ($name.len())) as *mut usize,
-                ) = 0;
-            };
-            ($name:ident,$base:ident,$trg:ident,$marg:expr,$tyname:ty) => {
-                usr_sp_mov!($tyname, $name.len() + $marg);
-                $base = user_sp;
-                for i in 0..$name.len() {
-                    *translated_refmut(
-                        memory_set.token(),
-                        (user_sp + core::mem::size_of::<$tyname>() * i) as *mut $tyname,
-                    ) = $trg[i];
-                }
-            };
-        }
-        /////////////////////// end of macro definition ///////////////////////
+        // go down to the stack page (important!) and align
+        user_sp -= 2 * core::mem::size_of::<usize>();
 
-        /////////////////////// start of exec loading ///////////////////////
-        info!(
-            "[exec] elf_data LOADED. user_sp:{:X}; user_heap:{:X}; entry_point:{:X}",
-            user_sp, user_heap, entry_point
-        );
-        crate::mm::KERNEL_SPACE
-            .lock()
-            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor()).unwrap();
-        let trap_cx_ppn = memory_set
-            .translate(VirtAddr::from(TRAP_CONTEXT).into())
+        // because size of parameters is almost never more than PAGE_SIZE,
+        // so I decide to use physical address directly for better performance
+        let mut phys_user_sp = PageTable::from_token(token)
+            .translate_va(VirtAddr::from(user_sp))
             .unwrap()
-            .ppn();
+            .0;
+        // we can add this to a phys addr to get corresponding virt addr
+        let virt_phys_offset = user_sp - phys_user_sp;
+        let phys_start = phys_user_sp;
 
-        ////////////// envp[] ///////////////////
-        let env = [
-            "SHELL=/bash",
-            "PWD=/",
-            "LOGNAME=root",
-            "MOTD_SHOWN=pam",
-            "HOME=/root",
-            "LANG=C.UTF-8",
-            //"INVOCATION_ID=e9500a871cf044d9886a157f53826684",
-            "TERM=vt220",
-            "USER=root",
-            "SHLVL=0",
-            //"JOURNAL_STREAM=8:9265",
-            "OLDPWD=/root",
-            &("_=".to_string() + &args[0]),
-            "PATH=/:/bin",
-        ]
-        .iter()
-        .map(|&x| x.to_string())
-        .collect::<Vec<String>>();
-        let mut envp: Vec<usize> = (0..=env.len()).collect();
-        arg_copy_arr!(env, envp);
-        // make the user_sp aligned to 8B for k210 platform
-        usr_sp_align!(usize);
-
-        // push arguments on user stack
-        let mut argv: Vec<usize> = (0..=args.len()).collect();
-        arg_copy_arr!(args, argv);
-        // make the user_sp aligned to 8B for k210 platform
-        usr_sp_align!(usize);
-
-        ////////////// platform String ///////////////////
-        let platform = "RISC-V64";
-        usr_sp_mov!(platform.len() + 1);
-        usr_sp_align!(usize);
-        byte_copy!(platform.as_bytes());
-
-        ////////////// rand bytes ///////////////////
-        usr_sp_mov!(16);
-        auxv_push!(AT_RANDOM, user_sp);
-
-        let mut p = user_sp;
-        for i in 0..0xf {
-            *translated_refmut(memory_set.token(), p as *mut u8) = i as u8;
-            p += 1;
+        // unsafe code is efficient code! here we go!
+        fn copy_to_user_string_unchecked(src: &str, dst: *mut u8) {
+            let size = src.len();
+            unsafe {
+                core::slice::from_raw_parts_mut(dst, size)
+                    .copy_from_slice(core::slice::from_raw_parts(src.as_ptr(), size));
+                // adapt to C-style string
+                *dst.add(size) = b'\0';
+            }
         }
 
-        ////////////// padding //////////////////////
-        usr_sp_align!(16);
+        // we don't care about the order of env...
+        let mut envp_user = Vec::<*const u8>::new();
+        for env in envp_vec.iter() {
+            phys_user_sp -= env.len() + 1;
+            envp_user.push((phys_user_sp + virt_phys_offset) as *const u8);
+            copy_to_user_string_unchecked(env, phys_user_sp as *mut u8);
+        }
+        envp_user.push(core::ptr::null());
 
-        ////////////// auxv[] //////////////////////
-        auxv_push!(AT_EXECFN, argv[0]); // file name
-        auxv_push!(AT_NULL, 0); // end
-        usr_arg_push!(auxv, auxv_base, auxv, 0, AuxHeader);
+        // we don't care about the order of arg, too...
+        let mut argv_user = Vec::<*const u8>::new();
+        for arg in argv_vec.iter() {
+            phys_user_sp -= arg.len() + 1;
+            argv_user.push((phys_user_sp + virt_phys_offset) as *const u8);
+            copy_to_user_string_unchecked(arg, phys_user_sp as *mut u8);
+        }
+        argv_user.push(core::ptr::null());
 
-        ////////////// *envp [] //////////////////////
-        usr_arg_push!(env, envp_base, envp);
-        ////////////// *argv [] //////////////////////
-        usr_arg_push!(args, argv_base, argv);
+        // align downward to usize (64bit)
+        phys_user_sp &= !0x7;
 
-        ////////////// argc //////////////////////
-        user_sp -= core::mem::size_of::<usize>();
-        *translated_refmut(memory_set.token(), user_sp as *mut usize) = args.len();
+        // 16 random bytes
+        phys_user_sp -= 2 * core::mem::size_of::<usize>();
+        // should be virt addr!
+        let random_bits_ptr = phys_user_sp + virt_phys_offset;
+        unsafe {
+            *(phys_user_sp as *mut usize) = 0xdeadbeefcafebabe;
+            *(phys_user_sp as *mut usize).add(1) = 0xdeadbeefcafebabe;
+        }
+
+        // padding
+        phys_user_sp -= core::mem::size_of::<usize>();
+        unsafe {
+            *(phys_user_sp as *mut usize) = 0x0000000000000000;
+        }
+
+        let auxv = [
+            // AuxvEntry::new(AuxvType::SYSINFO_EHDR, vDSO_mapping);
+            // AuxvEntry::new(AuxvType::L1I_CACHESIZE, 0);
+            // AuxvEntry::new(AuxvType::L1I_CACHEGEOMETRY, 0);
+            // AuxvEntry::new(AuxvType::L1D_CACHESIZE, 0);
+            // AuxvEntry::new(AuxvType::L1D_CACHEGEOMETRY, 0);
+            // AuxvEntry::new(AuxvType::L2_CACHESIZE, 0);
+            // AuxvEntry::new(AuxvType::L2_CACHEGEOMETRY, 0);
+            // `0x112d` means IMADZifenciC, aka gc
+            AuxvEntry::new(AuxvType::HWCAP, 0x112d),
+            AuxvEntry::new(AuxvType::PAGESZ, PAGE_SIZE),
+            AuxvEntry::new(AuxvType::CLKTCK, TICKS_PER_SEC),
+            AuxvEntry::new(AuxvType::PHDR, elf_info.phdr),
+            AuxvEntry::new(AuxvType::PHENT, elf_info.phent),
+            AuxvEntry::new(AuxvType::PHNUM, elf_info.phnum),
+            AuxvEntry::new(AuxvType::BASE, 0),
+            AuxvEntry::new(AuxvType::FLAGS, 0),
+            AuxvEntry::new(AuxvType::ENTRY, elf_info.entry),
+            AuxvEntry::new(AuxvType::UID, 0),
+            AuxvEntry::new(AuxvType::EUID, 0),
+            AuxvEntry::new(AuxvType::GID, 0),
+            AuxvEntry::new(AuxvType::EGID, 0),
+            AuxvEntry::new(AuxvType::SECURE, 0),
+            AuxvEntry::new(AuxvType::RANDOM, random_bits_ptr as usize),
+            AuxvEntry::new(
+                AuxvType::EXECFN,
+                argv_user.first().copied().unwrap() as usize,
+            ),
+            AuxvEntry::new(AuxvType::NULL, 0),
+        ];
+        phys_user_sp -= auxv.len() * core::mem::size_of::<AuxvEntry>();
+        unsafe {
+            core::slice::from_raw_parts_mut(phys_user_sp as *mut AuxvEntry, auxv.len())
+                .copy_from_slice(auxv.as_slice());
+        }
+
+        phys_user_sp -= envp_user.len() * core::mem::size_of::<usize>();
+        unsafe {
+            core::slice::from_raw_parts_mut(phys_user_sp as *mut *const u8, envp_user.len())
+                .copy_from_slice(envp_user.as_slice());
+        }
+
+        phys_user_sp -= argv_user.len() * core::mem::size_of::<usize>();
+        unsafe {
+            core::slice::from_raw_parts_mut(phys_user_sp as *mut *const u8, argv_user.len())
+                .copy_from_slice(argv_user.as_slice());
+        }
+
+        phys_user_sp -= core::mem::size_of::<usize>();
+        unsafe {
+            *(phys_user_sp as *mut usize) = argv_vec.len();
+        }
+
+        user_sp = phys_user_sp + virt_phys_offset;
+
+        // unlikely, if `start` and `end` are in different pages, we should panic
+        assert_eq!(phys_start & !0xfff, phys_user_sp & !0xfff);
+
+        // print user stack
+        let mut phys_addr = phys_user_sp & !0xf;
+        while phys_start >= phys_addr {
+            info!(
+                "0x{:0>16X}:    {:0>16X}  {:0>16X}",
+                phys_addr + virt_phys_offset,
+                unsafe { *(phys_addr as *mut usize) },
+                unsafe { *((phys_addr + core::mem::size_of::<usize>()) as *mut usize) }
+            );
+            phys_addr += 2 * core::mem::size_of::<usize>();
+        }
 
         // initialize trap_cx
-        let mut trap_cx = TrapContext::app_init_context(
-            entry_point,
+        let trap_cx = TrapContext::app_init_context(
+            elf_info.entry,
             user_sp,
             KERNEL_SPACE.lock().token(),
             self.kernel_stack.get_top(),
             trap_handler as usize,
         );
-        trap_cx.x[10] = args.len();
-        trap_cx.x[11] = argv_base;
-        trap_cx.x[12] = envp_base;
-        trap_cx.x[13] = auxv_base;
+        // trap_cx.x[10] = args_vec.len();
+        // trap_cx.x[11] = argv_base;
+        // trap_cx.x[12] = envp_base;
+        // trap_cx.x[13] = auxv_base;
         // **** hold current PCB lock
         let mut inner = self.acquire_inner_lock();
+        // update trap_cx ppn
+        inner.trap_cx_ppn = (&memory_set)
+            .translate(VirtAddr::from(TRAP_CONTEXT).into())
+            .unwrap()
+            .ppn();
+        *inner.get_trap_cx() = trap_cx;
         // substitute memory_set
         inner.memory_set = memory_set;
-        inner.heap_bottom = user_heap;
-        inner.heap_pt = user_heap;
+        inner.heap_bottom = program_break;
+        inner.heap_pt = program_break;
         // flush signal handler
         inner.siginfo.signal_handler = BTreeMap::new();
-        // update trap_cx ppn
-        inner.trap_cx_ppn = trap_cx_ppn;
-        *inner.get_trap_cx() = trap_cx;
+        // flush cloexec fd
+        inner.fd_table.iter_mut().for_each(|fd| match fd {
+            Some(file) => {
+                if file.get_cloexec() {
+                    *fd = None;
+                }
+            }
+            None => (),
+        });
         // **** release current PCB lock
     }
     pub fn fork(self: &Arc<TaskControlBlock>) -> Arc<TaskControlBlock> {
@@ -598,170 +547,134 @@ impl TaskControlBlock {
         inner.pgid
     }
 }
-// should return 0 in success
-pub fn exec(mut path: String, mut args_vec: Vec<String>) -> isize {
-    debug!("[exec] arg_vec:{:?}", args_vec);
-    macro_rules! unmap_exec_buf {
-        ($buffer:ident) => {
-            crate::mm::KERNEL_SPACE.lock().remove_area_with_start_vpn(
-                crate::mm::VirtAddr::from($buffer.as_ptr() as usize).floor(),
-            ).unwrap();
-        };
-    }
-    pub fn elf_exec(path: &mut String, args_vec: &mut Vec<String>) -> isize {
-        let task = super::current_task().unwrap();
-        let inner = task.acquire_inner_lock();
-        let ret = if let Some(app_inode) = crate::fs::open(
-            inner.get_work_path().as_str(),
-            path.as_str(),
-            crate::fs::OpenFlags::O_RDONLY,
-            crate::fs::DiskInodeType::File,
-        ) {
-            drop(inner);
-            let len = app_inode.get_size();
-            debug!("[exec] File size: {} bytes", len);
-            let start: usize = MMAP_BASE;
-            crate::show_frame_consumption! {
-                "push_elf_area";
-                if crate::mm::push_elf_area(app_inode.clone()).is_err() {
-                    unsafe {
-                        app_inode
-                            .kread(None, core::slice::from_raw_parts_mut(start as *mut u8, len));
-                    }
-                } else {
-                    info!("Trying not to load anything.");
-                };
-            }
-            // return argc because cx.x[10] will be covered with it later
-            let task = current_task().unwrap();
-            info!("[exec] argc = {}", args_vec.len());
-            let before_exec = crate::mm::unallocated_frames();
-            unsafe {
-                // run the file as elf if the magic number matches or returns ENOEXEC.
-                let buffer = core::slice::from_raw_parts(start as *const u8, len);
-                if buffer[0..4.min(buffer.len())] == [0x7f, b'E', b'L', b'F'] {
-                    task.exec(buffer, args_vec);
-                } else {
-                    //test sh
-                    //if buffer[0..4] != [0x7f, 0x45, 0x4c, 0x46]
 
-                    //Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
-                    //Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
-                    //problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
-
-                    *args_vec.first_mut().unwrap() = path.to_string();
-                    // let path_bin: String;
-                    // let shell: bool = buffer[0..2.min(buffer.len())] == [b'#', b'!']; // see if it tells us the path using #!
-                    // info!("bin_given:{}", shell);
-                    // if shell {
-                    //     let last = buffer[0..85.min(buffer.len())]
-                    //         .iter()
-                    //         .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
-                    //     //assign_to_bin. not done.
-                    //     path_bin = String::from_utf8_lossy(
-                    //         &buffer[2..if last.is_some() { last.unwrap() } else { 2 }], //what if it is #!
-                    //     )
-                    //     .to_string();
-                    //     if path_bin.is_empty() {
-                    //         unmap_exec_buf!(buffer);
-                    //         // #! must be followed by a path or at least a name
-                    //         return ENOEXEC;
-                    //     }
-                    //     info!("path_bin:{}", path_bin);
-                    //     //end of assign_to_bin
-                    //     if ["/bin/sh", "/bin/bash"].contains(&&(path_bin[..])) {
-                    //         info!("[exec]path_bin==/bin/sh");
-                    //         *path = String::from("/bash");
-                    //         args_vec.insert(0, path.to_string());
-                    //     } else {
-                    //         info!("[exec]path_bin!=/bin/sh");
-                    //         let cmd = path_bin.split(' ').collect::<Vec<_>>();
-                    //         //args_vec[0] = path.clone();
-                    //         *path = cmd[0].to_string();
-                    //         let bin_name = path[..]
-                    //             .split('/')
-                    //             .collect::<Vec<_>>()
-                    //             .last()
-                    //             .unwrap()
-                    //             .to_string();
-                    //         if cmd.len() > 1 {
-                    //             for j in (1..cmd.len()).rev() {
-                    //                 args_vec.insert(0, cmd[j].to_string());
-                    //             }
-                    //         }
-                    //         args_vec.insert(0, bin_name);
-                    //         info!("[exec] args_vec{:?}", args_vec);
-                    //     }
-                    // } else {
-                        //completely no info, fall back to busybox.
-                        *path = String::from("/bin/bash");
-                        args_vec.insert(0, String::from("/bin/bash"));
-                        //args_vec.insert(0, String::from("busybox"));
-                    // }
-                    unmap_exec_buf!(buffer);
-                    return crate::syscall::errno::ENOEXEC;
-                }
-            }
-            crate::show_frame_consumption!("task_exec", before_exec);
-            // on success, we should not return.
-            drop(app_inode);
-            // should return 0 in success
-            SUCCESS
+fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> isize {
+    let size = file.get_size();
+    let start: usize = MMAP_BASE;
+    let buffer = unsafe { core::slice::from_raw_parts_mut(start as *mut u8, size) };
+    show_frame_consumption! {
+        "push_elf_area";
+        if crate::mm::push_elf_area(file.clone()).is_err() {
+            file.kread(None, buffer);
         } else {
-            //else: let ret = if let Some(app_inode) != crate::fs::open(...):
-            ENOENT
+            info!("[elf_exec] Hit ELF cache, no alloc");
         };
-        ret
     }
-    let mut ret = elf_exec(&mut path, &mut args_vec);
+    let task = current_task().unwrap();
+    show_frame_consumption! {
+        "task_exec";
+        task.load_elf(buffer, argv_vec, envp_vec);
+    }
+    // remove elf area
+    crate::mm::KERNEL_SPACE
+        .lock()
+        .remove_area_with_start_vpn(VirtAddr::from(MMAP_BASE).floor())
+        .unwrap();
     // should return 0 in success
-    ret = {
-        match ret {
-            ENOEXEC => {
-                unsafe {
-                    core::arch::asm!("sfence.vma");
-                }
-                elf_exec(&mut path, &mut args_vec)
-            }
-            ENOENT => {
-                let bin_name = path[..]
-                    .split('/')
-                    .collect::<Vec<_>>()
-                    .last()
-                    .unwrap()
-                    .to_string();
-                if ["ls" /*,"rm" ,"touch", "false" */].contains(&(bin_name.as_str())) {
-                    elf_exec(
-                        {
-                            path = "busybox".to_string();
-                            &mut path
-                        },
-                        {
-                            args_vec.insert(0, "busybox".to_string());
-                            &mut args_vec
-                        },
-                    )
-                } else {
-                    ENOENT
-                }
-            }
-            SUCCESS => SUCCESS,
-            // elf_exec() never return other values
-            _ => unreachable!(),
-        }
-    };
-    // should return 0 in success
-    ret
-    /*
-    [ERROR] Unsupported syscall: utimensat , calling over arguments:
-    [DEBUG] args[0]: FFFFFFFFFFFFFF9C
-    [DEBUG] args[1]: FFFFFFFFFFFFCF1F
-    [DEBUG] args[2]: 0
-    [DEBUG] args[3]: 0
-    [DEBUG] args[4]: 0
-    [DEBUG] args[5]: 706050403020100
-    */
+    SUCCESS
 }
+
+// should return 0 in success
+pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) -> isize {
+    const DEFAULT_SHELL: &str = "/bin/bash";
+    debug!(
+        "[exec] argv: {:?} /* {} vars */, envp: {:?} /* {} vars */",
+        argv_vec,
+        argv_vec.len(),
+        envp_vec,
+        envp_vec.len()
+    );
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    let work_path = inner.get_work_path();
+    drop(inner);
+
+    match open(
+        work_path.as_str(),
+        path.as_str(),
+        OpenFlags::O_RDONLY,
+        DiskInodeType::File,
+    ) {
+        Some(file) => {
+            if file.get_size() < 4 {
+                return ENOEXEC;
+            }
+            let mut magic_number = Box::<[u8; 4]>::new([0; 4]);
+            // this operation may be expensive... I'm not sure
+            file.kread(Some(&mut 0usize), magic_number.as_mut_slice());
+            match magic_number.as_slice() {
+                b"\x7fELF" => elf_exec(file, &argv_vec, &envp_vec),
+                b"#!" => {
+                    let shell_file = open(
+                        work_path.as_str(),
+                        DEFAULT_SHELL,
+                        OpenFlags::O_RDONLY,
+                        DiskInodeType::File,
+                    )
+                    .unwrap();
+                    argv_vec.insert(0, DEFAULT_SHELL.to_string());
+                    elf_exec(shell_file, &argv_vec, &envp_vec)
+                }
+                _ => ENOEXEC,
+            }
+        }
+        None => ENOENT,
+    }
+}
+// I think it's a little expensive, so I temporarily move it here
+// test sh
+// if buffer[0..4] != [0x7f, 0x45, 0x4c, 0x46]
+
+// Problem 0: Zero Init. Exec Attempt: Use `busybox sh` as `default` while achieving the following purposes.
+// Problem 1: Recursion Redirection Problem: what if the #! gives an X that is NOT a binary.
+// problem 2: Invalid Redirection Problem: what if the #! gives an invalid binary? If you redirect it to `busybox sh` directly, will it be an infinitive recursion?
+
+// let path_bin: String;
+// let shell: bool = buffer[0..2.min(buffer.len())] == [b'#', b'!']; // see if it tells us the path using #!
+// info!("bin_given:{}", shell);
+// if shell {
+//     let last = buffer[0..85.min(buffer.len())]
+//         .iter()
+//         .position(|&r| ['\n' as u8, '\0' as u8, 0].contains(&(r)));
+//     //assign_to_bin. not done.
+//     path_bin = String::from_utf8_lossy(
+//         &buffer[2..if last.is_some() { last.unwrap() } else { 2 }], //what if it is #!
+//     )
+//     .to_string();
+//     if path_bin.is_empty() {
+//         unmap_exec_buf!(buffer);
+//         // #! must be followed by a path or at least a name
+//         return ENOEXEC;
+//     }
+//     info!("path_bin:{}", path_bin);
+//     //end of assign_to_bin
+//     if ["/bin/sh", "/bin/bash"].contains(&&(path_bin[..])) {
+//         info!("[exec]path_bin==/bin/sh");
+//         *path = String::from("/bash");
+//         args_vec.insert(0, path.to_string());
+//     } else {
+//         info!("[exec]path_bin!=/bin/sh");
+//         let cmd = path_bin.split(' ').collect::<Vec<_>>();
+//         //args_vec[0] = path.clone();
+//         *path = cmd[0].to_string();
+//         let bin_name = path[..]
+//             .split('/')
+//             .collect::<Vec<_>>()
+//             .last()
+//             .unwrap()
+//             .to_string();
+//         if cmd.len() > 1 {
+//             for j in (1..cmd.len()).rev() {
+//                 args_vec.insert(0, cmd[j].to_string());
+//             }
+//         }
+//         args_vec.insert(0, bin_name);
+//         info!("[exec] args_vec{:?}", args_vec);
+//     }
+//  } else {
+// completely no info, fall back to busybox.
+// args_vec.insert(0, String::from("busybox"));
+// }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum TaskStatus {
@@ -783,9 +696,4 @@ impl ProcAddress {
             clear_child_tid: 0,
         }
     }
-}
-#[derive(Clone, Copy)]
-pub struct AuxHeader {
-    pub aux_type: usize,
-    pub value: usize,
 }
