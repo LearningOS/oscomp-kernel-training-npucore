@@ -112,48 +112,47 @@ impl File for Teletype {
     }
 
     #[cfg(not(any(feature = "board_k210")))]
-    fn read(&self, mut buf: UserBuffer) -> usize {
+    fn read(&self, buf: UserBuffer) -> usize {
         let mut inner = self.inner.lock();
         // todo: check foreground pgid
         let mut count = 0;
-        if inner.last_char != 255 {
-            unsafe {
-                buf.buffers[0].as_mut_ptr().write_volatile(inner.last_char);
-            }
-            count += 1;
-        }
-        loop {
-            inner.last_char = console_getchar() as u8;
-            if count < buf.len() && inner.last_char != 255 {
-                unsafe {
-                    buf.buffers[0].as_mut_ptr().write_volatile(inner.last_char);
-                }
-                count += 1;
-            } else {
-                if count != 0 {
+        for ptr in buf {
+            loop {
+                //we have read a legal char
+                if inner.last_char != 255 {
                     break;
-                } else {
-                    suspend_current_and_run_next();
                 }
+                //if we have read some chars, we can return
+                if count > 0 {
+                    return count;
+                }
+                //we read no char, suspend the procedure
+                suspend_current_and_run_next();
+                inner.last_char = console_getchar() as u8;
             }
+            //we can guarantee last_char isn't a illegal char
+            unsafe {
+                ptr.write_volatile(inner.last_char);
+            }
+            inner.last_char = console_getchar() as u8;
+            count += 1;
         }
         count
     }
 
     fn write(&self, user_buffer: UserBuffer) -> usize {
-        let inner = self.inner.lock();
+        let _inner = self.inner.lock();
         for buffer in user_buffer.buffers.iter() {
             match core::str::from_utf8(*buffer) {
                 Ok(content) => print!("{}", content),
                 Err(_) => warn!("[tty_write] Non-UTF8 charaters: {:?}", *buffer),
             }
         }
-        drop(inner);
         user_buffer.len()
     }
     
     fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
-        let inner = self.inner.lock();
+        let _inner = self.inner.lock();
         match offset {
             Some(_) => {
                 ESPIPE as usize
@@ -163,7 +162,6 @@ impl File for Teletype {
                     Ok(content) => print!("{}", content),
                     Err(_) => warn!("[tty_kwrite] Non-UTF8 charaters: {:?}", buffer),
                 }
-                drop(inner);
                 buffer.len()
             }
         }
