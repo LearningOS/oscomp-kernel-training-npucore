@@ -4,7 +4,7 @@ use core::ops::{AddAssign, SubAssign};
 use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;
 
-use crate::block_cache::{CacheManager, FileCache};
+use crate::block_cache::{CacheManager, Cache};
 use crate::layout::{FATDirEnt, FATDirShortEnt};
 use crate::{DataBlock, BLOCK_SZ};
 

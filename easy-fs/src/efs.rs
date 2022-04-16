@@ -1,6 +1,6 @@
 use super::{BlockDevice, Fat};
 use crate::{
-    block_cache::{CacheManager, FileCache},
+    block_cache::{CacheManager, Cache},
     layout::{DiskInodeType, BPB},
     Inode,
 };

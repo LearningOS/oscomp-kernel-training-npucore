@@ -2,7 +2,7 @@ use super::BlockDevice;
 use alloc::sync::Arc;
 use spin::Mutex;
 
-pub trait FileCache {
+pub trait Cache {
     /// The read-only mapper to the block cache
     fn read<T, V>(&self, offset: usize, f: impl FnOnce(&T) -> V) -> V;
     /// The mutable mapper to the block cache
@@ -12,9 +12,7 @@ pub trait FileCache {
 }
 
 pub trait CacheManager {
-    type CacheType: FileCache;
-    /// Constructor
-    fn new() -> Self;
+    type CacheType: Cache;
 
     /// Try to get the block cache and return `None` if not found.
     /// # Argument

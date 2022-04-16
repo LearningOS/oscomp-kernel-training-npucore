@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use clap::{App, Arg};
-use easy_fs::block_cache::{CacheManager, FileCache};
+use easy_fs::block_cache::{CacheManager, Cache};
 use easy_fs::layout::{DiskInodeType, FATDirEnt};
 use easy_fs::{BlockDevice, EasyFileSystem, Inode};
 use lazy_static::*;
@@ -91,7 +91,7 @@ impl BlockCache {
         }
     }
 }
-impl FileCache for BlockCache {
+impl Cache for BlockCache {
     /// The read-only mapper to the block cache
     fn read<T, V>(&self, offset: usize, f: impl FnOnce(&T) -> V) -> V {
         f(self.get_ref(offset))
@@ -122,13 +122,15 @@ pub struct BlockCacheManager {
     queue: RwLock<VecDeque<(usize, Arc<Mutex<BlockCache>>)>>,
 }
 
-impl CacheManager for BlockCacheManager {
-    type CacheType = BlockCache;
+impl BlockCacheManager {
     fn new() -> Self {
         Self {
             queue: RwLock::new(VecDeque::with_capacity(BLOCK_CACHE_SIZE)),
         }
     }
+}
+impl CacheManager for BlockCacheManager {
+    type CacheType = BlockCache;
 
     fn try_get_block_cache(&self, block_id: usize) -> Option<Arc<Mutex<BlockCache>>> {
         if let Some(pair) = self.queue.read().iter().find(|pair| pair.0 == block_id) {
@@ -198,7 +200,7 @@ fn easy_fs_pack() -> std::io::Result<()> {
     let image_path = if let Some(i) = matches.value_of("image") {
         i
     } else {
-        "/home/dragon/Documents/EduDept/Computer/MyCode/rCore/fat32/easy-fs-fuse/fat32.img"
+        "../fat32-fuse/fat32.img"
     };
 
     println!("image_path = {}", image_path);

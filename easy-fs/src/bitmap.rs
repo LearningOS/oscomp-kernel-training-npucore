@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use crate::{
-    block_cache::{CacheManager, FileCache},
+    block_cache::{CacheManager, Cache},
     layout::{BAD_BLOCK, EOC},
 };
 
