@@ -213,13 +213,13 @@ fn easy_fs_pack() -> std::io::Result<()> {
         "data_area_start_block: {}, \nsec_per_clus: {}, \nbyts_per_clus: {}, \nroot_clus:{}",
         i.data_area_start_block, i.sec_per_clus, i.byts_per_clus, i.root_clus
     );
-    let rt = Inode::new(
+    let rt = Arc::new(Inode::new(
         i.root_clus as usize,
         DiskInodeType::Directory,
         None,
         None,
         i.clone(),
-    );
+    ));
     println!("size:{:?}", rt.size);
     println!("clus:{:?}", rt.direct.lock());
 
@@ -237,13 +237,9 @@ fn easy_fs_pack() -> std::io::Result<()> {
      *            * i.get_offset() *\/
      *     );
      * } */
-    for j in rt.iter().short() {
-        print!("{:?}", j);
-        println!(
-            "{}",
-            j.get_name() /* ,
-                          * i.get_offset() */
-        );
+    let v = rt.ls();
+    for i in rt.iter() {
+        println!("{:?}", i.get_name());
     }
     /*
     // 4MiB, at most 4095 files

@@ -5,7 +5,7 @@ use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;
 
 use crate::block_cache::{CacheManager, FileCache};
-use crate::layout::FATDirEnt;
+use crate::layout::{FATDirEnt, FATDirShortEnt};
 use crate::{DataBlock, BLOCK_SZ};
 
 use alloc::sync::Arc;
@@ -31,6 +31,26 @@ pub struct Inode<T: CacheManager> {
 }
 
 impl<T: CacheManager> Inode<T> {
+    pub fn first_cluster(&self) -> u32 {
+        self.direct.lock()[0]
+    }
+    #[inline(always)]
+    pub fn get_inode_num(&self) -> u32 {
+        self.first_cluster()
+    }
+    pub fn from_ent(parent_dir: Arc<Self>, ent: &FATDirShortEnt) -> Self {
+        Self::new(
+            ent.get_first_clus() as usize,
+            if ent.is_dir() {
+                DiskInodeType::Directory
+            } else {
+                DiskInodeType::File
+            },
+            Some(ent.file_size as usize),
+            Some(parent_dir.clone()),
+            parent_dir.fs.clone(),
+        )
+    }
     /// Constructor for Inodes
     /// # Arguments
     /// `fst_clus`: The first cluster of the file
@@ -71,12 +91,6 @@ impl<T: CacheManager> Inode<T> {
     }
     pub fn file_size(&self) -> usize {
         *self.size.lock() as usize
-    }
-    /// direct vec/blocks allocated only when they are needed.
-    pub fn initialize(&mut self, type_: DiskInodeType) {
-        self.size = Mutex::new(0);
-        self.direct = Mutex::new(vec::Vec::new());
-        self.type_ = type_;
     }
     pub fn is_dir(&self) -> bool {
         self.type_ == DiskInodeType::Directory
@@ -170,7 +184,7 @@ impl<T: CacheManager> Inode<T> {
         }
         read_size
     }
-    pub fn write_at_block_cache(&mut self, offset: usize, buf: &[u8]) -> usize {
+    pub fn write_at_block_cache(&self, offset: usize, buf: &[u8]) -> usize {
         let mut start = offset;
         let lock = self.size.lock();
         let size = *lock;
@@ -213,7 +227,7 @@ impl<T: CacheManager> Inode<T> {
     /// * Return blocks that should be deallocated.
     /// # Warning
     /// We will clear the block contents to zero later.
-    pub fn clear_size(&mut self) -> Vec<u32> {
+    pub fn clear_size(&self) -> Vec<u32> {
         let mut lock = self.size.lock();
         let rhs = *lock;
         lock.sub_assign(rhs);
@@ -222,6 +236,7 @@ impl<T: CacheManager> Inode<T> {
         let mut lock = self.direct.lock();
         mem::take(&mut lock)
     }
+    #[inline(always)]
     fn get_size(&self) -> usize {
         self.file_size()
     }
@@ -242,8 +257,37 @@ impl<T: CacheManager> Inode<T> {
         if !self.is_dir() {
             return Vec::new();
         } else {
-            let v = Vec::new();
-            todo!();
+            let mut v = Vec::with_capacity(30);
+            let mut name = Vec::with_capacity(3);
+            for i in self.iter() {
+                if i.is_long() {
+                    if true
+                    //i.ord() == (LAST_LONG_ENTRY | (name.len() + 1))
+                    /*order_correct*/
+                    {
+                        name.insert(0, i.get_name());
+                    } else {
+                        /*order_wrong/missing*/
+                        name.clear();
+                        name.insert(0, i.get_name());
+                    }
+                } else {
+                    if !name.is_empty() {
+                        //then match the name to see if it's correct.
+                        if true {
+                            //if correct, push the concatenated name
+                            v.push(name.concat());
+                            name.clear();
+                            continue;
+                        } else {
+                            // short name doesn't match... The previous long entries are not correct.
+                            name.clear();
+                        }
+                    }
+                    // only one short
+                    v.push(i.get_name());
+                }
+            }
             return v;
         }
     }
@@ -317,6 +361,10 @@ impl<T: CacheManager> DirIter<T> {
         *self.mode.lock() = DirIterMode::LongIter;
         self
     }
+    pub fn all(self) -> Self {
+        *self.mode.lock() = DirIterMode::AllIter;
+        self
+    }
 }
 impl<T: CacheManager> Iterator for DirIter<T> {
     type Item = FATDirEnt;
@@ -327,7 +375,7 @@ impl<T: CacheManager> Iterator for DirIter<T> {
             let mut i: FATDirEnt = FATDirEnt::empty();
             (unsafe { (*self.dir).read_at_block_cache(self.offset, i.as_bytes_mut()) });
             self.offset += core::mem::size_of::<FATDirEnt>();
-            let mut lock = self.mode.lock();
+            let lock = self.mode.lock();
             while (i.unused_not_last()
             // used for skipping the last
 		||  (// for non-all iter mode 

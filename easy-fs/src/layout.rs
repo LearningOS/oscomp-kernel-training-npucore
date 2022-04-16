@@ -292,19 +292,26 @@ impl FATDirEnt {
             )
         }
     }
+    pub fn ord(&self) -> usize {
+        if let Some(i) = self.get_long_ent() {
+            i.ord as usize
+        } else {
+            0
+        }
+    }
     pub fn is_long(&self) -> bool {
         unsafe { self.short_entry.attr == FATDiskInodeType::AttrLongName }
     }
-    pub fn get_short_ent(&mut self) -> Option<&FATDirShortEnt> {
+    pub fn get_short_ent(&self) -> Option<&FATDirShortEnt> {
         if !self.is_long() {
-            unsafe { Some(&mut (self.short_entry)) }
+            unsafe { Some(&(self.short_entry)) }
         } else {
             None
         }
     }
-    pub fn get_long_ent(&mut self) -> Option<&FATLongDirEnt> {
+    pub fn get_long_ent(&self) -> Option<&FATLongDirEnt> {
         if self.is_long() {
-            unsafe { Some(&mut (self.long_entry)) }
+            unsafe { Some(&(self.long_entry)) }
         } else {
             None
         }
@@ -396,7 +403,7 @@ impl FATDirShortEnt {
 pub struct FATLongDirEnt {
     /// The order of this entry in the sequence of long dir entries.
     /// It is associated with the short dir entry at the end of the long dir set,
-    /// and masked with 0x40 (LAST_LONG_ENTRY),
+    /// and masked with 0x40 (`LAST_LONG_ENTRY`),
     /// which indicates that the entry is the last long dir entry in a set of long dir entries.
     /// All valid sets of long dir entries must begin with an entry having this mask.
     ord: u8,
