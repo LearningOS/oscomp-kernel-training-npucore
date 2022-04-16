@@ -5,12 +5,13 @@ use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;
 
 use crate::block_cache::{CacheManager, FileCache};
+use crate::layout::FATDirEnt;
 use crate::{DataBlock, BLOCK_SZ};
 
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use spin::Mutex;
+use spin::{Mutex, RwLock};
 /// The functionality of ClusLi & Inode can be merged.
 /// The struct for file information
 /* *ClusLi was DiskInode*
@@ -113,14 +114,15 @@ impl<T: CacheManager> Inode<T> {
     fn clus_offset(&self, byte: usize) -> (usize, usize, usize) {
         (
             byte / self.fs.clus_size() as usize,
-            (byte % self.fs.clus_size() as usize) / BLOCK_SZ,
+            (byte % self.fs.clus_size() as usize) / BLOCK_SZ as usize,
             byte % BLOCK_SZ,
         )
     }
     #[inline(always)]
     fn get_block_id(&self, blk: u32) -> u32 {
-        let (clus, sec, _) = self.clus_offset(blk as usize);
-        self.fs.first_sector_of_cluster(self.direct.lock()[clus]) + sec as u32
+        self.fs.first_sector_of_cluster(
+            self.direct.lock()[blk as usize / self.fs.sec_per_clus as usize],
+        ) + (blk as usize % self.fs.sec_per_clus as usize) as u32
     }
 
     /// The `get_block_cache` version of read_at
@@ -139,6 +141,7 @@ impl<T: CacheManager> Inode<T> {
         }
         let mut start_block = start / BLOCK_SZ;
         let mut read_size = 0usize;
+        let mut is_fst_blk = false;
         loop {
             // calculate end of current block
             let mut end_current_block = (start / BLOCK_SZ + 1) * BLOCK_SZ;
@@ -219,6 +222,9 @@ impl<T: CacheManager> Inode<T> {
         let mut lock = self.direct.lock();
         mem::take(&mut lock)
     }
+    fn get_size(&self) -> usize {
+        self.file_size()
+    }
 
     fn find_local(&self, name: String) -> Option<Arc<Self>> {
         //None
@@ -241,6 +247,15 @@ impl<T: CacheManager> Inode<T> {
             return v;
         }
     }
+
+    pub fn iter(&self) -> DirIter<T> {
+        DirIter {
+            dir: self,
+            offset: 0,
+            mode: Mutex::new(DirIterMode::AllIter),
+        }
+    }
+
     // Increase the size of current file.
     /*pub fn increase_size(
         &mut self,
@@ -252,20 +267,83 @@ impl<T: CacheManager> Inode<T> {
     }*/
 }
 
-struct DirIter {}
-impl DirIter {
-    fn is_file(&self) -> bool {
-        todo!()
+pub enum DirIterMode {
+    LongIter,
+    ShortIter,
+    AllIter,
+}
+
+impl DirIterMode {
+    /// Returns `true` if the dir iter mode is [`LongIter`].
+    ///
+    /// [`LongIter`]: DirIterMode::LongIter
+    pub fn is_long_iter(&self) -> bool {
+        matches!(self, Self::LongIter)
+    }
+
+    /// Returns `true` if the dir iter mode is [`ShortIter`].
+    ///
+    /// [`ShortIter`]: DirIterMode::ShortIter
+    pub fn is_short_iter(&self) -> bool {
+        matches!(self, Self::ShortIter)
+    }
+
+    /// Returns `true` if the dir iter mode is [`AllIter`].
+    ///
+    /// [`AllIter`]: DirIterMode::AllIter
+    pub fn is_all_iter(&self) -> bool {
+        matches!(self, Self::AllIter)
     }
 }
 
-impl Iterator for DirIter {
-    type Item = Arc<Self>;
+pub struct DirIter<T: CacheManager> {
+    dir: *const Inode<T>,
+    offset: usize,
+    mode: Mutex<DirIterMode>,
+}
+
+impl<T: CacheManager> DirIter<T> {
+    fn is_file(&self) -> bool {
+        unsafe { (*self.dir).is_file() }
+    }
+    pub fn get_offset(&self) -> usize {
+        self.offset
+    }
+    pub fn short(self) -> Self {
+        *self.mode.lock() = DirIterMode::ShortIter;
+        self
+    }
+    pub fn long(self) -> Self {
+        *self.mode.lock() = DirIterMode::LongIter;
+        self
+    }
+}
+impl<T: CacheManager> Iterator for DirIter<T> {
+    type Item = FATDirEnt;
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_file() {
             None
         } else {
-            todo!()
+            let mut i: FATDirEnt = FATDirEnt::empty();
+            (unsafe { (*self.dir).read_at_block_cache(self.offset, i.as_bytes_mut()) });
+            self.offset += core::mem::size_of::<FATDirEnt>();
+            let mut lock = self.mode.lock();
+            while (i.unused_not_last()
+            // used for skipping the last
+		||  (// for non-all iter mode 
+		    !lock.is_all_iter() && !i.last_and_unused()
+		     // skipping long or short
+                && if lock.is_short_iter() {i.is_long()}else{!i.is_long()}))
+                && self.offset < unsafe { (*self.dir).get_size() }
+            {
+                (unsafe { (*self.dir).read_at_block_cache(self.offset, i.as_bytes_mut()) });
+                self.offset += core::mem::size_of::<FATDirEnt>();
+            }
+            if !i.last_and_unused() && self.offset < unsafe { (*self.dir).file_size() } {
+                Some(i)
+            } else {
+                None
+            }
         }
     }
 }

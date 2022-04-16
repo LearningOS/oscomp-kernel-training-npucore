@@ -147,15 +147,18 @@ impl CacheManager for BlockCacheManager {
             i
         } else {
             // substitute
-            if self.queue.read().len() == BLOCK_CACHE_SIZE {
+            let rd = self.queue.read();
+            let size = self.queue.read().len();
+            drop(rd);
+            if size == BLOCK_CACHE_SIZE {
                 // from front to tail
-                if let Some((idx, _)) = self
-                    .queue
-                    .read()
+                let rd = self.queue.read();
+                if let Some((idx, _)) = rd
                     .iter()
                     .enumerate()
                     .find(|(_, pair)| Arc::strong_count(&pair.1) == 1)
                 {
+                    drop(rd);
                     self.queue.write().drain(idx..=idx);
                 } else {
                     panic!("Run out of BlockCache!");
@@ -212,12 +215,13 @@ fn easy_fs_pack() -> std::io::Result<()> {
     );
     let rt = Inode::new(
         i.root_clus as usize,
-        DiskInodeType::File,
+        DiskInodeType::Directory,
         None,
         None,
         i.clone(),
     );
     println!("size:{:?}", rt.size);
+    println!("clus:{:?}", rt.direct.lock());
 
     let mut ent = FATDirEnt::empty();
     println!(
@@ -226,7 +230,21 @@ fn easy_fs_pack() -> std::io::Result<()> {
         ent.get_name(),
         rt.file_size()
     );
-
+    /* for j in rt.iter() {
+     *     println!(
+     *         "{:?}",
+     *         j /\* ,
+     *            * i.get_offset() *\/
+     *     );
+     * } */
+    for j in rt.iter().short() {
+        print!("{:?}", j);
+        println!(
+            "{}",
+            j.get_name() /* ,
+                          * i.get_offset() */
+        );
+    }
     /*
     // 4MiB, at most 4095 files
     let root_inode = Arc::new(EasyFileSystem::root_inode(&efs));

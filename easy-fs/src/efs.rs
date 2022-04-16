@@ -62,9 +62,9 @@ impl<T: CacheManager> EasyFileSystem<T> {
     /// n is the ordinal number of the cluster.
     #[inline(always)]
     pub fn first_sector_of_cluster(&self, n: u32) -> u32 {
-        assert_eq!(n.count_ones(), 1);
+        assert_eq!(self.sec_per_clus.count_ones(), 1);
         (if n > 2 {
-            (self.sec_per_clus as u32) << (n - 2).trailing_zeros()
+            (n - 2) << (self.sec_per_clus as u32).trailing_zeros()
         } else {
             0
         }) as u32

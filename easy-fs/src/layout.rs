@@ -251,11 +251,25 @@ pub enum FATDiskInodeType {
     AttrArchive = 0x20,
     AttrLongName = 0x0F,
 }
-
 pub union FATDirEnt {
     short_entry: FATDirShortEnt,
     long_entry: FATLongDirEnt,
 }
+
+impl Debug for FATDirEnt {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if !self.is_long() {
+            f.debug_struct("FATDirEnt")
+                .field("SHORT", unsafe { &self.short_entry })
+                .finish()
+        } else {
+            f.debug_struct("FATDirEnt")
+                .field("LONG", unsafe { &self.long_entry })
+                .finish()
+        }
+    }
+}
+
 impl FATDirEnt {
     pub fn empty() -> Self {
         Self {
@@ -367,12 +381,16 @@ impl FATDirShortEnt {
 }
 impl FATDirShortEnt {
     pub fn name(&self) -> &str {
-        let len = (0usize..).find(|i| self.name[*i] == 0).unwrap();
-        core::str::from_utf8(&self.name[..len]).unwrap()
+        let len = if let Some(i) = (0usize..11).find(|i| self.name[*i] == 32) {
+            i
+        } else {
+            0
+        };
+        core::str::from_utf8(&self.name[..len.min(11)]).unwrap()
     }
 }
 
-#[derive(PartialEq, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 #[repr(packed)]
 /// *On-disk* data structure for partition information.
 pub struct FATLongDirEnt {
@@ -421,22 +439,5 @@ impl FATLongDirEnt {
                 0
             }],
         )
-    }
-}
-
-impl Clone for FATLongDirEnt {
-    fn clone(&self) -> Self {
-        unsafe {
-            Self {
-                ord: self.ord.clone(),
-                name1: self.name1.clone(),
-                attr: self.attr.clone(),
-                ldir_type: self.ldir_type.clone(),
-                chk_sum: self.chk_sum.clone(),
-                name2: self.name2.clone(),
-                fst_clus_lo: self.fst_clus_lo.clone(),
-                name3: self.name3.clone(),
-            }
-        }
     }
 }
