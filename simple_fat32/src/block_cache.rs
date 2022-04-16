@@ -3,7 +3,7 @@ use super::{
     BlockDevice,
 };
 use alloc::boxed::Box;
-use alloc::collections::VecDeque;
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use lazy_static::*;
 use spin::RwLock;
@@ -89,12 +89,11 @@ impl Drop for BlockCache {
 // 5-7 DirEntry
 // 8-19 DATA
 
-const BLOCK_CACHE_SIZE: usize = 20;
 //const DIRENT_CACHE_SIZE: usize = 4;
 pub struct BlockCacheManager {
     start_sec: usize,
     limit: usize,
-    queue: VecDeque<(usize, Arc<RwLock<BlockCache>>)>,
+    map: BTreeMap<usize, Arc<RwLock<BlockCache>>>,
 }
 
 impl BlockCacheManager {
@@ -102,7 +101,7 @@ impl BlockCacheManager {
         Self { 
             start_sec: 0,
             limit,
-            queue: VecDeque::new() 
+            map: BTreeMap::new() 
         }
     }
 
@@ -119,11 +118,9 @@ impl BlockCacheManager {
         block_id: usize,
         //block_device: Arc<dyn BlockDevice>,
     ) -> Option<Arc<RwLock<BlockCache>>>{
-        if let Some(pair) = self.queue
-            .iter()
-            .find(|pair| pair.0 == block_id) {
-                Some(Arc::clone(&pair.1))
-        }else{
+        if let Some(block_cache) = self.map.get(&block_id) {
+            Some(block_cache.clone())
+        } else {
             None
             // substitute
             // if self.queue.len() == BLOCK_CACHE_SIZE {
@@ -152,19 +149,17 @@ impl BlockCacheManager {
         block_id: usize,
         block_device: Arc<dyn BlockDevice>,
     ) -> Arc<RwLock<BlockCache>> {
-        if let Some(pair) = self.queue
-            .iter()
-            .find(|pair| pair.0 == block_id) {
-                Arc::clone(&pair.1)
+        if let Some(block_cache) = self.map.get(&block_id) {
+            block_cache.clone()
         } else {
             // substitute
-            if self.queue.len() == self.limit/*BLOCK_CACHE_SIZE*/ {
+            if self.map.len() == self.limit/*BLOCK_CACHE_SIZE*/ {
                 // from front to tail
-                if let Some((idx, _)) = self.queue
+                if let Some((idx, _)) = self.map
                     .iter()
                     .enumerate()
                     .find(|(_, pair)| Arc::strong_count(&pair.1) == 1) {
-                    self.queue.drain(idx..=idx);
+                    self.map.remove(&idx);
                 } else {
                     panic!("Run out of BlockCache!");
                 }
@@ -173,14 +168,14 @@ impl BlockCacheManager {
             let block_cache = Arc::new(RwLock::new(
                 BlockCache::new(block_id, Arc::clone(&block_device))
             ));
-            self.queue.push_back((block_id, Arc::clone(&block_cache)));
+            self.map.insert(block_id, Arc::clone(&block_cache));
             //println!("blkcache: {:?}", block_cache.read().cache);
             block_cache
         }
     }
 
     pub fn drop_all(&mut self){
-        self.queue.clear();
+        self.map.clear();
     }
 }
 
@@ -188,7 +183,7 @@ impl BlockCacheManager {
 
 lazy_static! {
     pub static ref DATA_BLOCK_CACHE_MANAGER: RwLock<BlockCacheManager> = RwLock::new(
-        BlockCacheManager::new(1034)
+        BlockCacheManager::new(1024)
     );
 }
 
