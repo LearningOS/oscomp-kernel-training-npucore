@@ -9,7 +9,6 @@ use crate::layout::{FATDirEnt, FATDirShortEnt};
 use crate::{DataBlock, BLOCK_SZ};
 
 use alloc::sync::Arc;
-use alloc::vec;
 use alloc::vec::Vec;
 use spin::{Mutex, RwLock};
 /// The functionality of ClusLi & Inode can be merged.

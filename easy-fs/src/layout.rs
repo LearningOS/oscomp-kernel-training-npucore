@@ -7,7 +7,7 @@ pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
 pub const DIR_ENTRY_UNUSED: u8 = 0x5e;
 pub const DIR_ENTRY_LAST_AND_UNUSED: u8 = 0x0;
 
-#[derive(Debug, Copy)]
+#[derive(Debug, Clone, Copy)]
 #[repr(packed)]
 /// *On-disk* data structure for partition information.
 pub struct BPB {
@@ -73,41 +73,41 @@ pub struct BPB {
     pub fil_sys_type: [u8; 8],
 }
 
-impl Clone for BPB {
-    fn clone(&self) -> Self {
-        unsafe {
-            Self {
-                bs_jmp_boot: self.bs_jmp_boot.clone(),
-                bs_oem_name: self.bs_oem_name.clone(),
-                byts_per_sec: self.byts_per_sec.clone(),
-                sec_per_clus: self.sec_per_clus.clone(),
-                rsvd_sec_cnt: self.rsvd_sec_cnt.clone(),
-                num_fats: self.num_fats.clone(),
-                root_ent_cnt: self.root_ent_cnt.clone(),
-                tot_sec16: self.tot_sec16.clone(),
-                media: self.media.clone(),
-                fat_sz16: self.fat_sz16.clone(),
-                sec_per_trk: self.sec_per_trk.clone(),
-                num_heads: self.num_heads.clone(),
-                hidd_sec: self.hidd_sec.clone(),
-                tot_sec32: self.tot_sec32.clone(),
-                fat_sz32: self.fat_sz32.clone(),
-                ext_flags: self.ext_flags.clone(),
-                fs_ver: self.fs_ver.clone(),
-                root_clus: self.root_clus.clone(),
-                fs_info: self.fs_info.clone(),
-                bk_boot_sec: self.bk_boot_sec.clone(),
-                reserved: self.reserved.clone(),
-                drv_num: self.drv_num.clone(),
-                resvered1: self.resvered1.clone(),
-                boot_sig: self.boot_sig.clone(),
-                vol_id: self.vol_id.clone(),
-                vol_lab: self.vol_lab.clone(),
-                fil_sys_type: self.fil_sys_type.clone(),
-            }
-        }
-    }
-}
+// impl Clone for BPB {
+//     fn clone(&self) -> Self {
+//         unsafe {
+//             Self {
+//                 bs_jmp_boot: self.bs_jmp_boot.clone(),
+//                 bs_oem_name: self.bs_oem_name.clone(),
+//                 byts_per_sec: self.byts_per_sec.clone(),
+//                 sec_per_clus: self.sec_per_clus.clone(),
+//                 rsvd_sec_cnt: self.rsvd_sec_cnt.clone(),
+//                 num_fats: self.num_fats.clone(),
+//                 root_ent_cnt: self.root_ent_cnt.clone(),
+//                 tot_sec16: self.tot_sec16.clone(),
+//                 media: self.media.clone(),
+//                 fat_sz16: self.fat_sz16.clone(),
+//                 sec_per_trk: self.sec_per_trk.clone(),
+//                 num_heads: self.num_heads.clone(),
+//                 hidd_sec: self.hidd_sec.clone(),
+//                 tot_sec32: self.tot_sec32.clone(),
+//                 fat_sz32: self.fat_sz32.clone(),
+//                 ext_flags: self.ext_flags.clone(),
+//                 fs_ver: self.fs_ver.clone(),
+//                 root_clus: self.root_clus.clone(),
+//                 fs_info: self.fs_info.clone(),
+//                 bk_boot_sec: self.bk_boot_sec.clone(),
+//                 reserved: self.reserved.clone(),
+//                 drv_num: self.drv_num.clone(),
+//                 resvered1: self.resvered1.clone(),
+//                 boot_sig: self.boot_sig.clone(),
+//                 vol_id: self.vol_id.clone(),
+//                 vol_lab: self.vol_lab.clone(),
+//                 fil_sys_type: self.fil_sys_type.clone(),
+//             }
+//         }
+//     }
+// }
 
 /* impl Debug for BPB {
  *     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
@@ -432,9 +432,10 @@ pub struct FATLongDirEnt {
 impl FATLongDirEnt {
     pub fn name(&self) -> String {
         let mut name_all: [u16; 13] = [0u16; 13];
-        name_all[..5].copy_from_slice(&self.name1);
-        name_all[5..11].copy_from_slice(&self.name2);
-        name_all[11..].copy_from_slice(&self.name3);
+        
+        name_all[..5].copy_from_slice(unsafe { &core::ptr::addr_of!(self.name1).read_unaligned() });
+        name_all[5..11].copy_from_slice(unsafe { &core::ptr::addr_of!(self.name2).read_unaligned() });
+        name_all[11..].copy_from_slice(unsafe { &core::ptr::addr_of!(self.name3).read_unaligned() });
         String::from_utf16_lossy(
             &name_all[..if let Some((i, _)) = name_all
                 .iter()
