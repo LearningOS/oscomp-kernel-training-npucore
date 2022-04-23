@@ -675,17 +675,14 @@ impl MapArea {
         start_vpn_in_kernel_elf_area: VirtPageNum,
     ) -> Result {
         let kernel_space = KERNEL_SPACE.lock();
-        let kernel_page_table = &kernel_space.page_table;
         let kernel_elf_area = kernel_space.areas.last().unwrap();
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         let mut src_vpn = start_vpn_in_kernel_elf_area;
         for vpn in self.data_frames.vpn_range {
-            if let Some(pte) = kernel_page_table.translate(src_vpn) {
-                let ppn = pte.ppn();
+            if let Some(frame) = kernel_elf_area.data_frames.get(&src_vpn) {
+                let ppn = frame.ppn;
                 if !page_table.is_mapped(vpn) {
-                    let frame = kernel_elf_area.data_frames.get(&src_vpn).unwrap();
                     self.data_frames.insert(vpn, frame.clone());
-                    assert_eq!(ppn, frame.ppn);
                     page_table.map(vpn, ppn, pte_flags);
                 } else {
                     error!("[map_from_kernel_elf_area] user vpn already mapped!");
