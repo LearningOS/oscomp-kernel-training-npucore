@@ -2,6 +2,7 @@ use core::mem;
 use core::ops::{AddAssign, SubAssign};
 
 use super::{DiskInodeType, EasyFileSystem};
+
 use alloc::string::String;
 
 use crate::block_cache::{Cache, CacheManager};
@@ -10,7 +11,7 @@ use crate::{DataBlock, BLOCK_SZ};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use spin::Mutex;
+use spin::{Mutex, MutexGuard};
 /// The functionality of ClusLi & Inode can be merged.
 /// The struct for file information
 /* *ClusLi was DiskInode*
@@ -42,6 +43,22 @@ impl<T: CacheManager> Inode<T> {
     pub fn get_inode_num(&self) -> Option<u32> {
         self.first_sector()
     }
+    /// Get the neighboring 8 or fewer(the trailing mod-of-eight blocks of the file) blocks
+    /// of `inner_block_id`,
+    /// _LOCKING_ the direct every time it adds a block.
+    /// THIS FUNCTION MAY RESULT IN A DEAD LOCK!
+    pub fn get_neighboring_sec(&self, inner_block_id: u32) -> Vec<u32> {
+        let mut v = Vec::new();
+        for i in inner_block_id & (!0b111u32)..=(inner_block_id | (0b111u32)) {
+            if let Some(j) = self.get_block_id(i) {
+                v.push(j)
+            } else {
+                break;
+            }
+        }
+        v
+    }
+
     pub fn from_ent(parent_dir: Arc<Self>, ent: &FATDirShortEnt) -> Self {
         Self::new(
             ent.get_first_clus() as usize,
@@ -139,10 +156,17 @@ impl<T: CacheManager> Inode<T> {
         )
     }
     #[inline(always)]
-    fn get_block_id(&self, blk: u32) -> u32 {
-        self.fs.first_sector_of_cluster(
-            self.direct.lock()[blk as usize / self.fs.sec_per_clus as usize],
-        ) + (blk as usize % self.fs.sec_per_clus as usize) as u32
+    fn get_block_id(&self, blk: u32) -> Option<u32> {
+        let lock = self.direct.lock();
+        let clus = blk as usize / self.fs.sec_per_clus as usize;
+        if clus < lock.len() {
+            Some(
+                self.fs.first_sector_of_cluster(lock[clus])
+                    + (blk as usize % self.fs.sec_per_clus as usize) as u32,
+            )
+        } else {
+            None
+        }
     }
 
     /// The `get_block_cache` version of read_at
@@ -170,7 +194,7 @@ impl<T: CacheManager> Inode<T> {
             let dst = &mut buf[read_size..read_size + block_read_size];
             self.file_cache_mgr
                 .get_block_cache(
-                    self.get_block_id(start_block as u32) as usize,
+                    self.get_block_id(start_block as u32).unwrap() as usize,
                     Some(start_block),
                     self.get_inode_num().map(|i| i as usize),
                     Arc::clone(&self.fs.block_device),
@@ -213,7 +237,7 @@ impl<T: CacheManager> Inode<T> {
             let block_write_size = end_current_block - start;
             self.file_cache_mgr
                 .get_block_cache(
-                    self.get_block_id(start_block as u32) as usize,
+                    self.get_block_id(start_block as u32).unwrap() as usize,
                     Some(start_block),
                     self.get_inode_num().map(|i| i as usize),
                     Arc::clone(&self.fs.block_device),

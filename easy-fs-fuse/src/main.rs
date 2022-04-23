@@ -265,11 +265,12 @@ fn easy_fs_pack() -> std::io::Result<()> {
         }
     }
     println!(
-        "{:?},{:?}",
+        "{:?},{:?},{:?}",
         easy_fs::find_local(rt.clone(), "hi".to_string()).is_none(),
         easy_fs::find_local(rt.clone(), "etc".to_string())
             .unwrap()
-            .get_inode_num()
+            .get_inode_num(),
+        rt.get_neighboring_sec(0)
     );
     /*
     // 4MiB, at most 4095 files
