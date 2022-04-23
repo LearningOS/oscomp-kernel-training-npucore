@@ -7,7 +7,6 @@ use crate::config::*;
 use crate::fs::{File, FileLike};
 use crate::syscall::errno::*;
 use crate::task::{current_task, ELFInfo};
-use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::arch::asm;
@@ -107,7 +106,7 @@ impl MemorySet {
             .areas
             .iter_mut()
             .enumerate()
-            .find(|(_, area)| area.vpn_range.get_start() == start_vpn)
+            .find(|(_, area)| area.data_frames.vpn_range.get_start() == start_vpn)
         {
             if let Err(_) = area.unmap(&mut self.page_table) {
                 warn!("[remove_area_with_start_vpn] Some pages are already unmapped in target area, is it caused by lazy alloc?");
@@ -146,11 +145,12 @@ impl MemorySet {
     }
     /// Push the map area into the memory set without copying or allocation.
     pub fn push_no_alloc(&mut self, map_area: &MapArea) -> Result {
-        for (vpn, frame) in &map_area.data_frames {
-            if !self.page_table.is_mapped(*vpn) {
+        for vpn in map_area.data_frames.vpn_range {
+            let frame = map_area.data_frames.get(&vpn).unwrap();
+            if !self.page_table.is_mapped(vpn) {
                 //if not mapped
                 let pte_flags = PTEFlags::from_bits(map_area.map_perm.bits).unwrap();
-                self.page_table.map(*vpn, frame.ppn.clone(), pte_flags);
+                self.page_table.map(vpn, frame.ppn.clone(), pte_flags);
             } else {
                 return Err(Error);
             }
@@ -160,7 +160,7 @@ impl MemorySet {
     }
     pub fn find_mmap_area_end(&self) -> VirtAddr {
         let idx = self.areas.len() - 3;
-        let map_end = self.areas[idx].vpn_range.get_end().into();
+        let map_end = self.areas[idx].data_frames.vpn_range.get_end().into();
         debug!("[find_mmap_area_end] map_end: {:?}", map_end);
         if map_end > MMAP_BASE.into() {
             map_end
@@ -176,8 +176,8 @@ impl MemorySet {
             .find(|area| {
                 // If there is such a page in user space, and the addr is in the vpn range
                 area.map_perm.contains(perm | MapPermission::U)
-                    && area.vpn_range.get_start() <= start_vpn
-                    && end_vpn <= area.vpn_range.get_end()
+                    && area.data_frames.vpn_range.get_start() <= start_vpn
+                    && end_vpn <= area.data_frames.vpn_range.get_end()
             })
             .is_some()
     }
@@ -188,8 +188,8 @@ impl MemorySet {
         let vpn = addr.floor();
         if let Some(area) = self.areas.iter_mut().find(|area| {
             area.map_perm.contains(MapPermission::R | MapPermission::U)// If there is such a page in user space
-                && area.vpn_range.get_start() <= vpn// ...and the addr is in the vpn range
-                && vpn < area.vpn_range.get_end()
+                && area.data_frames.vpn_range.get_start() <= vpn// ...and the addr is in the vpn range
+                && vpn < area.data_frames.vpn_range.get_end()
         }) {
             let result = area.map_one(&mut self.page_table, vpn); // attempt to map
             if result.is_ok() {
@@ -352,7 +352,7 @@ impl MemorySet {
                     assert_eq!(ph.offset() % 0x1000, 0);
                     assert_eq!(
                         VirtAddr::from(ph.file_size() as usize).ceil().0,
-                        map_area.vpn_range.get_end().0 - map_area.vpn_range.get_start().0
+                        map_area.data_frames.vpn_range.get_end().0 - map_area.data_frames.vpn_range.get_start().0
                     );
 
                     if load_addr.is_none() {
@@ -440,21 +440,21 @@ impl MemorySet {
             memory_set.areas.push(new_area);
             debug!(
                 "[fork] map shared area: {:?}",
-                user_space.areas[i].vpn_range
+                user_space.areas[i].data_frames.vpn_range
             );
         }
         // copy trap context area
         let trap_cx_area = user_space.areas.last().unwrap();
         let area = MapArea::from_another(trap_cx_area);
         memory_set.push(area, None).unwrap();
-        for vpn in trap_cx_area.vpn_range {
+        for vpn in trap_cx_area.data_frames.vpn_range {
             let src_ppn = user_space.translate(vpn).unwrap().ppn();
             let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
             dst_ppn
                 .get_bytes_array()
                 .copy_from_slice(src_ppn.get_bytes_array());
         }
-        debug!("[fork] copy trap_cx area: {:?}", trap_cx_area.vpn_range);
+        debug!("[fork] copy trap_cx area: {:?}", trap_cx_area.data_frames.vpn_range);
 
         memory_set
     }
@@ -480,13 +480,53 @@ impl MemorySet {
 }
 
 #[derive(Clone)]
+pub struct MapRangeDict {
+    vpn_range: VPNRange,
+    data_frames: Vec<Option<Arc<FrameTracker>>>,
+}
+
+impl MapRangeDict {
+    pub fn new(vpn_range: VPNRange) -> Self {
+        let len = vpn_range.get_end().0 - vpn_range.get_start().0; 
+        let mut new_dict = Self {
+            vpn_range,
+            data_frames: Vec::with_capacity(len),
+        };
+        new_dict.data_frames.resize(len, None);
+        new_dict
+    }
+    /// # Warning
+    /// a key which exceeds the end of `vpn_range` would cause panic
+    pub fn get(&self, key: &VirtPageNum) -> Option<&Arc<FrameTracker>>{
+        self.data_frames[key.0 - self.vpn_range.get_start().0].as_ref()
+    }
+    /// # Warning
+    /// a key which exceeds the end of `vpn_range` would cause panic
+    pub fn insert(&mut self, key: VirtPageNum, value: Arc<FrameTracker>) -> Option<Arc<FrameTracker>> {
+        self.data_frames[key.0 - self.vpn_range.get_start().0].replace(value)
+    }
+    /// # Warning
+    /// a key which exceeds the end of `vpn_range` would cause panic
+    pub fn remove(&mut self, key: &VirtPageNum) -> Option<Arc<FrameTracker>> {
+        self.data_frames[key.0 - self.vpn_range.get_start().0].take()
+    }
+    /// unchecked, caller should ensure `new_vpn_end` is valid
+    pub unsafe fn set_end(&mut self, new_vpn_end: VirtPageNum) {
+        let vpn_start = self.vpn_range.get_start();
+        self.vpn_range = VPNRange::new(vpn_start, new_vpn_end);
+        self.data_frames.resize(new_vpn_end.0 - vpn_start.0, None);
+    }
+}
+
+#[derive(Clone)]
 /// Map area for different segments or a chunk of memory for memory mapped file access.
 pub struct MapArea {
     /// Range of the mapped virtual page numbers.
     /// Page aligned.
-    vpn_range: VPNRange,
-    /// Map physical page frame tracker to virtual pages for RAII & lookup.
-    data_frames: BTreeMap<VirtPageNum, Arc<FrameTracker>>,
+    // vpn_range: VPNRange,
+    // /// Map physical page frame tracker to virtual pages for RAII & lookup.
+    // data_frames: BTreeMap<VirtPageNum, Arc<FrameTracker>>,
+    data_frames: MapRangeDict,
     /// Direct or framed(virtual) mapping?
     map_type: MapType,
     /// Permissions which are the or of RWXU, where U stands for user.
@@ -512,8 +552,7 @@ impl MapArea {
             map_perm
         );
         Self {
-            vpn_range: VPNRange::new(start_vpn, end_vpn),
-            data_frames: BTreeMap::new(),
+            data_frames: MapRangeDict::new(VPNRange::new(start_vpn, end_vpn)),
             map_type,
             map_perm,
             map_file,
@@ -532,8 +571,7 @@ impl MapArea {
     /// thus leaving `data_frames` empty.
     pub fn from_another(another: &MapArea) -> Self {
         Self {
-            vpn_range: VPNRange::new(another.vpn_range.get_start(), another.vpn_range.get_end()),
-            data_frames: BTreeMap::new(),
+            data_frames: MapRangeDict::new(VPNRange::new(another.data_frames.vpn_range.get_start(), another.data_frames.vpn_range.get_end())),
             map_type: another.map_type,
             map_perm: another.map_perm,
             map_file: another.map_file.clone(),
@@ -587,7 +625,7 @@ impl MapArea {
     }
     /// Map & allocate all virtual pages in current area to physical pages in the page table.
     pub fn map(&mut self, page_table: &mut PageTable) -> Result {
-        for vpn in self.vpn_range {
+        for vpn in self.data_frames.vpn_range {
             if let Err(_) = self.map_one(page_table, vpn) {
                 return Err(core::fmt::Error);
             }
@@ -608,7 +646,7 @@ impl MapArea {
     ) -> Result {
         let map_perm = self.map_perm.difference(MapPermission::W);
         let pte_flags = PTEFlags::from_bits(map_perm.bits).unwrap();
-        for vpn in self.vpn_range {
+        for vpn in self.data_frames.vpn_range {
             if let Some(pte) = src_page_table.translate_refmut(vpn) {
                 let ppn = pte.ppn();
                 if !dst_page_table.is_mapped(vpn) {
@@ -641,7 +679,7 @@ impl MapArea {
         let kernel_elf_area = kernel_space.areas.last().unwrap();
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         let mut src_vpn = start_vpn_in_kernel_elf_area;
-        for vpn in self.vpn_range {
+        for vpn in self.data_frames.vpn_range {
             if let Some(pte) = kernel_page_table.translate(src_vpn) {
                 let ppn = pte.ppn();
                 if !page_table.is_mapped(vpn) {
@@ -664,7 +702,7 @@ impl MapArea {
     /// Unmap all pages in `self` from `page_table` using unmap_one()
     pub fn unmap(&mut self, page_table: &mut PageTable) -> Result {
         let mut has_unmapped_page = false;
-        for vpn in self.vpn_range {
+        for vpn in self.data_frames.vpn_range {
             // it's normal to get an `Error` because we are using lazy alloc strategy
             // we still need to unmap remaining pages of `self`, just throw this `Error` to caller
             if let Err(_) = self.unmap_one(page_table, vpn) {
@@ -683,7 +721,7 @@ impl MapArea {
         assert_eq!(self.map_type, MapType::Framed);
         let mut start: usize = 0;
         let mut page_offset: usize = offset;
-        let mut current_vpn = self.vpn_range.get_start();
+        let mut current_vpn = self.data_frames.vpn_range.get_start();
         let len = data.len();
         loop {
             let src = &data[start..len.min(start + PAGE_SIZE - page_offset)];
@@ -732,25 +770,25 @@ impl MapArea {
         Ok(())
     }
     /// If `new_end` is lower than the current end of heap area, do nothing and return `Ok(())`.
-    pub fn expend_to(&mut self, page_table: &mut PageTable, new_end: VirtAddr) -> Result {
+    pub fn expand_to(&mut self, page_table: &mut PageTable, new_end: VirtAddr) -> Result {
         let end_vpn: VirtPageNum = new_end.ceil();
-        for vpn in VPNRange::new(self.vpn_range.get_end(), end_vpn) {
+        for vpn in VPNRange::new(self.data_frames.vpn_range.get_end(), end_vpn) {
             if let Err(_) = self.map_one(page_table, vpn) {
                 return Err(core::fmt::Error);
             }
         }
-        self.vpn_range = VPNRange::new(self.vpn_range.get_start(), end_vpn);
+        unsafe { self.data_frames.set_end(end_vpn) };
         Ok(())
     }
     /// If `new_end` is higher than the current end of heap area, do nothing and return `Ok(())`.
     pub fn shrink_to(&mut self, page_table: &mut PageTable, new_end: VirtAddr) -> Result {
         let end_vpn: VirtPageNum = new_end.ceil();
-        for vpn in VPNRange::new(end_vpn, self.vpn_range.get_end()) {
+        for vpn in VPNRange::new(end_vpn, self.data_frames.vpn_range.get_end()) {
             if let Err(_) = self.unmap_one(page_table, vpn) {
                 return Err(core::fmt::Error);
             }
         }
-        self.vpn_range = VPNRange::new(self.vpn_range.get_start(), end_vpn);
+        unsafe { self.data_frames.set_end(end_vpn) };
         Ok(())
     }
 }
@@ -912,7 +950,7 @@ pub fn sbrk(increment: isize) -> usize {
                 let heap_area = &mut memory_set.areas[idx];
                 let page_table = &mut memory_set.page_table;
                 heap_area
-                    .expend_to(page_table, VirtAddr::from(new_pt))
+                    .expand_to(page_table, VirtAddr::from(new_pt))
                     .unwrap();
                 trace!("[sbrk] heap area expended to {:X}", new_pt);
             }
