@@ -25,16 +25,21 @@ pub struct Inode<T: CacheManager> {
     pub direct: Mutex<Vec<u32>>,
     pub type_: DiskInodeType,
     pub parent_dir: Option<Arc<Self>>,
+    file_cache_mgr: Arc<T>,
     fs: Arc<EasyFileSystem<T>>,
     //    block_device: Arc<dyn BlockDevice>,
 }
 
 impl<T: CacheManager> Inode<T> {
-    pub fn first_sector(&self) -> u32 {
-        self.fs.first_sector_of_cluster(self.direct.lock()[0])
+    pub fn first_sector(&self) -> Option<u32> {
+        if !self.direct.lock().is_empty() {
+            Some(self.fs.first_sector_of_cluster(self.direct.lock()[0]))
+        } else {
+            None
+        }
     }
     #[inline(always)]
-    pub fn get_inode_num(&self) -> u32 {
+    pub fn get_inode_num(&self) -> Option<u32> {
         self.first_sector()
     }
     pub fn from_ent(parent_dir: Arc<Self>, ent: &FATDirShortEnt) -> Self {
@@ -45,7 +50,11 @@ impl<T: CacheManager> Inode<T> {
             } else {
                 DiskInodeType::File
             },
-            Some(ent.file_size as usize),
+            if ent.is_file() {
+                Some(ent.file_size as usize)
+            } else {
+                None
+            },
             Some(parent_dir.clone()),
             parent_dir.fs.clone(),
         )
@@ -66,11 +75,8 @@ impl<T: CacheManager> Inode<T> {
     ) -> Self {
         let mut clus_size_as_size = false;
         let i = Inode {
-            direct: Mutex::new(fs.fat.get_all_clus_num(
-                fst_clus as u32,
-                fs.block_device.clone(),
-                fs.cache_mgr.clone(),
-            )),
+            file_cache_mgr: (T::new(fs.first_sector_of_cluster(fst_clus as u32) as usize)),
+            direct: Mutex::new(fs.fat.get_all_clus_num(fst_clus as u32, &fs.block_device)),
             type_,
             size: if let Some(size) = size {
                 clus_size_as_size = true;
@@ -162,12 +168,11 @@ impl<T: CacheManager> Inode<T> {
             // read and update read size
             let block_read_size = end_current_block - start;
             let dst = &mut buf[read_size..read_size + block_read_size];
-            self.fs
-                .cache_mgr
+            self.file_cache_mgr
                 .get_block_cache(
                     self.get_block_id(start_block as u32) as usize,
                     Some(start_block),
-                    Some(self.get_inode_num() as usize),
+                    self.get_inode_num().map(|i| i as usize),
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -190,6 +195,12 @@ impl<T: CacheManager> Inode<T> {
         let lock = self.size.lock();
         let size = *lock;
         drop(lock);
+        let diff_len = buf.len() as isize + offset as isize - size as isize;
+        if diff_len > 0 as isize {
+            if self.modify_size(diff_len).is_none() {
+                return 0;
+            }
+        }
         let end = (offset + buf.len()).min(size as usize);
         assert!(start <= end);
         let mut start_block = start / BLOCK_SZ;
@@ -200,12 +211,11 @@ impl<T: CacheManager> Inode<T> {
             end_current_block = end_current_block.min(end);
             // write and update write size
             let block_write_size = end_current_block - start;
-            self.fs
-                .cache_mgr
+            self.file_cache_mgr
                 .get_block_cache(
                     self.get_block_id(start_block as u32) as usize,
                     Some(start_block),
-                    Some(self.get_inode_num() as usize),
+                    self.get_inode_num().map(|i| i as usize),
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -237,6 +247,8 @@ impl<T: CacheManager> Inode<T> {
         drop(lock);
         // direct is storing the CLUSTERS!
         let mut lock = self.direct.lock();
+        // you haven't cleared the directory entry in the self.parent_dir
+        todo!();
         mem::take(&mut lock)
     }
     #[inline(always)]
@@ -244,19 +256,7 @@ impl<T: CacheManager> Inode<T> {
         self.file_size()
     }
 
-    fn find_local(&self, name: String) -> Option<Arc<Self>> {
-        //None
-        todo!()
-    }
-    pub fn open(&self, name: String) -> Option<Arc<Self>> {
-        if self.is_file() {
-            None
-        } else {
-            self.find_local(name)
-        }
-    }
-
-    pub fn ls(&self) -> Vec<String> {
+    pub fn ls(&self) -> Vec<(String, FATDirShortEnt)> {
         if !self.is_dir() {
             return Vec::new();
         } else {
@@ -279,7 +279,7 @@ impl<T: CacheManager> Inode<T> {
                         //then match the name to see if it's correct.
                         if true {
                             //if correct, push the concatenated name
-                            v.push(name.concat());
+                            v.push((name.concat(), i.get_short_ent().unwrap().clone()));
                             name.clear();
                             continue;
                         } else {
@@ -288,7 +288,7 @@ impl<T: CacheManager> Inode<T> {
                         }
                     }
                     // only one short
-                    v.push(i.get_name());
+                    v.push((i.get_name(), i.get_short_ent().unwrap().clone()));
                 }
             }
             return v;
@@ -303,15 +303,96 @@ impl<T: CacheManager> Inode<T> {
         }
     }
 
-    // Increase the size of current file.
-    /*pub fn increase_size(
-        &mut self,
-        new_size: u32,
-        new_blocks: Vec<u32>,
-        fs: &EasyFileSystem,
-    ) -> Option<()> {
-        todo!();
-    }*/
+    /// Change the size of current file.
+    /// # Return Value
+    /// If failed, return `None`, otherwise return `Some(())`
+    pub fn modify_size(&self, diff: isize) -> Option<()> {
+        if diff.abs() as usize > self.get_size() {
+            return None;
+        }
+        if diff > 0 {
+            let ch_clus_num = diff / self.fs.clus_size() as isize;
+            let lock = self.direct.lock();
+            let last = lock.last().map(|s| {
+                let i: u32 = *s;
+                i
+            });
+            if let Some(mut i) =
+                self.fs
+                    .fat
+                    .alloc_mult(&self.fs.block_device, ch_clus_num as usize, last)
+            {
+                self.direct.lock().append(&mut i);
+            } else {
+                return None;
+            }
+        } else {
+            // size_diff<0
+            let diff = diff.abs();
+            if diff == *self.size.lock() as isize {
+                //should clear the dir_ent here.
+                todo!();
+            }
+            let ch_clus_num = diff / self.fs.clus_size() as isize;
+            let mut lock = self.direct.lock();
+            for _ in 0..ch_clus_num {
+                self.fs
+                    .fat
+                    .dealloc(&self.fs.block_device, lock.pop().unwrap() as usize);
+            }
+        }
+        if diff > 0 {
+            *self.size.lock() += diff as u32;
+        } else {
+            let mut slock = self.size.lock();
+            let mut s = *slock;
+            s -= (-diff) as u32;
+            *slock = s;
+        }
+        Some(())
+    }
+}
+
+pub fn find_local<T: CacheManager>(
+    inode: Arc<Inode<T>>,
+    target_name: String,
+) -> Option<Arc<Inode<T>>> {
+    if inode.is_dir() {
+        let mut name = Vec::with_capacity(3);
+        for i in inode.iter() {
+            if i.is_long() {
+                if true {
+                    name.insert(0, i.get_name());
+                } else {
+                    /*order_wrong/missing*/
+                    name.clear();
+                    name.insert(0, i.get_name());
+                }
+            } else {
+                if !name.is_empty() {
+                    //then match the name to see if it's correct.
+                    if true {
+                        //if correct, test the concatenated name
+                        if name.concat() == target_name {
+                            return Some(Arc::new(Inode::<T>::from_ent(
+                                inode,
+                                i.get_short_ent().unwrap(),
+                            )));
+                        };
+                        name.clear();
+                        continue;
+                    } else {
+                        // short name doesn't match... The previous long entries are not correct.
+                        name.clear();
+                    }
+                }
+                // only one short
+            }
+        }
+        None
+    } else {
+        None
+    }
 }
 
 pub enum DirIterMode {

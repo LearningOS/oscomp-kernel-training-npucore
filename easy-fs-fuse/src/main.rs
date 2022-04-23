@@ -131,7 +131,6 @@ impl BlockCacheManager {
 }
 impl CacheManager for BlockCacheManager {
     type CacheType = BlockCache;
-
     fn try_get_block_cache(
         &self,
         block_id: usize,
@@ -183,6 +182,13 @@ impl CacheManager for BlockCacheManager {
                 .push_back((block_id, Arc::clone(&block_cache)));
             block_cache
         }
+    }
+
+    fn new(fst_block_id: usize) -> Arc<Self>
+    where
+        Self: Sized,
+    {
+        BLOCK_CACHE_MANAGER.clone()
     }
 }
 
@@ -248,8 +254,23 @@ fn easy_fs_pack() -> std::io::Result<()> {
      * } */
     let v = rt.ls();
     for i in v {
-        println!("{}", i);
+        println!("{}, clus:{}", i.0, i.1.get_first_clus());
+        if i.1.is_dir() {
+            println!("In dir {}:", i.0);
+            let dir = Arc::new(Inode::from_ent(rt.clone(), &i.1));
+            println!("dir info: {:?}", &i.1);
+            for j in dir.ls() {
+                println!("{}", j.0);
+            }
+        }
     }
+    println!(
+        "{:?},{:?}",
+        easy_fs::find_local(rt.clone(), "hi".to_string()).is_none(),
+        easy_fs::find_local(rt.clone(), "etc".to_string())
+            .unwrap()
+            .get_inode_num()
+    );
     /*
     // 4MiB, at most 4095 files
     let root_inode = Arc::new(EasyFileSystem::root_inode(&efs));

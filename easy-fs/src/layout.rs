@@ -2,7 +2,6 @@ use super::BLOCK_SZ;
 use alloc::string::{String, ToString};
 use core::{fmt::Debug, mem};
 
-pub const EOC: u32 = 0x0FFF_FFFF;
 pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
 pub const DIR_ENTRY_UNUSED: u8 = 0x5e;
 pub const DIR_ENTRY_LAST_AND_UNUSED: u8 = 0x0;

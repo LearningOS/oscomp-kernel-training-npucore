@@ -14,6 +14,11 @@ pub trait Cache {
 pub trait CacheManager {
     type CacheType: Cache;
 
+    /// Constructor to the struct.
+    fn new(fst_block_id: usize) -> Arc<Self>
+    where
+        Self: Sized;
+
     /// Try to get the block cache and return `None` if not found.
     /// # Argument
     /// `block_id`: The demanded block.
