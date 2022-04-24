@@ -1,8 +1,10 @@
+use core::alloc::{Layout};
+
 use super::{
     BLOCK_SZ,
     BlockDevice,
 };
-use alloc::boxed::Box;
+use alloc::alloc::{alloc, dealloc};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use lazy_static::*;
@@ -11,13 +13,13 @@ use spin::RwLock;
 use riscv::register::time;
 
 pub struct BlockCache {
-    pub cache: Box::<[u8; BLOCK_SZ]>,
+    pub cache: &'static mut [u8; BLOCK_SZ],
     block_id: usize,
     block_device: Arc<dyn BlockDevice>,
     modified: bool,
-    #[allow(unused)]
-    time_stamp: usize,
 }
+
+const BLOCK_CACHE_LAYOUT: Layout = unsafe { Layout::from_size_align_unchecked(BLOCK_SZ, 1) };
 
 impl BlockCache {
     /// Load a new BlockCache from disk.
@@ -25,18 +27,14 @@ impl BlockCache {
         block_id: usize, 
         block_device: Arc<dyn BlockDevice>
     ) -> Self {
-        let mut cache = Box::<[u8; BLOCK_SZ]>::new([0u8; BLOCK_SZ]);
-        //println!("cache new: blk_id = {}", block_id);
+        let cache: &'static mut [u8; BLOCK_SZ] = unsafe { (alloc(BLOCK_CACHE_LAYOUT) as *mut [u8; BLOCK_SZ]).as_mut().unwrap() };
+        //crate::println!("cache ptr: {:?}", cache.as_ptr());
         block_device.read_block(block_id, cache.as_mut_slice());
-        // TODO: 时间戳
-        //let mut time_stamp = time::read();
-        let time_stamp = 0;
         Self {
             cache,
             block_id,
             block_device,
             modified: false,
-            time_stamp,
         }
     }
 
@@ -78,7 +76,8 @@ impl BlockCache {
 
 impl Drop for BlockCache {
     fn drop(&mut self) {
-        self.sync()
+        self.sync();
+        unsafe { dealloc(self.cache.as_mut_ptr(), BLOCK_CACHE_LAYOUT) };
     }
 }
 
@@ -155,14 +154,14 @@ impl BlockCacheManager {
             // substitute
             if self.map.len() == self.limit/*BLOCK_CACHE_SIZE*/ {
                 // from front to tail
-                if let Some((idx, _)) = self.map
+                let idx = match self.map
                     .iter()
-                    .enumerate()
-                    .find(|(_, pair)| Arc::strong_count(&pair.1) == 1) {
-                    self.map.remove(&idx);
-                } else {
-                    panic!("Run out of BlockCache!");
-                }
+                    .find(|(_, arc)| Arc::strong_count(arc) == 1) {
+                        Some((&idx, _)) => idx,
+                        None => panic!("Run out of BlockCache!"),
+                    };
+                //crate::println!("incoming_block: {}, replaced_block: {}", block_id, idx);
+                self.map.remove(&idx);
             }
             // load block into mem and push back
             let block_cache = Arc::new(RwLock::new(
@@ -189,7 +188,7 @@ lazy_static! {
 
 lazy_static! {
     pub static ref INFO_CACHE_MANAGER: RwLock<BlockCacheManager> = RwLock::new(
-        BlockCacheManager::new(10)
+        BlockCacheManager::new(128)
     );
 }
 
