@@ -76,7 +76,13 @@ impl<T: CacheManager> EasyFileSystem<T> {
     pub fn open(block_device: Arc<dyn BlockDevice>, bpb_cache_mgr: Arc<T>) -> Arc<Self> {
         // read SuperBlock
         bpb_cache_mgr
-            .get_block_cache(0, Some(0), Some(0), Arc::clone(&block_device))
+            .get_block_cache(
+                0,
+                Some(0),
+                Some(0),
+                Some((0..8).collect()),
+                Arc::clone(&block_device),
+            )
             .lock()
             .read(0, |super_block: &BPB| {
                 assert!(super_block.is_valid(), "Error loading EFS!");

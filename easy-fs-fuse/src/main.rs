@@ -101,7 +101,8 @@ impl Cache for BlockCache {
     fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V {
         f(self.get_mut(offset))
     }
-
+}
+impl BlockCache {
     /// Synchronize the cache with the external storage, i.e. write it back to the disk.
     fn sync(&mut self) {
         if self.modified {
@@ -110,7 +111,6 @@ impl Cache for BlockCache {
         }
     }
 }
-
 const BLOCK_CACHE_SIZE: usize = 16;
 
 pub struct BlockCacheManager {
@@ -149,6 +149,7 @@ impl CacheManager for BlockCacheManager {
         block_id: usize,
         inner_blk_id: Option<usize>,
         inode_id: Option<usize>,
+        neighbor: Option<Vec<usize>>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Arc<Mutex<BlockCache>> {
         if let Some(i) = self.try_get_block_cache(block_id, inner_blk_id, inode_id) {

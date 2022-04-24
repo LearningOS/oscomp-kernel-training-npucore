@@ -26,6 +26,7 @@ pub struct Inode<T: CacheManager> {
     pub direct: Mutex<Vec<u32>>,
     pub type_: DiskInodeType,
     pub parent_dir: Option<Arc<Self>>,
+    pub dir_offset: Option<usize>,
     file_cache_mgr: Arc<T>,
     fs: Arc<EasyFileSystem<T>>,
     //    block_device: Arc<dyn BlockDevice>,
@@ -47,11 +48,11 @@ impl<T: CacheManager> Inode<T> {
     /// of `inner_block_id`,
     /// _LOCKING_ the direct every time it adds a block.
     /// THIS FUNCTION MAY RESULT IN A DEAD LOCK!
-    pub fn get_neighboring_sec(&self, inner_block_id: u32) -> Vec<u32> {
+    pub fn get_neighboring_sec(&self, inner_block_id: usize) -> Vec<usize> {
         let mut v = Vec::new();
-        for i in inner_block_id & (!0b111u32)..=(inner_block_id | (0b111u32)) {
-            if let Some(j) = self.get_block_id(i) {
-                v.push(j)
+        for i in inner_block_id & (!0b111usize)..=(inner_block_id | (0b111usize)) {
+            if let Some(j) = self.get_block_id(i as u32) {
+                v.push(j as usize)
             } else {
                 break;
             }
@@ -101,6 +102,7 @@ impl<T: CacheManager> Inode<T> {
             } else {
                 Mutex::new(0 as u32)
             },
+            dir_offset: None,
             parent_dir,
             fs,
         };
@@ -197,6 +199,7 @@ impl<T: CacheManager> Inode<T> {
                     self.get_block_id(start_block as u32).unwrap() as usize,
                     Some(start_block),
                     self.get_inode_num().map(|i| i as usize),
+                    Some(self.get_neighboring_sec(start_block)),
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -240,6 +243,7 @@ impl<T: CacheManager> Inode<T> {
                     self.get_block_id(start_block as u32).unwrap() as usize,
                     Some(start_block),
                     self.get_inode_num().map(|i| i as usize),
+                    Some(self.get_neighboring_sec(start_block)),
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -375,8 +379,15 @@ impl<T: CacheManager> Inode<T> {
         }
         Some(())
     }
+    fn find_self_dir_ent_offset(&self) -> Option<usize> {
+        if let Some(par_dir) = &self.parent_dir {
+            for i in par_dir.iter().short().enumerate() {}
+            None
+        } else {
+            None
+        }
+    }
 }
-
 pub fn find_local<T: CacheManager>(
     inode: Arc<Inode<T>>,
     target_name: String,

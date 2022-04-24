@@ -38,6 +38,11 @@ impl<T: CacheManager> Fat<T> {
                 self.this_fat_sec_num(start) as usize,
                 Some(self.this_fat_inner_sec_num(start)),
                 Some(self.start_block_id),
+                Some(
+                    (((self.this_fat_inner_sec_num(start)) & (!7)) + self.start_block_id
+                        ..self.start_block_id + (self.this_fat_inner_sec_num(start)) & (!7))
+                        .collect(),
+                ),
                 Arc::clone(block_device),
             )
             .lock()
@@ -123,6 +128,11 @@ impl<T: CacheManager> Fat<T> {
                 self.this_fat_sec_num(current) as usize,
                 Some(self.this_fat_inner_sec_num(current as u32)),
                 Some(self.start_block_id),
+                Some(
+                    (((self.this_fat_inner_sec_num(current)) & (!7)) + self.start_block_id
+                        ..8 + (self.this_fat_inner_sec_num(current)) & (!7) + self.start_block_id)
+                        .collect(),
+                ),
                 block_device.clone(),
             )
             .lock()
@@ -186,6 +196,14 @@ impl<T: CacheManager> Fat<T> {
                         self.this_fat_sec_num(clus_id as u32) as usize,
                         Some(self.this_fat_inner_sec_num(clus_id as u32)),
                         Some(self.start_block_id),
+                        Some(
+                            (((self.this_fat_inner_sec_num(clus_id as u32)) & (!7))
+                                + self.start_block_id
+                                ..8 + self.start_block_id
+                                    + (self.this_fat_inner_sec_num(clus_id as u32))
+                                    & (!7))
+                                .collect(),
+                        ),
                         Arc::clone(block_device),
                     )
                     .lock()
