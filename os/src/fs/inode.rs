@@ -339,6 +339,12 @@ pub fn open(
     type_: DiskInodeType,
 ) -> Option<Arc<OSInode>> {
     // DEBUG: 相对路径
+    const BUSYBOX_PATH: &str = "/busybox";
+    let path = if path == "/touch" || path == "/rm" {
+        BUSYBOX_PATH
+    } else {
+        path
+    };
     let cur_inode = {
         if work_path == "/" {
             ROOT_INODE.clone()
