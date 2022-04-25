@@ -455,7 +455,7 @@ impl MemorySet {
                 .copy_from_slice(src_ppn.get_bytes_array());
         }
         debug!("[fork] copy trap_cx area: {:?}", trap_cx_area.data_frames.vpn_range);
-
+        memory_set.heap_area_idx = user_space.heap_area_idx;
         memory_set
     }
     pub fn activate(&self) {
@@ -768,13 +768,17 @@ impl MapArea {
     }
     /// If `new_end` is lower than the current end of heap area, do nothing and return `Ok(())`.
     pub fn expand_to(&mut self, page_table: &mut PageTable, new_end: VirtAddr) -> Result {
-        let end_vpn: VirtPageNum = new_end.ceil();
-        for vpn in VPNRange::new(self.data_frames.vpn_range.get_end(), end_vpn) {
+        let new_end_vpn: VirtPageNum = new_end.ceil();
+        let old_end_vpn = self.data_frames.vpn_range.get_end();
+        // `set_end` must be done before calling `map_one`
+        // because `map_one` will insert frames into `data_frames`
+        // if we don't `set_end` in advance, this insertion is out of bound
+        unsafe { self.data_frames.set_end(new_end_vpn) };
+        for vpn in VPNRange::new(old_end_vpn, new_end_vpn) {
             if let Err(_) = self.map_one(page_table, vpn) {
                 return Err(core::fmt::Error);
             }
         }
-        unsafe { self.data_frames.set_end(end_vpn) };
         Ok(())
     }
     /// If `new_end` is higher than the current end of heap area, do nothing and return `Ok(())`.
@@ -785,6 +789,8 @@ impl MapArea {
                 return Err(core::fmt::Error);
             }
         }
+        // `set_end` must be done after calling `map_one`
+        // for the similar reason with `expand_to`
         unsafe { self.data_frames.set_end(end_vpn) };
         Ok(())
     }
