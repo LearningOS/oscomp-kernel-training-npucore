@@ -187,16 +187,17 @@ impl CacheManager for BlockCacheManager {
         }
     }
 
-    fn new(fst_block_id: usize) -> Arc<Self>
+    fn new(fst_block_id: usize) -> Mutex<Self>
     where
         Self: Sized,
     {
-        BLOCK_CACHE_MANAGER.clone()
+        Mutex::new(Self::new())
     }
 }
 
 lazy_static! {
-    pub static ref BLOCK_CACHE_MANAGER: Arc<BlockCacheManager> = Arc::new(BlockCacheManager::new());
+    pub static ref BLOCK_CACHE_MANAGER: Arc<Mutex<BlockCacheManager>> =
+        Arc::new(Mutex::new(BlockCacheManager::new()));
 }
 
 fn main() {

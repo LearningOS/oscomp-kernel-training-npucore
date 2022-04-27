@@ -76,12 +76,16 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
         ((block_id - self.first_data_sector()) >> self.sec_per_clus.trailing_zeros()) + 2
     }
     /// Open the filesystem object.
-    pub fn open(block_device: Arc<dyn BlockDevice>, bpb_cache_mgr: Arc<F>) -> Arc<Self> {
+    pub fn open(
+        block_device: Arc<dyn BlockDevice>,
+        bpb_fat_cache_mgr: Arc<spin::Mutex<F>>,
+    ) -> Arc<Self> {
         assert!(F::CACHE_SZ % BLOCK_SZ == 0);
         assert!(T::CACHE_SZ % BLOCK_SZ == 0);
         // read SuperBlock
-
-        bpb_cache_mgr
+        let fat_cache_mgr = bpb_fat_cache_mgr.clone();
+        bpb_fat_cache_mgr
+            .lock()
             .get_block_cache(
                 0,
                 0,
@@ -98,6 +102,7 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
                         super_block.rsvd_sec_cnt as usize,
                         super_block.byts_per_sec as usize,
                         (super_block.data_sector_count() / super_block.clus_size()) as usize,
+                        fat_cache_mgr,
                     ),
                     root_clus: super_block.root_clus,
                     sec_per_clus: super_block.sec_per_clus,

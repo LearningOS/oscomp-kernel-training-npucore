@@ -16,7 +16,7 @@ pub const EOC: u32 = 0x0FFF_FFFF;
 /// In FAT32, there are 2 FATs by default. We use ONLY the first one.
 
 pub struct Fat<T> {
-    pub fat_cache_mgr: Arc<T>,
+    pub fat_cache_mgr: Arc<Mutex<T>>,
     /// The first block id of FAT.
     /// In FAT32, this is equal to bpb.rsvd_sec_cnt
     start_block_id: usize,
@@ -40,6 +40,7 @@ impl<T: CacheManager> Fat<T> {
     /// Get the next cluster number pointed by current fat entry.
     pub fn get_next_clus_num(&self, start: u32, block_device: &Arc<dyn BlockDevice>) -> u32 {
         self.fat_cache_mgr
+            .lock()
             .get_block_cache(
                 self.this_fat_sec_num(start) as usize,
                 self.this_fat_inner_cache_num(start),
@@ -76,10 +77,15 @@ impl<T: CacheManager> Fat<T> {
     /// * `rsvd_sec_cnt`: size of BPB
     /// * `byts_per_sec`: literal meaning
     /// * `clus`: the total numebr of FAT entries
-    pub fn new(rsvd_sec_cnt: usize, byts_per_sec: usize, clus: usize) -> Self {
+    pub fn new(
+        rsvd_sec_cnt: usize,
+        byts_per_sec: usize,
+        clus: usize,
+        fat_cache_mgr: Arc<Mutex<T>>,
+    ) -> Self {
         Self {
             //used_marker: Default::default(),
-            fat_cache_mgr: (T::new(rsvd_sec_cnt)),
+            fat_cache_mgr,
             start_block_id: rsvd_sec_cnt,
             byts_per_sec,
             tot_ent: clus,
@@ -126,6 +132,7 @@ impl<T: CacheManager> Fat<T> {
     /// Assign the cluster entry to `current` to `next`
     fn set_next_clus(&self, block_device: &Arc<dyn BlockDevice>, current: u32, next: u32) {
         self.fat_cache_mgr
+            .lock()
             .get_block_cache(
                 self.this_fat_sec_num(current) as usize,
                 self.this_fat_inner_cache_num(current as u32),
@@ -215,6 +222,7 @@ impl<T: CacheManager> Fat<T> {
             for clus_id in start..self.tot_ent {
                 let pos = self
                     .fat_cache_mgr
+                    .lock()
                     .get_block_cache(
                         self.this_fat_sec_num(clus_id as u32) as usize,
                         self.this_fat_inner_cache_num(clus_id as u32),

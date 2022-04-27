@@ -29,7 +29,7 @@ pub struct Inode<T: CacheManager, F: CacheManager> {
     /// The parent directory of this inode
     pub parent_dir: Option<(Arc<Self>, usize)>,
     /// File cache manager corresponding to this inode.
-    file_cache_mgr: Arc<T>,
+    file_cache_mgr: Mutex<T>,
     /// The file system this inode is on.
     fs: Arc<EasyFileSystem<T, F>>,
 }
@@ -196,6 +196,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             let block_read_size = end_current_block - start;
             let dst = &mut buf[read_size..read_size + block_read_size];
             self.file_cache_mgr
+                .lock()
                 .get_block_cache(
                     self.get_block_id(start_block as u32).unwrap() as usize,
                     start_block,
@@ -240,6 +241,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             // write and update write size
             let block_write_size = end_current_block - start;
             self.file_cache_mgr
+                .lock()
                 .get_block_cache(
                     self.get_block_id(start_block as u32).unwrap() as usize,
                     start_block,
