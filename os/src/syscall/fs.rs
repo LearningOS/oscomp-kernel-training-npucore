@@ -568,9 +568,7 @@ pub fn sys_fstatat(fd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isiz
     };
     info!(
         "[sys_newfstatat] fd = {}, path = {:?}, flags: {:?}",
-        fd,
-        path,
-        flags,
+        fd, path, flags,
     );
     if fd == AT_FDCWD {
         let work_path = inner.current_path.clone();
@@ -652,7 +650,6 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     let mut inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
     let path = translated_str(token, path);
-    // TODO: should check flags and mode here
     let flags = match OpenFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -661,16 +658,11 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         }
     };
     let mode = StatMode::from_bits(mode);
-
-    if path.contains("/dev") {
-        info!(
-            "[sys_openat] dirfd: {}, path:{}, flags:{:?}, mode:{:?}",
-            dirfd, path, flags, mode
-        );
-        let fd = match inner.alloc_fd() {
-            Some(fd) => fd,
-            None => return EMFILE,
-        };
+    info!(
+        "[sys_openat] dirfd: {}, path:{}, flags:{:?}, mode:{:?}",
+        dirfd, path, flags, mode
+    );
+    if path.starts_with("/dev") {
         let file = {
             if path.contains("tty") {
                 FileLike::Abstract(TTY.clone())
@@ -683,82 +675,63 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
                 return ENOENT;
             }
         };
+        let fd = match inner.alloc_fd() {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
         inner.fd_table[fd] = Some(FileDescriptor::new(false, file));
         return fd as isize;
     }
-
-    if dirfd == AT_FDCWD {
-        info!(
-            "[sys_openat] dirfd: AT_FDCWD, path:{}, flags:{:?}, mode:{:?}",
-            path, flags, mode
-        );
-        match open(
-            inner.get_work_path().as_str(),
-            path.as_str(),
-            flags,
-            DiskInodeType::File,
-        ) {
-            Ok(inode) => {
-                let fd = match inner.alloc_fd() {
-                    Some(fd) => fd,
-                    None => return EMFILE,
-                };
-                inner.fd_table[fd] = Some(FileDescriptor::new(
-                    flags.contains(OpenFlags::O_CLOEXEC),
-                    FileLike::Regular(inode),
-                ));
-                fd as isize
-            }
-            Err(errno) => {
-                warn!("[sys_openat] open failed with errno: {}", errno);
-                errno
-            }
-        }
+    let result = if path.starts_with("/") {
+        open("/", path.as_str(), OpenFlags::O_RDONLY, DiskInodeType::File)
     } else {
-        info!(
-            "[sys_openat] dirfd:{}, path:{}, flags:{:?}, mode:{:?}",
-            dirfd, path, flags, mode
-        );
-        if dirfd >= inner.fd_table.len() || inner.fd_table[dirfd].is_none() {
-            return EBADF;
-        }
-        let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
-        match &file_descriptor.file {
-            FileLike::Regular(dir_file) => {
-                // [Warning] if file with same name exists, it will be removed
-                if flags.contains(OpenFlags::O_CREAT) {
-                    if let Some(created) = dir_file.create(path.as_str(), DiskInodeType::File) {
-                        let fd = match inner.alloc_fd() {
-                            Some(fd) => fd,
-                            None => return EMFILE,
-                        };
-                        inner.fd_table[fd] = Some(FileDescriptor::new(
-                            flags.contains(OpenFlags::O_CLOEXEC),
-                            FileLike::Regular(created),
-                        ));
-                        return fd as isize;
-                    } else {
-                        warn!("[sys_openat] file not found: {}", path);
-                        return ENOENT;
+        if dirfd == AT_FDCWD {
+            open(
+                inner.get_work_path().as_str(),
+                path.as_str(),
+                flags,
+                DiskInodeType::File,
+            )
+        } else {
+            if dirfd >= inner.fd_table.len() || inner.fd_table[dirfd].is_none() {
+                Err(EBADF)
+            } else {
+                let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
+                match &file_descriptor.file {
+                    FileLike::Regular(dir_file) => {
+                        // because `OSInode` currently doesn't record the path
+                        // we can't call `OSInode::open` here...
+                        match dir_file.find(path.as_str(), flags) {
+                            Some(inode) => Ok(inode),
+                            None => {
+                                if flags.contains(OpenFlags::O_CREAT) {
+                                    Ok(dir_file.create(path.as_str(), DiskInodeType::File).unwrap())
+                                } else {
+                                    Err(ENOENT)
+                                }
+                            }
+                        }
                     }
-                }
-                // open directly
-                if let Some(dir_file) = dir_file.find(path.as_str(), flags) {
-                    let fd = match inner.alloc_fd() {
-                        Some(fd) => fd,
-                        None => return EMFILE,
-                    };
-                    inner.fd_table[fd] = Some(FileDescriptor::new(
-                        flags.contains(OpenFlags::O_CLOEXEC),
-                        FileLike::Regular(dir_file),
-                    ));
-                    fd as isize
-                } else {
-                    warn!("[sys_openat] file not found: {}", path);
-                    return ENOENT;
+                    FileLike::Abstract(_) => Err(ENOTDIR),
                 }
             }
-            FileLike::Abstract(_) => ENOTDIR,
+        }
+    };
+    match result {
+        Ok(inode) => {
+            let fd = match inner.alloc_fd() {
+                Some(fd) => fd,
+                None => return EMFILE,
+            };
+            inner.fd_table[fd] = Some(FileDescriptor::new(
+                flags.contains(OpenFlags::O_CLOEXEC),
+                FileLike::Regular(inode),
+            ));
+            fd as isize
+        }
+        Err(errno) => {
+            warn!("[sys_openat] open failed with errno: {}", errno);
+            errno
         }
     }
 }
