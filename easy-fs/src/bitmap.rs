@@ -5,7 +5,7 @@ use crate::{
 
 use super::{BlockDevice, BLOCK_SZ};
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
-use spin::Mutex;
+use spin::{Mutex, MutexGuard};
 
 const BLOCK_BITS: usize = BLOCK_SZ * 8;
 const VACANT_CLUS_CACHE_SIZE: usize = 64;
@@ -31,18 +31,19 @@ pub struct Fat<T> {
 }
 
 impl<T: CacheManager> Fat<T> {
+    fn get_eight_blk(&self, start: u32) -> Vec<usize> {
+        let v = (((self.this_fat_inner_sec_num(start)) & (!7)) + self.start_block_id
+            ..self.start_block_id + (self.this_fat_inner_sec_num(start)) & (!7))
+            .collect();
+        return v;
+    }
     /// Get the next cluster number pointed by current fat entry.
     pub fn get_next_clus_num(&self, start: u32, block_device: &Arc<dyn BlockDevice>) -> u32 {
         self.fat_cache_mgr
             .get_block_cache(
                 self.this_fat_sec_num(start) as usize,
-                Some(self.this_fat_inner_sec_num(start)),
-                Some(self.start_block_id),
-                Some(
-                    (((self.this_fat_inner_sec_num(start)) & (!7)) + self.start_block_id
-                        ..self.start_block_id + (self.this_fat_inner_sec_num(start)) & (!7))
-                        .collect(),
-                ),
+                self.this_fat_inner_cache_num(start),
+                || -> Vec<usize> { self.get_eight_blk(start) },
                 Arc::clone(block_device),
             )
             .lock()
@@ -69,15 +70,6 @@ impl<T: CacheManager> Fat<T> {
         }
         v
     }
-    pub fn try_get_clus(
-        &self,
-        start: u32,
-        block_device: &Arc<dyn BlockDevice>,
-        cache_mgr: &Arc<T>,
-    ) -> Option<u32> {
-        self.get_next_clus_num(start, block_device);
-        todo!();
-    }
 
     /// Create a new FAT object in memory.
     /// # Argument
@@ -94,6 +86,16 @@ impl<T: CacheManager> Fat<T> {
             vacant_clus: spin::Mutex::new(VecDeque::new()),
             hint: Mutex::new(0),
         }
+    }
+
+    #[inline(always)]
+    /// Given any valid cluster number N,
+    /// where in the FAT(s) is the entry for that cluster number
+    /// Return the sector number of the FAT sector that contains the entry for
+    /// cluster N in the first FAT
+    pub fn this_fat_inner_cache_num(&self, n: u32) -> usize {
+        let fat_offset = n * 4;
+        fat_offset as usize / T::CACHE_SZ
     }
 
     #[inline(always)]
@@ -126,13 +128,8 @@ impl<T: CacheManager> Fat<T> {
         self.fat_cache_mgr
             .get_block_cache(
                 self.this_fat_sec_num(current) as usize,
-                Some(self.this_fat_inner_sec_num(current as u32)),
-                Some(self.start_block_id),
-                Some(
-                    (((self.this_fat_inner_sec_num(current)) & (!7)) + self.start_block_id
-                        ..8 + (self.this_fat_inner_sec_num(current)) & (!7) + self.start_block_id)
-                        .collect(),
-                ),
+                self.this_fat_inner_cache_num(current as u32),
+                || -> Vec<usize> { self.get_eight_blk(current) },
                 block_device.clone(),
             )
             .lock()
@@ -144,13 +141,33 @@ impl<T: CacheManager> Fat<T> {
             )
     }
 
+    pub fn cnt_all_fat(&self, block_device: &Arc<dyn BlockDevice>) -> usize {
+        let mut sum = 0;
+        for i in 0..self.tot_ent as u32 {
+            if self.get_next_clus_num(i, block_device) == FAT_ENTRY_FREE {
+                sum += 1;
+            }
+        }
+        sum
+    }
+
+    /// Allocate as many clusters (but not greater than alloc_num) as possible.
     pub fn alloc_mult(
         &self,
         block_device: &Arc<dyn BlockDevice>,
         alloc_num: usize,
         attach: Option<u32>,
-    ) -> Option<Vec<u32>> {
-        todo!();
+    ) -> Vec<u32> {
+        let mut v = Vec::new();
+        let mut last = attach;
+        for _ in 0..alloc_num {
+            last = self.alloc_one(block_device, last);
+            if last.is_none() {
+                break;
+            }
+            v.push(last.unwrap());
+        }
+        v
     }
 
     /// Find and allocate an cluster from data area.
@@ -165,7 +182,7 @@ impl<T: CacheManager> Fat<T> {
         if attach.is_none()
             || self.get_next_clus_num(attach.unwrap(), block_device) >= FAT_ENTRY_RESERVED_TO_END
         {
-            if let Some(i) = self.alloc_one_no_attach(block_device) {
+            if let Some(i) = self.alloc_one_no_attach_locked(block_device) {
                 if attach.is_some() {
                     self.set_next_clus(block_device, attach.unwrap(), i);
                 }
@@ -177,9 +194,15 @@ impl<T: CacheManager> Fat<T> {
             None
         }
     }
-
-    fn alloc_one_no_attach(&self, block_device: &Arc<dyn BlockDevice>) -> Option<u32> {
-        let mut vacant_lock = self.vacant_clus.lock();
+    fn alloc_one_no_attach_locked(&self, block_device: &Arc<dyn BlockDevice>) -> Option<u32> {
+        let vacant_lock = self.vacant_clus.lock();
+        self.alloc_one_no_attach(block_device, vacant_lock)
+    }
+    fn alloc_one_no_attach(
+        &self,
+        block_device: &Arc<dyn BlockDevice>,
+        mut vacant_lock: MutexGuard<VecDeque<u32>>,
+    ) -> Option<u32> {
         // get from vacant_clus
         if let Some(clus_id) = vacant_lock.pop_back() {
             // modify cached
@@ -194,16 +217,8 @@ impl<T: CacheManager> Fat<T> {
                     .fat_cache_mgr
                     .get_block_cache(
                         self.this_fat_sec_num(clus_id as u32) as usize,
-                        Some(self.this_fat_inner_sec_num(clus_id as u32)),
-                        Some(self.start_block_id),
-                        Some(
-                            (((self.this_fat_inner_sec_num(clus_id as u32)) & (!7))
-                                + self.start_block_id
-                                ..8 + self.start_block_id
-                                    + (self.this_fat_inner_sec_num(clus_id as u32))
-                                    & (!7))
-                                .collect(),
-                        ),
+                        self.this_fat_inner_cache_num(clus_id as u32),
+                        || -> Vec<usize> { self.get_eight_blk(clus_id as u32) },
                         Arc::clone(block_device),
                     )
                     .lock()
@@ -246,11 +261,16 @@ impl<T: CacheManager> Fat<T> {
 
     /// Find and allocate an empty block from data area.
     /// This function must be changed into a cluster-based one in the future.
-    pub fn dealloc(&self, block_device: &Arc<dyn BlockDevice>, bit: usize) {
+    pub fn dealloc(&self, block_device: &Arc<dyn BlockDevice>, bit: u32) {
         self.set_next_clus(block_device, bit as u32, FAT_ENTRY_FREE);
         let mut lock = self.vacant_clus.lock();
         if lock.len() < VACANT_CLUS_CACHE_SIZE {
             lock.push_back(bit as u32);
+        }
+    }
+    pub fn mult_dealloc(&self, block_device: &Arc<dyn BlockDevice>, v: Vec<u32>) {
+        for i in v {
+            self.dealloc(block_device, i);
         }
     }
 

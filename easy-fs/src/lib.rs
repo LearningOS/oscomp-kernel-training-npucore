@@ -10,6 +10,7 @@ pub mod layout;
 mod vfs;
 
 pub const BLOCK_SZ: usize = 512;
+pub const CACHE_SZ: usize = 8 * BLOCK_SZ;
 use bitmap::Fat;
 //pub use block_cache::get_block_cache;
 pub use block_cache::{Cache, CacheManager};

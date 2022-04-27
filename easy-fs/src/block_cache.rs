@@ -10,6 +10,9 @@ pub trait Cache {
 }
 
 pub trait CacheManager {
+    /// The constant to mark the cache size.
+    const CACHE_SZ: usize;
+
     type CacheType: Cache;
 
     /// Constructor to the struct.
@@ -25,8 +28,7 @@ pub trait CacheManager {
     fn try_get_block_cache(
         &self,
         block_id: usize,
-        inner_blk_id: Option<usize>,
-        inode_id: Option<usize>,
+        inner_cache_id: usize,
     ) -> Option<Arc<Mutex<Self::CacheType>>>;
 
     /// Attempt to get block cache from the cache.
@@ -36,12 +38,13 @@ pub trait CacheManager {
     /// `inner_blk_id`: The ordinal number of the block inside the block.
     /// `inode_id`: The inode_id the block cache belongs to.
     /// `block_device`: The pointer to the block_device.
-    fn get_block_cache(
+    fn get_block_cache<FUNC>(
         &self,
         block_id: usize,
-        inner_blk_id: Option<usize>,
-        inode_id: Option<usize>,
-        neighbor: Option<Vec<usize>>,
+        inner_cache_id: usize,
+        neighbor: FUNC,
         block_device: Arc<dyn BlockDevice>,
-    ) -> Arc<Mutex<Self::CacheType>>;
+    ) -> Arc<Mutex<Self::CacheType>>
+    where
+        FUNC: Fn() -> Vec<usize>;
 }

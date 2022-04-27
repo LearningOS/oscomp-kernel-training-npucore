@@ -131,11 +131,11 @@ impl BlockCacheManager {
 }
 impl CacheManager for BlockCacheManager {
     type CacheType = BlockCache;
+    const CACHE_SZ: usize = 512;
     fn try_get_block_cache(
         &self,
         block_id: usize,
-        inner_blk_id: Option<usize>,
-        inode_id: Option<usize>,
+        inner_blk_id: usize,
     ) -> Option<Arc<Mutex<BlockCache>>> {
         if let Some(pair) = self.queue.read().iter().find(|pair| pair.0 == block_id) {
             Some(Arc::clone(&pair.1))
@@ -144,15 +144,17 @@ impl CacheManager for BlockCacheManager {
         }
     }
 
-    fn get_block_cache(
+    fn get_block_cache<FUNC>(
         &self,
         block_id: usize,
-        inner_blk_id: Option<usize>,
-        inode_id: Option<usize>,
-        neighbor: Option<Vec<usize>>,
+        inner_blk_id: usize,
+        neighbor: FUNC,
         block_device: Arc<dyn BlockDevice>,
-    ) -> Arc<Mutex<BlockCache>> {
-        if let Some(i) = self.try_get_block_cache(block_id, inner_blk_id, inode_id) {
+    ) -> Arc<Mutex<BlockCache>>
+    where
+        FUNC: Fn() -> Vec<usize>,
+    {
+        if let Some(i) = self.try_get_block_cache(block_id, inner_blk_id) {
             i
         } else {
             // substitute
@@ -224,7 +226,8 @@ fn easy_fs_pack() -> std::io::Result<()> {
         .open(image_path)
         .unwrap();
     let block_file = Arc::new(BlockFile(Mutex::new(f)));
-    let i = EasyFileSystem::open(block_file, BLOCK_CACHE_MANAGER.clone());
+    let i: Arc<EasyFileSystem<BlockCacheManager, BlockCacheManager>> =
+        EasyFileSystem::open(block_file, BLOCK_CACHE_MANAGER.clone());
     println!(
         "data_area_start_block: {}, \nsec_per_clus: {}, \nbyts_per_clus: {}, \nroot_clus:{}",
         i.data_area_start_block, i.sec_per_clus, i.byts_per_clus, i.root_clus
@@ -258,7 +261,7 @@ fn easy_fs_pack() -> std::io::Result<()> {
         println!("{}, clus:{}", i.0, i.1.get_first_clus());
         if i.1.is_dir() {
             println!("In dir {}:", i.0);
-            let dir = Arc::new(Inode::from_ent(rt.clone(), &i.1));
+            let dir = Arc::new(Inode::from_ent(rt.clone(), &i.1, i.2));
             println!("dir info: {:?}", &i.1);
             for j in dir.ls() {
                 println!("{}", j.0);

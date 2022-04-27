@@ -5,7 +5,7 @@ use core::{fmt::Debug, mem};
 pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
 pub const DIR_ENTRY_UNUSED: u8 = 0x5e;
 pub const DIR_ENTRY_LAST_AND_UNUSED: u8 = 0x0;
-
+pub const LAST_LONG_ENTRY: u8 = 0x40u8;
 #[derive(Debug, Clone, Copy)]
 #[repr(packed)]
 /// *On-disk* data structure for partition information.
@@ -270,6 +270,16 @@ impl Debug for FATDirEnt {
 }
 
 impl FATDirEnt {
+    /// Embedded spaces within a long name are allowed.
+    /// Leading and trailing spaces in a long name are ignored.
+    /// Leading and embedded periods are allowed in a name and are stored in the long name.
+    /// Trailing periods are ignored.
+    pub fn gen_short_name(s: String) -> String {
+        todo!()
+    }
+    pub fn get_ord(&self) -> usize {
+        self.ord()
+    }
     pub fn empty() -> Self {
         Self {
             short_entry: FATDirShortEnt::empty(),
@@ -291,15 +301,39 @@ impl FATDirEnt {
             )
         }
     }
+    pub fn is_last_long_dir_ent(&self) -> bool {
+        if let Some(i) = self.get_long_ent() {
+            if (i.ord & LAST_LONG_ENTRY) != 0 {
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
     pub fn ord(&self) -> usize {
         if let Some(i) = self.get_long_ent() {
-            i.ord as usize
+            (i.ord & (LAST_LONG_ENTRY - 1)) as usize // 0x40 is used as the "final" mask
         } else {
             0
         }
     }
+
+    pub fn set_fst_clus(&mut self, fst_clus: u32) {
+        if self.is_short() {
+            unsafe {
+                self.short_entry.set_fst_clus(fst_clus);
+            }
+        }
+    }
     pub fn is_long(&self) -> bool {
         unsafe { self.short_entry.attr == FATDiskInodeType::AttrLongName }
+    }
+    #[allow(unused)]
+    pub fn is_short(&self) -> bool {
+        //unsafe { self.short_entry.attr == FATDiskInodeType::AttrLongName }
+        !self.is_long()
     }
     pub fn get_short_ent(&self) -> Option<&FATDirShortEnt> {
         if !self.is_long() {
@@ -370,6 +404,10 @@ impl FATDirShortEnt {
             fst_clus_lo: 0,
             file_size: 0,
         }
+    }
+    pub fn set_fst_clus(&mut self, fst_clus: u32) {
+        self.fst_clus_hi = (fst_clus >> 16) as u16;
+        self.fst_clus_lo = (fst_clus & 0b1111_1111_1111_1111) as u16;
     }
     pub fn get_first_clus(&self) -> u32 {
         (self.fst_clus_lo as u32) | ((self.fst_clus_hi as u32) << 16)

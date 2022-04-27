@@ -1,17 +1,20 @@
+use core::marker::PhantomData;
+
 use super::{BlockDevice, Fat};
 use crate::{
     block_cache::{Cache, CacheManager},
     layout::{DiskInodeType, BPB},
-    Inode,
+    Inode, BLOCK_SZ,
 };
 use alloc::sync::Arc;
 
-pub struct EasyFileSystem<T: CacheManager> {
+pub struct EasyFileSystem<T: CacheManager, F: CacheManager> {
+    used_marker: PhantomData<T>,
     /// Partition/Device the FAT32 is hosted on.
     pub block_device: Arc<dyn BlockDevice>,
 
     /// FAT information
-    pub fat: Fat<T>,
+    pub fat: Fat<F>,
 
     /// The first data sector beyond the root directory
     pub data_area_start_block: u32,
@@ -30,7 +33,7 @@ pub struct EasyFileSystem<T: CacheManager> {
 type DataBlock = [u8; crate::BLOCK_SZ];
 
 // export implementation of methods from FAT.
-impl<T: CacheManager> EasyFileSystem<T> {
+impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
     #[inline(always)]
     pub fn this_fat_ent_offset(&self, n: u32) -> u32 {
         self.fat.this_fat_ent_offset(n) as u32
@@ -46,7 +49,7 @@ impl<T: CacheManager> EasyFileSystem<T> {
 }
 
 // All sorts of accessors
-impl<T: CacheManager> EasyFileSystem<T> {
+impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
     pub fn first_data_sector(&self) -> u32 {
         self.data_area_start_block
     }
@@ -56,7 +59,7 @@ impl<T: CacheManager> EasyFileSystem<T> {
     }
 }
 
-impl<T: CacheManager> EasyFileSystem<T> {
+impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
     /// n is the ordinal number of the cluster.
     #[inline(always)]
     pub fn first_sector_of_cluster(&self, n: u32) -> u32 {
@@ -73,20 +76,23 @@ impl<T: CacheManager> EasyFileSystem<T> {
         ((block_id - self.first_data_sector()) >> self.sec_per_clus.trailing_zeros()) + 2
     }
     /// Open the filesystem object.
-    pub fn open(block_device: Arc<dyn BlockDevice>, bpb_cache_mgr: Arc<T>) -> Arc<Self> {
+    pub fn open(block_device: Arc<dyn BlockDevice>, bpb_cache_mgr: Arc<F>) -> Arc<Self> {
+        assert!(F::CACHE_SZ % BLOCK_SZ == 0);
+        assert!(T::CACHE_SZ % BLOCK_SZ == 0);
         // read SuperBlock
+
         bpb_cache_mgr
             .get_block_cache(
                 0,
-                Some(0),
-                Some(0),
-                Some((0..8).collect()),
+                0,
+                || -> alloc::vec::Vec<usize> { alloc::vec::Vec::new() },
                 Arc::clone(&block_device),
             )
             .lock()
             .read(0, |super_block: &BPB| {
                 assert!(super_block.is_valid(), "Error loading EFS!");
                 let efs = Self {
+                    used_marker: Default::default(),
                     block_device,
                     fat: Fat::new(
                         super_block.rsvd_sec_cnt as usize,
@@ -102,7 +108,7 @@ impl<T: CacheManager> EasyFileSystem<T> {
             })
     }
     /// Open the root directory
-    pub fn root_inode(efs: &Arc<Self>) -> Inode<T> {
+    pub fn root_inode(efs: &Arc<Self>) -> Inode<T, F> {
         let rt_clus = efs.root_clus;
         // release efs lock
         Inode::new(
