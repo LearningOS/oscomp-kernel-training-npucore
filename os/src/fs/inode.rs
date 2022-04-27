@@ -1,7 +1,8 @@
-use super::{finfo, Dirent, File, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN};
+use super::{Dirent, File, Stat, DT_DIR, DT_REG, DT_UNKNOWN};
 use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
+use crate::timer::TimeSpec;
 use crate::{drivers::BLOCK_DEVICE, println};
 
 use alloc::sync::Arc;
@@ -84,28 +85,12 @@ impl OSInode {
         }
     }
     pub fn get_ino(&self) -> usize {
-        let mut i = Kstat::new_abstract();
-        self.get_fstat(&mut i);
+        let mut i = Stat::new_abstract();
+        self.get_stat(&mut i);
         i.get_ino()
     }
-    pub fn get_fstat(&self, kstat: &mut Kstat) {
-        let inner = self.inner.lock();
-        let vfile = inner.inode.clone();
-        let (size, atime, mtime, ctime, ino) = vfile.stat();
-        let st_mod: u32 = {
-            if vfile.is_dir() {
-                //println!("is dir");
-                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
-                    .bits()
-            } else {
-                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
-                    .bits()
-            }
-        };
-        kstat.fill_info(0, ino, st_mod, 1, size, atime, mtime, ctime);
-    }
 
-    pub fn get_newstat(&self, stat: &mut NewStat) {
+    pub fn get_stat(&self, stat: &mut Stat) {
         let inner = self.inner.lock();
         let vfile = inner.inode.clone();
         let (size, atime, mtime, ctime, ino) = vfile.stat();
@@ -227,6 +212,12 @@ impl OSInode {
             inner.inode.get_size()
         );
         inner.offset as isize
+    }
+
+    /// todo
+    pub fn set_timestamp(&self, times: &[TimeSpec; 2]) {
+        log::trace!("[set_timestamp] times: {:?}", times);
+        log::warn!("[set_timestamp] not implemented yet!");
     }
 }
 

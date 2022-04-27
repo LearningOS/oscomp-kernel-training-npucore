@@ -1,5 +1,7 @@
 use core::mem::size_of;
 
+use crate::timer::TimeSpec;
+
 pub const DT_UNKNOWN: u8 = 0;
 pub const DT_DIR: u8 = 4;
 pub const DT_REG: u8 = 4; //常规文件
@@ -71,7 +73,7 @@ impl Dirent {
 }
 
 #[repr(C)]
-pub struct Kstat {
+pub struct Stat {
     st_dev: u64,   /* ID of device containing file */
     st_ino: u64,   /* Inode number */
     st_mode: u32,  /* File type and mode */
@@ -84,15 +86,13 @@ pub struct Kstat {
     st_blksize: u32,
     __pad2: i32,
     st_blocks: u64,
-    st_atime_sec: i64,
-    st_atime_nsec: i64,
-    st_mtime_sec: i64,
-    st_mtime_nsec: i64,
-    st_ctime_sec: i64,
-    st_ctime_nsec: i64,
+    st_atime: TimeSpec,
+    st_mtime: TimeSpec,
+    st_ctime: TimeSpec,
+    __unused: u64,
 }
 
-impl Kstat {
+impl Stat {
     pub fn get_ino(&self) -> usize {
         self.st_ino as usize
     }
@@ -110,12 +110,10 @@ impl Kstat {
             st_blksize: 512,
             __pad2: 0,
             st_blocks: 0,
-            st_atime_sec: 0,
-            st_atime_nsec: 0,
-            st_mtime_sec: 0,
-            st_mtime_nsec: 0,
-            st_ctime_sec: 0,
-            st_ctime_nsec: 0,
+            st_atime: TimeSpec::new(),
+            st_mtime: TimeSpec::new(),
+            st_ctime: TimeSpec::new(),
+            __unused: 0,
         }
     }
 
@@ -133,16 +131,13 @@ impl Kstat {
             st_blksize: 512,
             __pad2: 0,
             st_blocks: 0,
-            st_atime_sec: 0,
-            st_atime_nsec: 0,
-            st_mtime_sec: 0,
-            st_mtime_nsec: 0,
-            st_ctime_sec: 0,
-            st_ctime_nsec: 0,
+            st_atime: TimeSpec::new(),
+            st_mtime: TimeSpec::new(),
+            st_ctime: TimeSpec::new(),
+            __unused: 0,
         }
     }
 
-    // 目前仅填充用户测试需要的成员
     pub fn fill_info(
         &mut self,
         st_dev: u64,
@@ -158,156 +153,18 @@ impl Kstat {
         //__pad2       :i32,
         //st_blocks    :u64,
         st_atime_sec: i64,
-        //st_atime_nsec:i64,
         st_mtime_sec: i64,
-        //st_mtime_nsec:i64,
         st_ctime_sec: i64,
-        //st_ctime_nsec:i64,
     ) {
-        let st_blocks = (st_size as u64 + self.st_blksize as u64 - 1) / self.st_blksize as u64;
-        *self = Self {
-            st_dev,
-            st_ino,
-            st_mode,
-            st_nlink,
-            st_uid: 0,
-            st_gid: 0,
-            st_rdev: 0,
-            __pad: 0,
-            st_size,
-            st_blksize: 512,
-            __pad2: 0,
-            st_blocks,
-            st_atime_sec,
-            st_atime_nsec: 0,
-            st_mtime_sec,
-            st_mtime_nsec: 0,
-            st_ctime_sec,
-            st_ctime_nsec: 0,
-        };
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        let size = core::mem::size_of::<Self>();
-        unsafe { core::slice::from_raw_parts(self as *const _ as usize as *const u8, size) }
-    }
-
-    pub fn as_bytes_mut(&mut self) -> &mut [u8] {
-        let size = core::mem::size_of::<Self>();
-        unsafe { core::slice::from_raw_parts_mut(self as *mut _ as usize as *mut u8, size) }
-    }
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct NewStat {
-    /* the edition that can pass bw_test */
-    st_dev: u64, /* ID of device containing file */
-    //__pad1  :u32,
-    st_ino: u64,   /* Inode number */
-    st_mode: u32,  /* File type and mode */
-    st_nlink: u32, /* Number of hard links */
-    st_uid: u32,
-    st_gid: u32,
-    //st_rdev :u64,   /* Device ID (if special file) */
-    //__pad2  :u32,
-    st_blksize: u64,  /* Block size for filesystem I/O */
-    st_blocks: u64,   /* Number of 512B blocks allocated */
-    pub st_size: u64, /* Total size, in bytes */
-    //????????????
-    st_atime_sec: i64,
-    st_atime_nsec: i64,
-    st_mtime_sec: i64,
-    st_mtime_nsec: i64,
-    st_ctime_sec: i64,
-    st_ctime_nsec: i64,
-    //st_dev  :u64,   /* ID of device containing file */
-    ////__pad1  :u32,
-    //st_ino  :u64,   /* Inode number */
-    //st_mode :u32,   /* File type and mode */
-    //st_nlink:u64,   /* Number of hard links */
-    //st_uid  :u32,
-    //st_gid  :u32,
-    ////st_rdev :u64,   /* Device ID (if special file) */
-    ////__pad2  :u32,
-    //st_blksize   :u64,    /* Block size for filesystem I/O */
-    //st_blocks    :u64,    /* Number of 512B blocks allocated */
-    //pub st_size  :u64,         /* Total size, in bytes */ //????????????
-    //st_atime_sec :i64,
-    //st_atime_nsec:i64,
-    //st_mtime_sec :i64,
-    //st_mtime_nsec:i64,
-    //st_ctime_sec :i64,
-    //st_ctime_nsec:i64,
-}
-
-impl NewStat {
-    pub fn empty() -> Self {
-        Self {
-            st_dev: 0,
-            //__pad1  :0,
-            st_ino: 0,
-            st_mode: 0,
-            st_nlink: 0,
-            st_uid: 0,
-            st_gid: 0,
-            //st_rdev :0,
-            //__pad2  :0,
-            st_size: 0,
-            st_blksize: 512,
-            st_blocks: 0,
-            st_atime_sec: 0,
-            st_atime_nsec: 0,
-            st_mtime_sec: 0,
-            st_mtime_nsec: 0,
-            st_ctime_sec: 0,
-            st_ctime_nsec: 0,
-        }
-    }
-
-    // 目前仅填充用户测试需要的成员
-    pub fn fill_info(
-        &mut self,
-        st_dev: u64,
-        st_ino: u64,
-        st_mode: u32,
-        st_nlink: u64,
-        //st_uid  :u32,
-        //st_gid  :u32,
-        //st_rdev :u64,
-        st_size: i64,
-        //st_blksize   :u32,
-        //st_blocks    :u64,
-        st_atime_sec: i64,
-        //st_atime_nsec:i64,
-        st_mtime_sec: i64,
-        //st_mtime_nsec:i64,
-        st_ctime_sec: i64,
-        //st_ctime_nsec:i64,
-    ) {
-        let st_blocks = (st_size as u64 + self.st_blksize as u64 - 1) / self.st_blksize as u64;
-
-        *self = Self {
-            st_dev,
-            //__pad1  :0,
-            st_ino,
-            st_mode,
-            st_nlink: st_nlink as u32,
-            //st_nlink,
-            st_uid: 0,
-            st_gid: 0,
-            //st_rdev :0,
-            //__pad2  :0,
-            st_size: st_size as u64,
-            st_blksize: self.st_blksize, //TODO:real blksize
-            st_blocks,
-            st_atime_sec,
-            st_atime_nsec: 0,
-            st_mtime_sec,
-            st_mtime_nsec: 0,
-            st_ctime_sec,
-            st_ctime_nsec: 0,
-        };
+        self.st_dev = st_dev;
+        self.st_ino = st_ino;
+        self.st_mode = st_mode;
+        self.st_nlink = st_nlink;
+        self.st_size = st_size;
+        self.st_blocks = (st_size as u64 + self.st_blksize as u64 - 1) / self.st_blksize as u64;;
+        self.st_atime = TimeSpec {tv_sec: st_atime_sec as usize, tv_nsec: 0};
+        self.st_mtime = TimeSpec {tv_sec: st_mtime_sec as usize, tv_nsec: 0};
+        self.st_ctime = TimeSpec {tv_sec: st_ctime_sec as usize, tv_nsec: 0};
     }
 
     pub fn as_bytes(&self) -> &[u8] {

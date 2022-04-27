@@ -229,6 +229,12 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as u32,
         ),
         SYSCALL_FSTAT => sys_fstat(args[0], args[1] as *mut u8),
+        SYSCALL_UTIMENSAT => sys_utimensat(
+            args[0],
+            args[1] as *const u8,
+            args[2] as *const [TimeSpec; 2],
+            args[3] as u32,
+        ),
         SYSCALL_EXIT => sys_exit(args[0] as u32),
         SYSCALL_EXIT_GRUOP => sys_exit(args[0] as u32),
         SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0], args[1] as *mut u64),

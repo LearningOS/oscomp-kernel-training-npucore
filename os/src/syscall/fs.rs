@@ -1,6 +1,6 @@
 use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode};
 use crate::fs::{
-    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Kstat, NewStat, Null, Zero, MNT_TABLE,
+    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Stat, Null, Zero, MNT_TABLE,
     TTY,
 };
 use crate::mm::{
@@ -9,8 +9,9 @@ use crate::mm::{
     translated_str, MapPermission, UserBuffer,
 };
 use crate::task::{current_task, current_user_token};
-use crate::timer::{TimeSpec, TimeVal};
+use crate::timer::{TimeSpec};
 use crate::{move_ptr_to_opt, ptr_to_opt_ref, ptr_to_opt_ref_mut};
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -552,13 +553,11 @@ bitflags! {
     }
 }
 
-pub fn sys_fstatat(fd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
-    let task = current_task().unwrap();
-    let inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
+pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
+    let token = current_user_token();
     let path = translated_str(token, path);
-    let mut userbuf = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<NewStat>()));
-    let mut stat = NewStat::empty();
+    let mut userbuf = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<Stat>()));
+    let mut stat = Stat::empty();
     let flags = match FstatatFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -567,46 +566,27 @@ pub fn sys_fstatat(fd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isiz
         }
     };
     info!(
-        "[sys_newfstatat] fd = {}, path = {:?}, flags: {:?}",
-        fd, path, flags,
+        "[sys_fstatat] dirfd = {}, path = {:?}, flags: {:?}",
+        dirfd, path, flags,
     );
-    if fd == AT_FDCWD {
-        let work_path = inner.current_path.clone();
-        if let Ok(file) = open(
-            work_path.as_str(),
-            path.as_str(),
-            OpenFlags::O_RDONLY,
-            DiskInodeType::Directory,
-        ) {
-            file.get_newstat(&mut stat);
-            userbuf.write(stat.as_bytes());
-            SUCCESS
-        } else {
-            ENOENT
-        }
-    } else {
-        if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
-            return EBADF;
-        }
-        let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
-        match &file_descriptor.file {
-            FileLike::Regular(file) => {
-                file.get_newstat(&mut stat);
-                userbuf.write(stat.as_bytes());
-                SUCCESS
-            }
-            _ => todo!(),
-        }
-    }
+    
+    let inode = match __openat(dirfd, path) {
+        Ok(inode) => inode,
+        Err(errno) => return errno,
+    };
+
+    inode.get_stat(&mut stat);
+    userbuf.write(stat.as_bytes());
+    SUCCESS
 }
 
 pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
-    let buf = translated_byte_buffer(token, statbuf, size_of::<Kstat>());
+    let buf = translated_byte_buffer(token, statbuf, size_of::<Stat>());
     let mut userbuf = UserBuffer::new(buf);
-    let mut kstat = Kstat::empty();
+    let mut kstat = Stat::empty();
 
     if fd == AT_FDCWD {
         let work_path = inner.current_path.clone();
@@ -616,7 +596,7 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
             OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
         ) {
-            file.get_fstat(&mut kstat);
+            file.get_stat(&mut kstat);
             info!("[syscall_fstat] fd = {}, size = {}", fd, kstat.st_size);
             userbuf.write(kstat.as_bytes());
             SUCCESS
@@ -630,13 +610,13 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
         let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
         match &file_descriptor.file {
             FileLike::Regular(f) => {
-                f.get_fstat(&mut kstat);
+                f.get_stat(&mut kstat);
                 userbuf.write(kstat.as_bytes());
                 info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size);
                 SUCCESS
             }
             _ => {
-                let kstat = Kstat::new_abstract();
+                let kstat = Stat::new_abstract();
                 userbuf.write(kstat.as_bytes());
                 info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size);
                 SUCCESS
@@ -812,9 +792,7 @@ bitflags! {
 /// Currently we have no hard-link so this syscall will remove file directly.
 /// `AT_REMOVEDIR` is not supported yet.
 pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
-    let task = current_task().unwrap();
-    let inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
+    let token = current_user_token();
     let path = translated_str(token, path);
     let flags = match UnlinkatFlags::from_bits(flags) {
         Some(flags) => flags,
@@ -827,11 +805,58 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
         "[sys_unlinkat] dirfd: {}, path: {}, flags: {:?}",
         dirfd, path, flags
     );
+
+    let inode = match __openat(dirfd, path) {
+        Ok(inode) => inode,
+        Err(errno) => return errno,
+    };
+
+    if inode.is_dir() {
+        if flags.contains(UnlinkatFlags::AT_REMOVEDIR) {
+            todo!();
+        } else {
+            return EISDIR;
+        }
+    }
+    inode.delete();
+    SUCCESS
+}
+
+pub fn sys_utimensat(dirfd: usize, pathname: *const u8, times: *const [TimeSpec;2], flags: u32) -> isize {
+    const UTIME_NOW: usize = 0x3fffffff;
+    const UTIME_OMIT: usize = 0x3ffffffe;
+    let token = current_user_token();
+    let path = translated_str(token, pathname);
+    
+    info!(
+        "[sys_unlinkat] dirfd: {}, path: {}, times: {:?}, flags: {:?}",
+        dirfd, path, times, flags
+    );
+
+    let inode = match __openat(dirfd, path) {
+        Ok(inode) => inode,
+        Err(errno) => return errno,
+    };
+    
+    let timespec = &mut [TimeSpec::now(); 2];
+    if !times.is_null() {
+        copy_from_user(token, times, timespec);
+        // todo: check if timespecs have valid value
+    }
+    inode.set_timestamp(timespec);
+    SUCCESS
+}
+
+/// # Warning
+/// `acquire_inner_lock()` is called in this function
+fn __openat(dirfd: usize, path: String) -> Result<Arc<crate::fs::OSInode>, isize> {
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
     let inode = if path.starts_with("/") {
         if let Ok(inode) = open("/", path.as_str(), OpenFlags::O_RDONLY, DiskInodeType::File) {
             inode
         } else {
-            return ENOENT;
+            return Err(ENOENT);
         }
     } else {
         if dirfd == AT_FDCWD {
@@ -843,37 +868,29 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
             ) {
                 inode
             } else {
-                return ENOENT;
+                return Err(ENOENT);
             }
         } else {
             if dirfd >= inner.fd_table.len() || inner.fd_table[dirfd].is_none() {
-                return EBADF;
+                return Err(EBADF);
             }
             let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
             match &file_descriptor.file {
                 FileLike::Regular(dir_file) => {
                     if !dir_file.is_dir() {
-                        return ENOTDIR;
+                        return Err(ENOTDIR);
                     }
                     if let Some(inode) = dir_file.find(path.as_str(), OpenFlags::O_RDONLY) {
                         inode
                     } else {
-                        return ENOENT;
+                        return Err(ENOENT);
                     }
                 }
-                _ => return ENOTDIR,
+                _ => return Err(ENOTDIR),
             }
         }
     };
-    if inode.is_dir() {
-        if flags.contains(UnlinkatFlags::AT_REMOVEDIR) {
-            todo!();
-        } else {
-            return EISDIR;
-        }
-    }
-    inode.delete();
-    SUCCESS
+    Ok(inode)
 }
 
 #[allow(non_camel_case_types)]
