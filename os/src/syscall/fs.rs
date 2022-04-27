@@ -1,6 +1,7 @@
 use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode};
 use crate::fs::{
-    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Kstat, NewStat, Zero, Null, MNT_TABLE, TTY,
+    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Kstat, NewStat, Null, Zero, MNT_TABLE,
+    TTY,
 };
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user_array, translated_byte_buffer,
@@ -327,26 +328,30 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
     let token = inner.get_user_token();
     let path = translated_str(token, path);
 
-    if let Some(inode) = open(
+    match open(
         inner.get_work_path().as_str(),
         path.as_str(),
         OpenFlags::from_bits(flags).unwrap(),
         DiskInodeType::File,
     ) {
-        let fd = match inner.alloc_fd() {
-            Some(fd) => fd,
-            None => return EMFILE,
-        };
-        inner.fd_table[fd] = Some(FileDescriptor::new(
-            OpenFlags::from_bits(flags)
-                .unwrap()
-                .contains(OpenFlags::O_CLOEXEC),
-            FileLike::Regular(inode),
-        ));
-        drop(inner);
-        fd as isize
-    } else {
-        ENOENT
+        Ok(inode) => {
+            let fd = match inner.alloc_fd() {
+                Some(fd) => fd,
+                None => return EMFILE,
+            };
+            inner.fd_table[fd] = Some(FileDescriptor::new(
+                OpenFlags::from_bits(flags)
+                    .unwrap()
+                    .contains(OpenFlags::O_CLOEXEC),
+                FileLike::Regular(inode),
+            ));
+            drop(inner);
+            fd as isize
+        }
+        Err(errno) => {
+            warn!("[sys_open] open failed with errno: {}", errno);
+            errno
+        }
     }
 }
 
@@ -432,7 +437,7 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
     let mut dirent = Dirent::empty();
     if fd == AT_FDCWD {
         let work_path = inner.current_path.clone();
-        if let Some(file) = open(
+        if let Ok(file) = open(
             "/",
             work_path.as_str(),
             OpenFlags::O_RDONLY,
@@ -568,11 +573,13 @@ pub fn sys_newfstatat(fd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
     let mut stat = NewStat::empty();
     info!(
         "[sys_newfstatat] fd = {}, path = {:?}, flags: {:?}",
-        fd, path, StatMode::from_bits(flags)
+        fd,
+        path,
+        StatMode::from_bits(flags)
     );
     if fd == AT_FDCWD {
         let work_path = inner.current_path.clone();
-        if let Some(file) = open(
+        if let Ok(file) = open(
             work_path.as_str(),
             path.as_str(),
             OpenFlags::O_RDONLY,
@@ -610,7 +617,7 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
 
     if fd == AT_FDCWD {
         let work_path = inner.current_path.clone();
-        if let Some(file) = open(
+        if let Ok(file) = open(
             "/",
             work_path.as_str(),
             OpenFlags::O_RDONLY,
@@ -684,24 +691,27 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
             "[sys_openat] dirfd: AT_FDCWD, path:{}, flags:{:?}, mode:{:?}",
             path, flags, mode
         );
-        if let Some(inode) = open(
+        match open(
             inner.get_work_path().as_str(),
             path.as_str(),
             flags,
             DiskInodeType::File,
         ) {
-            let fd = match inner.alloc_fd() {
-                Some(fd) => fd,
-                None => return EMFILE,
-            };
-            inner.fd_table[fd] = Some(FileDescriptor::new(
-                flags.contains(OpenFlags::O_CLOEXEC),
-                FileLike::Regular(inode),
-            ));
-            fd as isize
-        } else {
-            warn!("[sys_openat] file not found: {}", path);
-            ENOENT
+            Ok(inode) => {
+                let fd = match inner.alloc_fd() {
+                    Some(fd) => fd,
+                    None => return EMFILE,
+                };
+                inner.fd_table[fd] = Some(FileDescriptor::new(
+                    flags.contains(OpenFlags::O_CLOEXEC),
+                    FileLike::Regular(inode),
+                ));
+                fd as isize
+            }
+            Err(errno) => {
+                warn!("[sys_openat] open failed with errno: {}", errno);
+                errno
+            }
         }
     } else {
         info!(
@@ -788,7 +798,7 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
         StatMode::from_bits(mode)
     );
     if dirfd == AT_FDCWD {
-        if let Some(_) = open(
+        if let Ok(_) = open(
             inner.get_work_path().as_str(),
             path.as_str(),
             OpenFlags::O_CREAT,

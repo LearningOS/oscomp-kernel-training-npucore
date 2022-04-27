@@ -595,7 +595,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
         OpenFlags::O_RDONLY,
         DiskInodeType::File,
     ) {
-        Some(file) => {
+        Ok(file) => {
             if file.get_size() < 4 {
                 return ENOEXEC;
             }
@@ -618,7 +618,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
                 _ => ENOEXEC,
             }
         }
-        None => ENOENT,
+        Err(_) => ENOENT,
     }
 }
 // I think it's a little expensive, so I temporarily move it here

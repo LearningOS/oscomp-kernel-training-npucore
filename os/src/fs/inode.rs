@@ -95,9 +95,11 @@ impl OSInode {
         let st_mod: u32 = {
             if vfile.is_dir() {
                 //println!("is dir");
-                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
+                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
+                    .bits()
             } else {
-                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
+                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
+                    .bits()
             }
         };
         kstat.fill_info(0, ino, st_mod, 1, size, atime, mtime, ctime);
@@ -109,9 +111,11 @@ impl OSInode {
         let (size, atime, mtime, ctime, ino) = vfile.stat();
         let st_mod: u32 = {
             if vfile.is_dir() {
-                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
+                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
+                    .bits()
             } else {
-                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO).bits()
+                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
+                    .bits()
             }
         };
         stat.fill_info(0, ino, st_mod, 1, size, atime, mtime, ctime);
@@ -300,7 +304,7 @@ bitflags! {
         const O_EXCL        =   0o200;
         const O_NOCTTY      =   0o400;
         const O_TRUNC       =   0o1000;
-        
+
         const O_APPEND      =   0o2000;
         const O_NONBLOCK    =   0o4000;
         const O_DSYNC       =   0o10000;
@@ -337,7 +341,7 @@ pub fn open(
     path: &str,
     flags: OpenFlags,
     type_: DiskInodeType,
-) -> Option<Arc<OSInode>> {
+) -> Result<Arc<OSInode>, isize> {
     // DEBUG: 相对路径
     const BUSYBOX_PATH: &str = "/busybox";
     let path = if path == "/touch" || path == "/rm" {
@@ -358,12 +362,21 @@ pub fn open(
     // print!("\n");
     // shell应当保证此处输入的path不为空
     let (readable, writable) = flags.read_write();
-    if flags.contains(OpenFlags::O_CREAT) {
-        if let Some(inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
-            // clear size
-            inode.remove();
+    if let Some(inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
+        if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
+            return Err(EEXIST);
         }
-        {
+        if flags.contains(OpenFlags::O_TRUNC) {
+            // clear size
+            inode.clear();
+        }
+        let os_inode = Arc::new(OSInode::new(readable, writable, inode));
+        if flags.contains(OpenFlags::O_APPEND) {
+            os_inode.lseek(0, SeekWhence::SEEK_END);
+        }
+        Ok(os_inode)
+    } else {
+        if flags.contains(OpenFlags::O_CREAT) {
             // create file
             let name = pathv.pop().unwrap();
             if let Some(temp_inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
@@ -373,20 +386,14 @@ pub fn open(
                         DiskInodeType::File => ATTRIBUTE_ARCHIVE,
                     }
                 };
-                temp_inode
-                    .create(name, attribute)
-                    .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
-            } else {
-                None
+                return Ok(Arc::new(OSInode::new(
+                    readable,
+                    writable,
+                    temp_inode.create(name, attribute).unwrap(),
+                )));
             }
         }
-    } else {
-        cur_inode.find_vfile_bypath(pathv).map(|inode| {
-            if flags.contains(OpenFlags::O_TRUNC) {
-                inode.clear();
-            }
-            Arc::new(OSInode::new(readable, writable, inode))
-        })
+        Err(ENOENT)
     }
 }
 
