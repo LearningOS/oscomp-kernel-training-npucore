@@ -48,18 +48,21 @@ pub fn sys_getcwd(buf: usize, size: usize) -> isize {
 }
 
 bitflags! {
-    pub struct SeekWhence: usize {
+    pub struct SeekWhence: u32 {
         const SEEK_SET  =   0; /* set to offset bytes.  */
         const SEEK_CUR  =   1; /* set to its current location plus offset bytes.  */
         const SEEK_END  =   2; /* set to the size of the file plus offset bytes.  */
     }
 }
 
-pub fn sys_lseek(fd: usize, offset: usize, whence: usize) -> isize {
+pub fn sys_lseek(fd: usize, offset: usize, whence: u32) -> isize {
     // whence is not valid
     let whence = match SeekWhence::from_bits(whence) {
         Some(whence) => whence,
-        None => return EINVAL,
+        None => {
+            warn!("[sys_lseek] unknown flags");
+            return EINVAL;
+        }
     };
     info!(
         "[sys_lseek] fd: {}, offset: {}, whence: {:?}",
@@ -327,11 +330,18 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
     let mut inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
     let path = translated_str(token, path);
+    let flags = match OpenFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => {
+            warn!("[sys_open] unknown flags");
+            return EINVAL;
+        }
+    };
 
     match open(
         inner.get_work_path().as_str(),
         path.as_str(),
-        OpenFlags::from_bits(flags).unwrap(),
+        flags,
         DiskInodeType::File,
     ) {
         Ok(inode) => {
@@ -340,8 +350,7 @@ pub fn sys_open(path: *const u8, flags: u32) -> isize {
                 None => return EMFILE,
             };
             inner.fd_table[fd] = Some(FileDescriptor::new(
-                OpenFlags::from_bits(flags)
-                    .unwrap()
+                flags
                     .contains(OpenFlags::O_CLOEXEC),
                 FileLike::Regular(inode),
             ));
@@ -389,7 +398,10 @@ pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
             }
         }
         // contains invalid OpenFlags
-        None => return EINVAL,
+        None => {
+            warn!("[sys_pipe2] unknown flags");
+            return EINVAL;
+        }
     };
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
@@ -517,7 +529,14 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: u32) -> isize {
         // `O_RDONLY == 0`, so it means *NO* cloexec in fact
         Some(OpenFlags::O_RDONLY) => false,
         // flags contain an invalid value
-        _ => return EINVAL,
+        Some(flags) => {
+            warn!("[sys_dup3] invalid flags: {:?}", flags);
+            return EINVAL;
+        }
+        None => {
+            warn!("[sys_dup3] unknown flags");
+            return EINVAL;
+        }
     };
     if oldfd == newfd {
         return EINVAL;
@@ -564,18 +583,33 @@ pub fn sys_readlinkat(dirfd: usize, pathname: *const u8, buf: *mut u8, bufsiz: u
     }
 }
 
-pub fn sys_newfstatat(fd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
+bitflags! {
+    pub struct FstatatFlags: u32 {
+        const AT_EMPTY_PATH = 0x1000;
+        const AT_NO_AUTOMOUNT = 0x800;
+        const AT_SYMLINK_NOFOLLOW = 0x100;
+    }
+}
+
+pub fn sys_fstatat(fd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
     let path = translated_str(token, path);
     let mut userbuf = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<NewStat>()));
     let mut stat = NewStat::empty();
+    let flags = match FstatatFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => {
+            warn!("[sys_fstatat] unknown flags");
+            return EINVAL;
+        }
+    };
     info!(
         "[sys_newfstatat] fd = {}, path = {:?}, flags: {:?}",
         fd,
         path,
-        StatMode::from_bits(flags)
+        flags,
     );
     if fd == AT_FDCWD {
         let work_path = inner.current_path.clone();
@@ -658,7 +692,13 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     let token = inner.get_user_token();
     let path = translated_str(token, path);
     // TODO: should check flags and mode here
-    let flags = OpenFlags::from_bits(flags).unwrap();
+    let flags = match OpenFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => {
+            warn!("[sys_openat] unknown flags");
+            return EINVAL;
+        }
+    };
     let mode = StatMode::from_bits(mode);
 
     if path.contains("/dev") {
@@ -1040,7 +1080,13 @@ pub fn sys_faccessat2(dirfd: u32, pathname: *const u8, mode: u32, flags: u32) ->
     let token = inner.get_user_token();
     let pathname = translated_str(token, pathname);
     let mode = StatMode::from_bits(mode);
-    let flags = FaccessatFlags::from_bits(flags);
+    let flags = match FaccessatFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => {
+            warn!("[sys_faccessat2] unknown flags");
+            return EINVAL;
+        }
+    };
     info!(
         "[sys_faccessat2] dirfd: {}, pathname: {}, mode: {:?}, flags: {:?}",
         dirfd, pathname, mode, flags

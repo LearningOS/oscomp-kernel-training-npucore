@@ -23,7 +23,7 @@ const SYSCALL_SENDFILE: usize = 71;
 const SYSCALL_PSELECT6: usize = 72;
 const SYSCALL_PPOLL: usize = 73;
 const SYSCALL_READLINKAT: usize = 78;
-const SYSCALL_NEW_FSTATAT: usize = 79;
+const SYSCALL_FSTATAT: usize = 79;
 const SYSCALL_FSTAT: usize = 80;
 const SYSCALL_FSYNC: usize = 82;
 const SYSCALL_UTIMENSAT: usize = 88;
@@ -79,7 +79,6 @@ pub mod errno;
 pub mod fs;
 mod process;
 
-use alloc::string;
 use fs::*;
 use log::{debug, error, info, trace, warn};
 use process::*;
@@ -113,7 +112,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_PSELECT6 => "pselect6",
         SYSCALL_PPOLL => "ppoll",
         SYSCALL_READLINKAT => "readlinkat",
-        SYSCALL_NEW_FSTATAT => "new_fstatat",
+        SYSCALL_FSTATAT => "fstatat",
         SYSCALL_FSTAT => "fstat",
         SYSCALL_FSYNC => "fsync",
         SYSCALL_UTIMENSAT => "utimensat",
@@ -215,7 +214,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_READV => sys_readv(args[0], args[1], args[2]),
         SYSCALL_WRITE => sys_write(args[0], args[1], args[2]),
         SYSCALL_WRITEV => sys_writev(args[0], args[1], args[2]),
-        SYSCALL_LSEEK => sys_lseek(args[0], args[1], args[2]),
+        SYSCALL_LSEEK => sys_lseek(args[0], args[1], args[2] as u32),
         SYSCALL_SENDFILE => sys_sendfile(args[0], args[1], args[2] as *mut usize, args[3]),
         SYSCALL_READLINKAT => sys_readlinkat(
             args[0],
@@ -223,7 +222,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as *mut u8,
             args[3],
         ),
-        SYSCALL_NEW_FSTATAT => sys_newfstatat(
+        SYSCALL_FSTATAT => sys_fstatat(
             args[0],
             args[1] as *const u8,
             args[2] as *mut u8,
