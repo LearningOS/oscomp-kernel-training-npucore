@@ -20,7 +20,7 @@ use num_enum::FromPrimitive;
 
 use super::errno::*;
 
-const AT_FDCWD: usize = 100usize.wrapping_neg();
+pub const AT_FDCWD: usize = 100usize.wrapping_neg();
 
 pub fn sys_getcwd(buf: usize, size: usize) -> isize {
     let task = current_task().unwrap();
@@ -323,45 +323,6 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: *mut usize, count: usiz
     }
     info!("[sys_sendfile] written bytes: {}", write_size);
     write_size as isize
-}
-
-pub fn sys_open(path: *const u8, flags: u32) -> isize {
-    let task = current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
-    let path = translated_str(token, path);
-    let flags = match OpenFlags::from_bits(flags) {
-        Some(flags) => flags,
-        None => {
-            warn!("[sys_open] unknown flags");
-            return EINVAL;
-        }
-    };
-
-    match open(
-        inner.get_work_path().as_str(),
-        path.as_str(),
-        flags,
-        DiskInodeType::File,
-    ) {
-        Ok(inode) => {
-            let fd = match inner.alloc_fd() {
-                Some(fd) => fd,
-                None => return EMFILE,
-            };
-            inner.fd_table[fd] = Some(FileDescriptor::new(
-                flags
-                    .contains(OpenFlags::O_CLOEXEC),
-                FileLike::Regular(inode),
-            ));
-            drop(inner);
-            fd as isize
-        }
-        Err(errno) => {
-            warn!("[sys_open] open failed with errno: {}", errno);
-            errno
-        }
-    }
 }
 
 pub fn sys_close(fd: usize) -> isize {

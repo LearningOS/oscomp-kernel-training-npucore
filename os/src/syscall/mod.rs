@@ -200,7 +200,10 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_IOCTL => sys_ioctl(args[0], args[1] as u32, args[2]),
         SYSCALL_MKDIRAT => sys_mkdirat(args[0], args[1] as *const u8, args[2] as u32),
         SYSCALL_UNLINKAT => sys_unlinkat(args[0], args[1] as *const u8, args[2] as u32),
-        SYSCALL_OPEN => sys_open(args[0] as *const u8, args[1] as u32),
+        SYSCALL_FACCESSAT => {
+            sys_faccessat2(args[0] as u32, args[1] as *const u8, args[2] as u32, 0u32)
+        }
+        SYSCALL_OPEN => sys_openat(AT_FDCWD, args[0] as *const u8, args[1] as u32, 0777u32),
         SYSCALL_OPENAT => sys_openat(
             args[0],
             args[1] as *const u8,
@@ -216,12 +219,9 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_WRITEV => sys_writev(args[0], args[1], args[2]),
         SYSCALL_LSEEK => sys_lseek(args[0], args[1], args[2] as u32),
         SYSCALL_SENDFILE => sys_sendfile(args[0], args[1], args[2] as *mut usize, args[3]),
-        SYSCALL_READLINKAT => sys_readlinkat(
-            args[0],
-            args[1] as *const u8,
-            args[2] as *mut u8,
-            args[3],
-        ),
+        SYSCALL_READLINKAT => {
+            sys_readlinkat(args[0], args[1] as *const u8, args[2] as *mut u8, args[3])
+        }
         SYSCALL_FSTATAT => sys_fstatat(
             args[0],
             args[1] as *const u8,
@@ -259,7 +259,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_GETPID => sys_getpid(),
         SYSCALL_GETPPID => sys_getppid(),
         SYSCALL_CLONE => sys_fork(),
-        SYSCALL_EXECVE => sys_execve(args[0] as *const u8, args[1] as *const *const u8, args[2] as *const *const u8),
+        SYSCALL_EXECVE => sys_execve(
+            args[0] as *const u8,
+            args[1] as *const *const u8,
+            args[2] as *const *const u8,
+        ),
         SYSCALL_WAIT4 => sys_wait4(
             args[0] as isize,
             args[1] as *mut u32,
