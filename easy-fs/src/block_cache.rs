@@ -26,7 +26,7 @@ pub trait CacheManager {
     /// `inner_blk_id`: The ordinal number of the block inside the block.
     /// `inode_id`: The inode_id the block cache belongs to.
     fn try_get_block_cache(
-        &self,
+        &mut self,
         block_id: usize,
         inner_cache_id: usize,
     ) -> Option<Arc<Mutex<Self::CacheType>>>;
@@ -39,7 +39,7 @@ pub trait CacheManager {
     /// `inode_id`: The inode_id the block cache belongs to.
     /// `block_device`: The pointer to the block_device.
     fn get_block_cache<FUNC>(
-        &self,
+        &mut self,
         block_id: usize,
         inner_cache_id: usize,
         neighbor: FUNC,

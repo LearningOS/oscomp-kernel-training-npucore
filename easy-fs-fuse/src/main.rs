@@ -133,7 +133,7 @@ impl CacheManager for BlockCacheManager {
     type CacheType = BlockCache;
     const CACHE_SZ: usize = 512;
     fn try_get_block_cache(
-        &self,
+        &mut self,
         block_id: usize,
         inner_blk_id: usize,
     ) -> Option<Arc<Mutex<BlockCache>>> {
@@ -145,7 +145,7 @@ impl CacheManager for BlockCacheManager {
     }
 
     fn get_block_cache<FUNC>(
-        &self,
+        &mut self,
         block_id: usize,
         inner_blk_id: usize,
         neighbor: FUNC,
