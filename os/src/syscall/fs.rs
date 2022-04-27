@@ -828,6 +828,80 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
     }
 }
 
+bitflags! {
+    pub struct UnlinkatFlags: u32 {
+        const AT_REMOVEDIR = 0x200;
+    }
+}
+
+/// # Warning
+/// Currently we have no hard-link so this syscall will remove file directly.
+/// `AT_REMOVEDIR` is not supported yet.
+pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    let token = inner.get_user_token();
+    let path = translated_str(token, path);
+    let flags = match UnlinkatFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => {
+            warn!("[sys_unlinkat] unknown flags");
+            return EINVAL;
+        }
+    };
+    info!(
+        "[sys_unlinkat] dirfd: {}, path: {}, flags: {:?}",
+        dirfd, path, flags
+    );
+    let inode = if path.starts_with("/") {
+        if let Ok(inode) = open("/", path.as_str(), OpenFlags::O_RDONLY, DiskInodeType::File) {
+            inode
+        } else {
+            return ENOENT;
+        }
+    } else {
+        if dirfd == AT_FDCWD {
+            if let Ok(inode) = open(
+                inner.get_work_path().as_str(),
+                path.as_str(),
+                OpenFlags::O_RDONLY,
+                DiskInodeType::File,
+            ) {
+                inode
+            } else {
+                return ENOENT;
+            }
+        } else {
+            if dirfd >= inner.fd_table.len() || inner.fd_table[dirfd].is_none() {
+                return EBADF;
+            }
+            let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
+            match &file_descriptor.file {
+                FileLike::Regular(dir_file) => {
+                    if !dir_file.is_dir() {
+                        return ENOTDIR;
+                    }
+                    if let Some(inode) = dir_file.find(path.as_str(), OpenFlags::O_RDONLY) {
+                        inode
+                    } else {
+                        return ENOENT;
+                    }
+                }
+                _ => return ENOTDIR,
+            }
+        }
+    };
+    if inode.is_dir() {
+        if flags.contains(UnlinkatFlags::AT_REMOVEDIR) {
+            todo!();
+        } else {
+            return EISDIR;
+        }
+    }
+    inode.delete();
+    SUCCESS
+}
+
 #[allow(non_camel_case_types)]
 #[derive(Debug, Eq, PartialEq, FromPrimitive)]
 #[repr(u32)]
