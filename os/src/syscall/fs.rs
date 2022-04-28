@@ -1,7 +1,6 @@
 use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode};
 use crate::fs::{
-    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Stat, Null, Zero, MNT_TABLE,
-    TTY,
+    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Null, Stat, Zero, MNT_TABLE, TTY,
 };
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user_array, translated_byte_buffer,
@@ -9,7 +8,7 @@ use crate::mm::{
     translated_str, MapPermission, UserBuffer,
 };
 use crate::task::{current_task, current_user_token};
-use crate::timer::{TimeSpec};
+use crate::timer::TimeSpec;
 use crate::{move_ptr_to_opt, ptr_to_opt_ref, ptr_to_opt_ref_mut};
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -569,7 +568,7 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
         "[sys_fstatat] dirfd = {}, path = {:?}, flags: {:?}",
         dirfd, path, flags,
     );
-    
+
     let inode = match __openat(dirfd, path) {
         Ok(inode) => inode,
         Err(errno) => return errno,
@@ -663,7 +662,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         return fd as isize;
     }
     let result = if path.starts_with("/") {
-        open("/", path.as_str(), OpenFlags::O_RDONLY, DiskInodeType::File)
+        open("/", path.as_str(), flags, DiskInodeType::File)
     } else {
         if dirfd == AT_FDCWD {
             open(
@@ -751,33 +750,48 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
         path,
         StatMode::from_bits(mode)
     );
-    if dirfd == AT_FDCWD {
-        if let Ok(_) = open(
-            inner.get_work_path().as_str(),
+    if path.starts_with("/") {
+        match open(
+            "/",
             path.as_str(),
-            OpenFlags::O_CREAT,
+            OpenFlags::O_CREAT | OpenFlags::O_EXCL,
             DiskInodeType::Directory,
         ) {
-            SUCCESS
-        } else {
-            ENOENT
+            Ok(_) => SUCCESS,
+            Err(errno) => errno,
         }
     } else {
-        if dirfd >= inner.fd_table.len() || inner.fd_table[dirfd].is_none() {
-            return EBADF;
-        }
-        let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
-        match &file_descriptor.file {
-            FileLike::Regular(dir_file) => {
-                // should we check InodeType of `dir_file` here?
-                if let Some(_) = dir_file.create(path.as_str(), DiskInodeType::Directory) {
-                    SUCCESS
-                } else {
-                    // possibly, not for sure
-                    ENOENT
-                }
+        if dirfd == AT_FDCWD {
+            match open(
+                inner.get_work_path().as_str(),
+                path.as_str(),
+                OpenFlags::O_CREAT | OpenFlags::O_EXCL,
+                DiskInodeType::Directory,
+            ) {
+                Ok(_) => SUCCESS,
+                Err(errno) => errno,
             }
-            _ => ENOTDIR,
+        } else {
+            if dirfd >= inner.fd_table.len() || inner.fd_table[dirfd].is_none() {
+                return EBADF;
+            }
+            let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
+            match &file_descriptor.file {
+                FileLike::Regular(dir_file) => {
+                    if !dir_file.is_dir() {
+                        return ENOTDIR;
+                    }
+                    if let Some(_) = dir_file.find(path.as_str(), OpenFlags::O_RDONLY) {
+                        EEXIST
+                    } else {
+                        dir_file
+                            .create(path.as_str(), DiskInodeType::Directory)
+                            .unwrap();
+                        SUCCESS
+                    }
+                }
+                _ => ENOTDIR,
+            }
         }
     }
 }
@@ -822,12 +836,17 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
     SUCCESS
 }
 
-pub fn sys_utimensat(dirfd: usize, pathname: *const u8, times: *const [TimeSpec;2], flags: u32) -> isize {
+pub fn sys_utimensat(
+    dirfd: usize,
+    pathname: *const u8,
+    times: *const [TimeSpec; 2],
+    flags: u32,
+) -> isize {
     const UTIME_NOW: usize = 0x3fffffff;
     const UTIME_OMIT: usize = 0x3ffffffe;
     let token = current_user_token();
     let path = translated_str(token, pathname);
-    
+
     info!(
         "[sys_unlinkat] dirfd: {}, path: {}, times: {:?}, flags: {:?}",
         dirfd, path, times, flags
@@ -837,7 +856,7 @@ pub fn sys_utimensat(dirfd: usize, pathname: *const u8, times: *const [TimeSpec;
         Ok(inode) => inode,
         Err(errno) => return errno,
     };
-    
+
     let timespec = &mut [TimeSpec::now(); 2];
     if !times.is_null() {
         copy_from_user(token, times, timespec);

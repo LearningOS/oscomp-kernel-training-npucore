@@ -47,13 +47,13 @@ impl OSInode {
 
     pub fn find(&self, path: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
         let inner = self.inner.lock();
-        let mut pathv: Vec<&str> = path.split('/').collect();
-        let vfile = inner.inode.find_vfile_bypath(pathv);
-        if vfile.is_none() {
-            return None;
-        } else {
-            let (readable, writable) = flags.read_write();
-            return Some(Arc::new(OSInode::new(readable, writable, vfile.unwrap())));
+        let pathv: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+        match inner.inode.find_vfile_bypath(pathv) {
+            Some(vfile) => {
+                let (readable, writable) = flags.read_write();
+                Some(Arc::new(OSInode::new(readable, writable, vfile)))
+            }
+            None => None,
         }
     }
 
@@ -108,7 +108,7 @@ impl OSInode {
 
     pub fn get_size(&self) -> usize {
         let inner = self.inner.lock();
-        let (size, _, mt_me, _, _) = inner.inode.stat();
+        let (size, _, _, _, _) = inner.inode.stat();
         return size as usize;
     }
 
@@ -116,32 +116,32 @@ impl OSInode {
         let inner = self.inner.lock();
         let cur_inode = inner.inode.clone();
         if !cur_inode.is_dir() {
-            println!("[create]:{} is not a directory!", path);
+            println!("[create] {} is not a directory!", path);
             return None;
         }
-        let mut pathv: Vec<&str> = path.split('/').collect();
+        let mut pathv: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
         let (readable, writable) = (true, true);
-        if let Some(inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
-            // already exists, clear
-            inode.remove();
-        }
-        {
-            // create file
+
+        if cur_inode.find_vfile_bypath(pathv.clone()).is_none() {
             let name = pathv.pop().unwrap();
-            if let Some(temp_inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
+            if let Some(dir_file) = cur_inode.find_vfile_bypath(pathv.clone()) {
+                if !dir_file.is_dir() {
+                    return None;
+                }
                 let attribute = {
                     match type_ {
                         DiskInodeType::Directory => ATTRIBUTE_DIRECTORY,
                         DiskInodeType::File => ATTRIBUTE_ARCHIVE,
                     }
                 };
-                temp_inode
-                    .create(name, attribute)
-                    .map(|inode| Arc::new(OSInode::new(readable, writable, inode)))
-            } else {
-                None
+                return Some(Arc::new(OSInode::new(
+                    readable,
+                    writable,
+                    dir_file.create(name, attribute).unwrap(),
+                )));
             }
         }
+        None
     }
 
     pub fn clear(&self) {
@@ -348,11 +348,9 @@ pub fn open(
             ROOT_INODE.find_vfile_bypath(wpath).unwrap()
         }
     };
-    let mut pathv: Vec<&str> = path.split('/').collect();
-    //println!("[open] pathv = {:?}", pathv);
-    // print!("\n");
-    // shell应当保证此处输入的path不为空
+    let mut pathv: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
     let (readable, writable) = flags.read_write();
+
     if let Some(inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
         if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
             return Err(EEXIST);
@@ -370,7 +368,10 @@ pub fn open(
         if flags.contains(OpenFlags::O_CREAT) {
             // create file
             let name = pathv.pop().unwrap();
-            if let Some(temp_inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
+            if let Some(dir_file) = cur_inode.find_vfile_bypath(pathv.clone()) {
+                if !dir_file.is_dir() {
+                    return Err(ENOTDIR);
+                }
                 let attribute = {
                     match type_ {
                         DiskInodeType::Directory => ATTRIBUTE_DIRECTORY,
@@ -380,7 +381,7 @@ pub fn open(
                 return Ok(Arc::new(OSInode::new(
                     readable,
                     writable,
-                    temp_inode.create(name, attribute).unwrap(),
+                    dir_file.create(name, attribute).unwrap(),
                 )));
             }
         }
