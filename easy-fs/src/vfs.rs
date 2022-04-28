@@ -50,7 +50,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// of `inner_block_id`,
     /// _LOCKING_ the direct every time it adds a block.
     /// THIS FUNCTION MAY RESULT IN A DEAD LOCK!
-    pub fn get_neighboring_sec(&self, inner_block_id: usize) -> Vec<usize> {
+    pub fn get_neighboring_sec(&self, inner_cache_id: usize) -> Vec<usize> {
+        let inner_block_id = inner_cache_id * T::CACHE_SZ / BLOCK_SZ;
         let mut v = Vec::new();
         for i in inner_block_id & (!0b111usize)..=(inner_block_id | (0b111usize)) {
             if let Some(j) = self.get_block_id(i as u32) {
@@ -161,7 +162,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     #[inline(always)]
     fn get_block_id(&self, blk: u32) -> Option<u32> {
         let lock = self.direct.lock();
-        let clus = blk as usize / self.fs.sec_per_clus as usize;
+        let clus = blk as usize / T::CACHE_SZ as usize;
         if clus < lock.len() {
             Some(
                 self.fs.first_sector_of_cluster(lock[clus])
@@ -186,7 +187,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         if start >= end {
             return 0;
         }
-        let mut start_block = start / T::CACHE_SZ;
+        let mut start_cache = start / T::CACHE_SZ;
         let mut read_size = 0usize;
         loop {
             // calculate end of current block
@@ -198,9 +199,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             self.file_cache_mgr
                 .lock()
                 .get_block_cache(
-                    self.get_block_id(start_block as u32).unwrap() as usize,
-                    start_block,
-                    || -> Vec<usize> { self.get_neighboring_sec(start_block) },
+                    self.get_block_id(start_cache as u32).unwrap() as usize,
+                    start_cache,
+                    || -> Vec<usize> { self.get_neighboring_sec(start_cache) },
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -214,7 +215,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if end_current_block == end {
                 break;
             }
-            start_block += 1;
+            start_cache += 1;
             start = end_current_block;
         }
         read_size
@@ -232,7 +233,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
         let end = (offset + buf.len()).min(size as usize);
         assert!(start <= end);
-        let mut start_block = start / T::CACHE_SZ;
+        let mut start_cache = start / T::CACHE_SZ;
         let mut write_size = 0usize;
         loop {
             // calculate end of current block
@@ -243,9 +244,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             self.file_cache_mgr
                 .lock()
                 .get_block_cache(
-                    self.get_block_id(start_block as u32).unwrap() as usize,
-                    start_block,
-                    || -> Vec<usize> { self.get_neighboring_sec(start_block) },
+                    self.get_block_id(start_cache as u32).unwrap() as usize,
+                    start_cache,
+                    || -> Vec<usize> { self.get_neighboring_sec(start_cache) },
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -260,7 +261,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if end_current_block == end {
                 break;
             }
-            start_block += 1;
+            start_cache += 1;
             start = end_current_block;
         }
         write_size
@@ -338,6 +339,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         DirIter {
             dir: self,
             offset: 0,
+            forward: true,
             mode: Mutex::new(DirIterMode::AllIter),
         }
     }
@@ -492,6 +494,7 @@ pub struct DirIter<T: CacheManager, F: CacheManager> {
     dir: *const Inode<T, F>,
     offset: usize,
     mode: Mutex<DirIterMode>,
+    forward: bool,
 }
 
 impl<T: CacheManager, F: CacheManager> DirIter<T, F> {
@@ -533,21 +536,29 @@ impl<T: CacheManager, F: CacheManager> Iterator for DirIter<T, F> {
             None
         } else {
             let mut i: FATDirEnt = FATDirEnt::empty();
+
             (unsafe { (*self.dir).read_at_block_cache(self.offset, i.as_bytes_mut()) });
             self.offset += core::mem::size_of::<FATDirEnt>();
+
             let lock = self.mode.lock();
-            while (i.unused_not_last()
-            // used for skipping the last
-		||  (// for non-all iter mode 
-		    !lock.is_all_iter() && !i.last_and_unused()
-		     // skipping long or short
-                && if lock.is_short_iter() {i.is_long()}else{!i.is_long()}))
-                && self.offset < unsafe { (*self.dir).get_size() }
+            while self.offset < unsafe { (*self.dir).get_size() }
+                && match *lock {
+                    DirIterMode::Unused => !i.unused(),
+                    DirIterMode::AllIter => i.unused_not_last(),
+                    DirIterMode::LongIter => i.unused_not_last() || i.is_short(),
+                    DirIterMode::ShortIter => i.unused_not_last() || i.is_long(),
+                }
             {
                 (unsafe { (*self.dir).read_at_block_cache(self.offset, i.as_bytes_mut()) });
                 self.offset += core::mem::size_of::<FATDirEnt>();
             }
-            if !i.last_and_unused() && self.offset < unsafe { (*self.dir).file_size() } {
+
+            if self.offset <= unsafe { (*self.dir).file_size() }
+                && match *lock {
+                    DirIterMode::Unused => i.unused(),
+                    _ => !i.last_and_unused(),
+                }
+            {
                 Some(i)
             } else {
                 None
