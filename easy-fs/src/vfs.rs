@@ -162,7 +162,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     #[inline(always)]
     fn get_block_id(&self, blk: u32) -> Option<u32> {
         let lock = self.direct.lock();
-        let clus = blk as usize / T::CACHE_SZ as usize;
+        let clus = blk as usize / self.fs.sec_per_clus as usize;
         if clus < lock.len() {
             Some(
                 self.fs.first_sector_of_cluster(lock[clus])
