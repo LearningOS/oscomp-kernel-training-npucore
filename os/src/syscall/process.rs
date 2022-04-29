@@ -15,9 +15,9 @@ use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use num_enum::FromPrimitive;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
+use num_enum::FromPrimitive;
 
 pub fn sys_exit(exit_code: u32) -> ! {
     exit_current_and_run_next((exit_code & 0xff) << 8);
@@ -237,16 +237,78 @@ pub fn sys_brk(brk_addr: usize) -> isize {
     new_addr as isize
 }
 
-pub fn sys_fork() -> isize {
+bitflags! {
+    struct CloneFlags: u32 {
+        //const CLONE_NEWTIME         =   0x00000080;
+        const CLONE_VM              =   0x00000100;
+        const CLONE_FS              =   0x00000200;
+        const CLONE_FILES           =   0x00000400;
+        const CLONE_SIGHAND         =   0x00000800;
+        const CLONE_PIDFD           =   0x00001000;
+        const CLONE_PTRACE          =   0x00002000;
+        const CLONE_VFORK           =   0x00004000;
+        const CLONE_PARENT          =   0x00008000;
+        const CLONE_THREAD          =   0x00010000;
+        const CLONE_NEWNS           =   0x00020000;
+        const CLONE_SYSVSEM         =   0x00040000;
+        const CLONE_SETTLS          =   0x00080000;
+        const CLONE_PARENT_SETTID   =   0x00100000;
+        const CLONE_CHILD_CLEARTID  =   0x00200000;
+        const CLONE_DETACHED        =   0x00400000;
+        const CLONE_UNTRACED        =   0x00800000;
+        const CLONE_CHILD_SETTID    =   0x01000000;
+        const CLONE_NEWCGROUP       =   0x02000000;
+        const CLONE_NEWUTS          =   0x04000000;
+        const CLONE_NEWIPC          =   0x08000000;
+        const CLONE_NEWUSER         =   0x10000000;
+        const CLONE_NEWPID          =   0x20000000;
+        const CLONE_NEWNET          =   0x40000000;
+        const CLONE_IO              =   0x80000000;
+    }
+}
+
+/// # Explanation of Parameters
+/// Mainly about `ptid`, `tls` and `ctid`: \
+/// `CLONE_SETTLS`: The TLS (Thread Local Storage) descriptor is set to `tls`. \
+/// `CLONE_PARENT_SETTID`: Store the child thread ID at the location pointed to by `ptid` in the parent's memory. \
+/// `CLONE_CHILD_SETTID`: Store the child thread ID at the location pointed to by `ctid` in the child's memory. \
+/// `ptid` is also used in `CLONE_PIDFD` (since Linux 5.2) \
+/// Since user programs rarely use these, we could do lazy implementation.
+pub fn sys_clone(
+    flags: u32,
+    stack: *const u8,
+    ptid: *const u32,
+    tls: *const usize,
+    ctid: *const u32,
+) -> isize {
     let current_task = current_task().unwrap();
+    // This signal will be sent to its parent when it exits
+    // we need to add a field in TCB to support this feature, but not now.
+    let exit_signal = match Signals::from_signum((flags & 0xff) as usize) {
+        Ok(signal) => signal,
+        Err(_) => {
+            // This is permitted by standard, but we only support 64 signals
+            todo!()
+        }
+    };
+    // Sure to succeed, because all bits are valid (See `CloneFlags`)
+    let flags = CloneFlags::from_bits(flags & !0xff).unwrap();
+    info!(
+        "[sys_clone] flags: {:?}, exit_signal: {:?}, ptid: {:?}, tls: {:?}, ctid: {:?}",
+        flags, exit_signal, ptid, tls, ctid
+    );
     show_frame_consumption! {
-        "sys_fork";
+        "fork";
         let new_task = current_task.fork();
     }
     let new_pid = new_task.pid.0;
     // modify trap context of new_task, because it returns immediately after switching
     let trap_cx = new_task.acquire_inner_lock().get_trap_cx();
     // we do not have to move to next instruction since we have done it before
+    // we also do not need to prepare parameters on stack, musl has done it for us
+    if !stack.is_null() {
+        trap_cx.x[2] = stack as usize;
+    }
     // for child process, fork returns 0
     trap_cx.x[10] = 0;
     // add new task to scheduler
@@ -254,7 +316,11 @@ pub fn sys_fork() -> isize {
     new_pid as isize
 }
 
-pub fn sys_execve(pathname: *const u8, mut argv: *const *const u8, mut envp: *const *const u8) -> isize {
+pub fn sys_execve(
+    pathname: *const u8,
+    mut argv: *const *const u8,
+    mut envp: *const *const u8,
+) -> isize {
     let token = current_user_token();
     let path = translated_str(token, pathname);
     let mut argv_vec: Vec<String> = Vec::new();
@@ -403,11 +469,25 @@ pub fn sys_prlimit(
         if !old_limit.is_null() {
             match Resource::from_primitive(resource) {
                 Resource::NPROC => {
-                    copy_to_user(token, &(RLimit {rlim_cur:32, rlim_max: 32}), old_limit);
+                    copy_to_user(
+                        token,
+                        &(RLimit {
+                            rlim_cur: 32,
+                            rlim_max: 32,
+                        }),
+                        old_limit,
+                    );
                 }
                 Resource::NOFILE => {
-                    copy_to_user(token, &(RLimit {rlim_cur:64, rlim_max: 128}), old_limit);
-                },
+                    copy_to_user(
+                        token,
+                        &(RLimit {
+                            rlim_cur: 64,
+                            rlim_max: 128,
+                        }),
+                        old_limit,
+                    );
+                }
                 Resource::ILLEAGAL => return EINVAL,
                 _ => todo!(),
             }
