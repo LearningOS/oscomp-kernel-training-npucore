@@ -347,6 +347,9 @@ impl MemorySet {
                 if ph_flags.is_execute() {
                     map_perm |= MapPermission::X;
                 }
+                if load_addr.is_none() {
+                    load_addr = Some(start_va.into());
+                }
                 let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, map_perm, None);
                 if page_offset == 0 && ph.file_size() != 0 && !map_perm.contains(MapPermission::W) {
                     assert_eq!(ph.offset() % 0x1000, 0);
@@ -355,9 +358,6 @@ impl MemorySet {
                         map_area.data_frames.vpn_range.get_end().0 - map_area.data_frames.vpn_range.get_start().0
                     );
 
-                    if load_addr.is_none() {
-                        load_addr = Some(start_va.into());
-                    }
                     let kernel_start_vpn =
                         (VirtAddr::from(MMAP_BASE + (ph.offset() as usize))).floor();
                     map_area
