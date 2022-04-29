@@ -74,8 +74,8 @@ impl ProcClock {
 #[allow(unused)]
 #[derive(Clone, Copy)]
 pub struct Rusage {
-    ru_utime: TimeVal,  /* user CPU time used */
-    ru_stime: TimeVal,  /* system CPU time used */
+    pub ru_utime: TimeVal,  /* user CPU time used */
+    pub ru_stime: TimeVal,  /* system CPU time used */
     ru_maxrss: isize,   // NOT IMPLEMENTED /* maximum resident set size */
     ru_ixrss: isize,    // NOT IMPLEMENTED /* integral shared memory size */
     ru_idrss: isize,    // NOT IMPLEMENTED /* integral unshared data size */

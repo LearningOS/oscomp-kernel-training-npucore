@@ -154,6 +154,9 @@ impl TimeVal {
             tv_usec: (tick % CLOCK_FREQ) * USEC_PER_SEC / CLOCK_FREQ,
         }
     }
+    pub fn to_tick(&self) -> usize {
+        self.tv_sec * CLOCK_FREQ + self.tv_usec * CLOCK_FREQ / USEC_PER_SEC
+    }
     pub fn from_s(s: usize) -> Self {
         Self {
             tv_sec: s,
@@ -230,4 +233,12 @@ impl ITimerVal {
             it_value: TimeVal:: new(),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub struct Times {
+    pub tms_utime: usize,  /* user time */
+    pub tms_stime: usize,  /* system time */
+    pub tms_cutime: usize, /* user time of children */
+    pub tms_cstime: usize, /* system time of children */
 }

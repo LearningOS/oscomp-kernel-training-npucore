@@ -165,7 +165,7 @@ pub fn syscall_name(id: usize) -> &'static str {
 use crate::{
     fs::FdSet,
     task::Rusage,
-    timer::{ITimerVal, TimeSpec},
+    timer::{ITimerVal, TimeSpec, Times},
 };
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
@@ -244,6 +244,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_SIGACTION => sys_sigaction(args[0], args[1], args[2]),
         SYSCALL_SIGPROCMASK => sys_sigprocmask(args[0] as u32, args[1], args[2]),
         SYSCALL_SIGRETURN => sys_sigreturn(),
+        SYSCALL_TIMES => sys_times(args[0] as *mut Times),
         SYSCALL_NANOSLEEP => sys_nanosleep(
             args[0] as *const crate::timer::TimeSpec,
             args[1] as *mut crate::timer::TimeSpec,

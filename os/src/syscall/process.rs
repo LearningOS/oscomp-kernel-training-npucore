@@ -10,7 +10,7 @@ use crate::task::{
     exit_current_and_run_next, find_task_by_pid, signal::*, suspend_current_and_run_next,
     wake_interruptible, Rusage, TaskStatus,
 };
-use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone, NSEC_PER_SEC};
+use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone, NSEC_PER_SEC, Times};
 use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -604,6 +604,21 @@ pub fn sys_sigreturn() -> isize {
     let sp = trap_cx.x[2];
     copy_from_user(inner.get_user_token(), sp as *const TrapContext, trap_cx);
     return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
+}
+
+pub fn sys_times(buf: *mut Times) -> isize {
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    let token = inner.get_user_token();
+    let times = Times {
+        tms_utime: inner.rusage.ru_utime.to_tick(),
+        tms_stime: inner.rusage.ru_stime.to_tick(),
+        tms_cutime: 0,
+        tms_cstime: 0,
+    };
+    copy_to_user(token, &times, buf);
+    // return clock ticks that have elapsed since an arbitrary point in the past
+    get_time() as isize
 }
 
 pub fn sys_getrusage(who: isize, usage: *mut Rusage) -> isize {
