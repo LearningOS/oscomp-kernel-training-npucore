@@ -11,7 +11,7 @@ pub use poll::{ppoll, pselect, FdSet, PollFd};
 pub use dev::*;
 pub use finfo::*; //{Dirent, FdSet, Kstat, NewStat, DT_DIR, DT_REG, DT_UNKNOWN, *};
 pub use inode::{
-    /*find_par_inode_id, */ ch_dir, list_apps, open,
+    /*find_par_inode_id, */ list_apps, open,
     DiskInodeType, OSInode, OpenFlags, StatMode
 };
 //pub use iovec::{IoVec, IoVecs};

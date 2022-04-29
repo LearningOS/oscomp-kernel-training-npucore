@@ -29,13 +29,13 @@ pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
     pub kernel_stack: KernelStack,
-    pub bin_path: String,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
 }
 
 pub type FdTable = Vec<Option<FileDescriptor>>;
 pub struct TaskControlBlockInner {
+    pub working_dir: String,
     pub sigmask: Signals,
     pub trap_cx_ppn: PhysPageNum,
     pub base_size: usize,
@@ -49,7 +49,6 @@ pub struct TaskControlBlockInner {
     pub address: ProcAddress,
     pub heap_bottom: usize,
     pub heap_pt: usize,
-    pub current_path: String,
     pub siginfo: SigInfo,
     pub pgid: usize,
     pub rusage: Rusage,
@@ -169,9 +168,6 @@ impl TaskControlBlockInner {
             }
         }
     }
-    pub fn get_work_path(&self) -> String {
-        self.current_path.clone()
-    }
     pub fn add_signal(&mut self, signal: Signals) {
         self.siginfo.signal_pending.insert(signal);
     }
@@ -248,10 +244,10 @@ impl TaskControlBlock {
         // push a task context which goes to trap_return to the top of kernel stack
         let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
         let task_control_block = Self {
-            bin_path: String::from("initproc"),
             pid: pid_handle,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
+                working_dir:"/".to_string(),
                 trap_cx_ppn,
                 pgid,
                 sigmask: Signals::empty(),
@@ -273,7 +269,6 @@ impl TaskControlBlock {
                 address: ProcAddress::new(),
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
-                current_path: String::from("/"),
                 siginfo: SigInfo::new(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
@@ -491,7 +486,6 @@ impl TaskControlBlock {
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
-            bin_path: self.bin_path.clone(),
             inner: Mutex::new(TaskControlBlockInner {
                 //inherited
                 pgid: parent_inner.pgid,
@@ -499,7 +493,7 @@ impl TaskControlBlock {
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
                 //cloned(usu. still inherited)
-                current_path: parent_inner.current_path.clone(),
+                working_dir: parent_inner.working_dir.clone(),
                 siginfo: parent_inner.siginfo.clone(),
                 //new/empty
                 parent: Some(Arc::downgrade(self)),
@@ -586,11 +580,11 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
     );
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    let work_path = inner.get_work_path();
+    let working_dir = inner.working_dir.clone();
     drop(inner);
 
     match open(
-        work_path.as_str(),
+        working_dir.as_str(),
         path.as_str(),
         OpenFlags::O_RDONLY,
         DiskInodeType::File,
@@ -606,7 +600,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
                 b"\x7fELF" => elf_exec(file, &argv_vec, &envp_vec),
                 b"#!" => {
                     let shell_file = open(
-                        work_path.as_str(),
+                        working_dir.as_str(),
                         DEFAULT_SHELL,
                         OpenFlags::O_RDONLY,
                         DiskInodeType::File,

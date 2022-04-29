@@ -36,14 +36,14 @@ pub fn sys_getcwd(buf: usize, size: usize) -> isize {
         // The size argument is zero and buf is not a NULL pointer.
         return EINVAL;
     }
-    if inner.current_path.len() >= size {
+    if inner.working_dir.len() >= size {
         // The size argument is less than the length of the absolute pathname of the working directory,
         // including the terminating null byte.
         return ERANGE;
     }
     let token = inner.get_user_token();
     UserBuffer::new(translated_byte_buffer(token, buf as *const u8, size))
-        .write(inner.current_path.as_bytes());
+        .write(inner.working_dir.as_bytes());
     buf as isize
 }
 
@@ -409,10 +409,9 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
     let mut userbuf = UserBuffer::new(buf);
     let mut dirent = Dirent::empty();
     if fd == AT_FDCWD {
-        let work_path = inner.current_path.clone();
         if let Ok(file) = open(
             "/",
-            work_path.as_str(),
+            inner.working_dir.as_str(),
             OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
         ) {
@@ -569,7 +568,7 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
         dirfd, path, flags,
     );
 
-    let inode = match __openat(dirfd, path) {
+    let inode = match __openat(dirfd, &path) {
         Ok(inode) => inode,
         Err(errno) => return errno,
     };
@@ -588,10 +587,9 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
     let mut kstat = Stat::empty();
 
     if fd == AT_FDCWD {
-        let work_path = inner.current_path.clone();
         if let Ok(file) = open(
             "/",
-            work_path.as_str(),
+            inner.working_dir.as_str(),
             OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
         ) {
@@ -620,6 +618,48 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
                 info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size);
                 SUCCESS
             }
+        }
+    }
+}
+
+pub fn sys_chdir(path: *const u8) -> isize {
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    let token = inner.get_user_token();
+    let path = translated_str(token, path);
+    info!("[sys_chdir] path: {}", path);
+
+    if path.starts_with("/") {
+        match open(
+            "/",
+            path.as_str(),
+            OpenFlags::O_RDONLY,
+            DiskInodeType::Directory,
+        ) {
+            Ok(inode) => {
+                if !inode.is_dir() {
+                    return ENOTDIR;
+                }
+                inner.working_dir = path;
+                SUCCESS
+            }
+            Err(errno) => errno,
+        }
+    } else {
+        match open(
+            inner.working_dir.as_str(),
+            path.as_str(),
+            OpenFlags::O_RDONLY,
+            DiskInodeType::Directory,
+        ) {
+            Ok(inode) => {
+                if !inode.is_dir() {
+                    return ENOTDIR;
+                }
+                inner.working_dir += &path;
+                SUCCESS
+            }
+            Err(errno) => errno,
         }
     }
 }
@@ -666,7 +706,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     } else {
         if dirfd == AT_FDCWD {
             open(
-                inner.get_work_path().as_str(),
+                inner.working_dir.as_str(),
                 path.as_str(),
                 flags,
                 DiskInodeType::File,
@@ -763,7 +803,7 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
     } else {
         if dirfd == AT_FDCWD {
             match open(
-                inner.get_work_path().as_str(),
+                inner.working_dir.as_str(),
                 path.as_str(),
                 OpenFlags::O_CREAT | OpenFlags::O_EXCL,
                 DiskInodeType::Directory,
@@ -820,7 +860,7 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
         dirfd, path, flags
     );
 
-    let inode = match __openat(dirfd, path) {
+    let inode = match __openat(dirfd, &path) {
         Ok(inode) => inode,
         Err(errno) => return errno,
     };
@@ -848,11 +888,11 @@ pub fn sys_utimensat(
     let path = translated_str(token, pathname);
 
     info!(
-        "[sys_unlinkat] dirfd: {}, path: {}, times: {:?}, flags: {:?}",
+        "[sys_utimensat] dirfd: {}, path: {}, times: {:?}, flags: {:?}",
         dirfd, path, times, flags
     );
 
-    let inode = match __openat(dirfd, path) {
+    let inode = match __openat(dirfd, &path) {
         Ok(inode) => inode,
         Err(errno) => return errno,
     };
@@ -868,11 +908,11 @@ pub fn sys_utimensat(
 
 /// # Warning
 /// `acquire_inner_lock()` is called in this function
-fn __openat(dirfd: usize, path: String) -> Result<Arc<crate::fs::OSInode>, isize> {
+fn __openat(dirfd: usize, path: &str) -> Result<Arc<crate::fs::OSInode>, isize> {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let inode = if path.starts_with("/") {
-        if let Ok(inode) = open("/", path.as_str(), OpenFlags::O_RDONLY, DiskInodeType::File) {
+        if let Ok(inode) = open("/", path, OpenFlags::O_RDONLY, DiskInodeType::File) {
             inode
         } else {
             return Err(ENOENT);
@@ -880,8 +920,8 @@ fn __openat(dirfd: usize, path: String) -> Result<Arc<crate::fs::OSInode>, isize
     } else {
         if dirfd == AT_FDCWD {
             if let Ok(inode) = open(
-                inner.get_work_path().as_str(),
-                path.as_str(),
+                inner.working_dir.as_str(),
+                path,
                 OpenFlags::O_RDONLY,
                 DiskInodeType::File,
             ) {
@@ -899,7 +939,7 @@ fn __openat(dirfd: usize, path: String) -> Result<Arc<crate::fs::OSInode>, isize
                     if !dir_file.is_dir() {
                         return Err(ENOTDIR);
                     }
-                    if let Some(inode) = dir_file.find(path.as_str(), OpenFlags::O_RDONLY) {
+                    if let Some(inode) = dir_file.find(path, OpenFlags::O_RDONLY) {
                         inode
                     } else {
                         return Err(ENOENT);

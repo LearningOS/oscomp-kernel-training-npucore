@@ -327,31 +327,33 @@ impl OpenFlags {
     }
 }
 
+/// If `path` is absolute path, `working_dir` will be ignored.
 pub fn open(
-    work_path: &str,
+    working_dir: &str,
     path: &str,
     flags: OpenFlags,
     type_: DiskInodeType,
 ) -> Result<Arc<OSInode>, isize> {
     // DEBUG: 相对路径
     const BUSYBOX_PATH: &str = "/busybox";
-    let path = if path == "/touch" || path == "/rm" {
+    const REDIRECT_TO_BUSYBOX: [&str;3] = ["/touch", "/rm", "/ls"];
+    let path = if REDIRECT_TO_BUSYBOX.contains(&path) {
         BUSYBOX_PATH
     } else {
         path
     };
     let cur_inode = {
-        if work_path == "/" {
+        if working_dir == "/" || path.starts_with("/") {
             ROOT_INODE.clone()
         } else {
-            let wpath: Vec<&str> = work_path.split('/').collect();
-            ROOT_INODE.find_vfile_bypath(wpath).unwrap()
+            let components: Vec<&str> = working_dir.split('/').collect();
+            ROOT_INODE.find_vfile_bypath(components).unwrap()
         }
     };
-    let mut pathv: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+    let mut components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
     let (readable, writable) = flags.read_write();
 
-    if let Some(inode) = cur_inode.find_vfile_bypath(pathv.clone()) {
+    if let Some(inode) = cur_inode.find_vfile_bypath(components.clone()) {
         if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
             return Err(EEXIST);
         }
@@ -367,8 +369,8 @@ pub fn open(
     } else {
         if flags.contains(OpenFlags::O_CREAT) {
             // create file
-            let name = pathv.pop().unwrap();
-            if let Some(dir_file) = cur_inode.find_vfile_bypath(pathv.clone()) {
+            let name = components.pop().unwrap();
+            if let Some(dir_file) = cur_inode.find_vfile_bypath(components.clone()) {
                 if !dir_file.is_dir() {
                     return Err(ENOTDIR);
                 }
@@ -389,26 +391,6 @@ pub fn open(
     }
 }
 
-pub fn ch_dir(work_path: &str, path: &str) -> isize {
-    // 切换工作路径
-    // 切换成功，返回inode_id，否则返回-1
-    let cur_inode = {
-        if work_path == "/" || (path.len() > 0 && path.chars().nth(0).unwrap() == '/') {
-            ROOT_INODE.clone()
-        } else {
-            let wpath: Vec<&str> = work_path.split('/').collect();
-            //println!("in cd, work_pathv = {:?}", wpath);
-            ROOT_INODE.find_vfile_bypath(wpath).unwrap()
-        }
-    };
-    let pathv: Vec<&str> = path.split('/').collect();
-    if let Some(tar_dir) = cur_inode.find_vfile_bypath(pathv) {
-        // ! 当inode_id > 2^16 时，有溢出的可能（目前不会发生。。
-        0
-    } else {
-        -1
-    }
-}
 
 // pub fn clear_cache() {
 //     ROOT_INODE.clear_cache();

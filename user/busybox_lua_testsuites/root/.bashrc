@@ -19,11 +19,6 @@ shopt -s histappend
 HISTSIZE=1000
 HISTFILESIZE=2000
 
-# some functions redirect to busybox
-alias rm='__rm() { busybox rm $*; }; __rm'
-alias touch='__touch() { busybox touch $*; }; __touch'
-alias ls='__ls() { busybox ls $*; }; __ls'
-
 # some more ls aliases
 alias ll='ls -l'
 alias la='ls -A'
