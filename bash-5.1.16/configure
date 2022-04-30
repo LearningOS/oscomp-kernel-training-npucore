@@ -20493,7 +20493,7 @@ case "$srcdir" in
 	;;
 esac
 
-BUILD_DIR=`pwd`
+BUILD_DIR='$(topdir)'
 case "$BUILD_DIR" in
 *\ *)	BUILD_DIR=`echo "$BUILD_DIR" | sed 's: :\\\\ :g'` ;;
 *)	;;
