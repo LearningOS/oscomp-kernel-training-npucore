@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 use clap::{App, Arg};
 use easy_fs::block_cache::{Cache, CacheManager};
 use easy_fs::layout::{DiskInodeType, FATDirEnt};
-use easy_fs::{BlockDevice, EasyFileSystem, Inode};
+use easy_fs::{find_local, BlockDevice, EasyFileSystem, Inode};
 use lazy_static::*;
 use spin::{Mutex, RwLock};
 use std::fs::{File, OpenOptions};
@@ -26,6 +26,7 @@ impl BlockDevice for BlockFile {
 
     fn write_block(&self, block_id: usize, buf: &[u8]) {
         assert_eq!(buf.len() % BLOCK_SZ, 0);
+
         let mut file = self.0.lock();
         file.seek(SeekFrom::Start((block_id * BLOCK_SZ) as u64))
             .expect("Error when seeking!");
@@ -99,7 +100,8 @@ impl Cache for BlockCache {
 
     /// The mutable mapper to the block cache    
     fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V {
-        f(self.get_mut(offset))
+        let ret = f(self.get_mut(offset));
+        return ret;
     }
 }
 impl BlockCache {
@@ -233,6 +235,7 @@ fn easy_fs_pack() -> std::io::Result<()> {
         "data_area_start_block: {}, \nsec_per_clus: {}, \nbyts_per_clus: {}, \nroot_clus:{}",
         i.data_area_start_block, i.sec_per_clus, i.byts_per_clus, i.root_clus
     );
+    //    println!("fat ent no:{:?}", i.fat.tot_ent);
     let rt = Arc::new(Inode::new(
         i.root_clus as usize,
         DiskInodeType::Directory,
@@ -244,39 +247,61 @@ fn easy_fs_pack() -> std::io::Result<()> {
     println!("clus:{:?}", rt.direct.lock());
 
     let mut ent = FATDirEnt::empty();
-    println!(
-        "{},name: {}, size:{}",
-        rt.read_at_block_cache(0, ent.as_bytes_mut()),
-        ent.get_name(),
-        rt.file_size()
-    );
-    /* for j in rt.iter() {
-     *     println!(
-     *         "{:?}",
-     *         j /\* ,
-     *            * i.get_offset() *\/
-     *     );
-     * } */
-    let v = rt.ls();
-    for i in v {
-        println!("{}, clus:{}", i.0, i.1.get_first_clus());
-        if i.1.is_dir() {
-            println!("In dir {}:", i.0);
-            let dir = Arc::new(Inode::from_ent(rt.clone(), &i.1, i.2));
-            println!("dir info: {:?}", &i.1);
-            for j in dir.ls() {
-                println!("{}", j.0);
-            }
+
+    let print_iter = || {
+        let mut iter = rt.iter().enumerate();
+        for i in rt.iter().enumerate() {
+            println!(
+                "{}, ord: {}, last_ent: {}",
+                if !i.unused_not_last() && !i.last_and_unused() {
+                    i.get_name()
+                } else {
+                    if i.last_and_unused() {
+                        "last unused".to_string()
+                    } else {
+                        "unused not last".to_string()
+                    }
+                },
+                i.get_ord(),
+                i.is_last_long_dir_ent()
+            );
         }
-    }
+        iter.set_offset(4608);
+        println!("last: {:?}", iter.current_clone());
+        println!("rt_sz: {}", *rt.size.read());
+    };
+
+    let rm = || {
+        println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
+        let v = rt.ls();
+        let (_, ent, offset) = v.iter().find(|&i| i.0 == "cat").unwrap();
+        println!("{:?}", ent);
+        let cat = Arc::new(Inode::from_ent(rt.clone(), ent, *offset));
+
+        println!("direct:{:?}", cat.direct);
+        assert!(Inode::delete_from_disk(cat).is_ok());
+        println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
+    };
+
+    print_iter();
+
+    rm();
+
+    print_iter();
+    let mut text: [u8; 4096] = [0; 4096];
+    /*let i = easy_fs::find_local(rt.clone(), "lua_testcode.sh".to_string())
+        .unwrap()
+        .read_at_block_cache(0, &mut text);
+    println!("{}", String::from_utf8_lossy(&text[0..i]));
     println!(
         "{:?},{:?},{:?}",
-        easy_fs::find_local(rt.clone(), "hi".to_string()).is_none(),
+        easy_fs::find_local(rt.clone(), "lua_testcode.sh".to_string()).is_none(),
         easy_fs::find_local(rt.clone(), "etc".to_string())
             .unwrap()
             .get_inode_num(),
         rt.get_neighboring_sec(0)
-    );
+    );*/
+
     /*
     // 4MiB, at most 4095 files
     let root_inode = Arc::new(EasyFileSystem::root_inode(&efs));

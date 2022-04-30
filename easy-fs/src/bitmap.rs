@@ -150,6 +150,7 @@ impl<T: CacheManager> Fat<T> {
 
     pub fn cnt_all_fat(&self, block_device: &Arc<dyn BlockDevice>) -> usize {
         let mut sum = 0;
+        println!("[cnt_all_fat] self.clus{:?}", self.vacant_clus);
         for i in 0..self.tot_ent as u32 {
             if self.get_next_clus_num(i, block_device) == FAT_ENTRY_FREE {
                 sum += 1;
@@ -270,7 +271,9 @@ impl<T: CacheManager> Fat<T> {
     /// Find and allocate an empty block from data area.
     /// This function must be changed into a cluster-based one in the future.
     pub fn dealloc(&self, block_device: &Arc<dyn BlockDevice>, bit: u32) {
+        std::println!("hi1");
         self.set_next_clus(block_device, bit as u32, FAT_ENTRY_FREE);
+        std::println!("hi2");
         let mut lock = self.vacant_clus.lock();
         if lock.len() < VACANT_CLUS_CACHE_SIZE {
             lock.push_back(bit as u32);

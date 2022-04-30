@@ -3,7 +3,7 @@ use alloc::string::{String, ToString};
 use core::{fmt::Debug, mem};
 
 pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
-pub const DIR_ENTRY_UNUSED: u8 = 0x5e;
+pub const DIR_ENTRY_UNUSED: u8 = 0xe5;
 pub const DIR_ENTRY_LAST_AND_UNUSED: u8 = 0x0;
 pub const LAST_LONG_ENTRY: u8 = 0x40u8;
 #[derive(Debug, Clone, Copy)]
@@ -270,12 +270,23 @@ impl Debug for FATDirEnt {
 }
 
 impl FATDirEnt {
+    pub fn is_8_3(s: String) -> bool {
+        s.is_ascii() && s.to_ascii_uppercase() == s
+    }
     /// Embedded spaces within a long name are allowed.
     /// Leading and trailing spaces in a long name are ignored.
     /// Leading and embedded periods are allowed in a name and are stored in the long name.
     /// Trailing periods are ignored.
-    pub fn gen_short_name(s: String) -> String {
-        todo!()
+    /// No '~' & trailing numbers
+    pub fn gen_short_name_prefix(s: String) -> String {
+        let mut m = s;
+        m.to_uppercase().retain(|c| !r#" "#.contains(c));
+        m = m.trim_start_matches(".").to_string();
+        if m.len() <= 8 {
+            m = m.split_off(8);
+        }
+
+        m
     }
     pub fn get_ord(&self) -> usize {
         self.ord()
@@ -284,6 +295,16 @@ impl FATDirEnt {
         Self {
             short_entry: FATDirShortEnt::empty(),
         }
+    }
+    pub fn unused_not_last_entry() -> Self {
+        let mut i = Self::empty();
+        i.as_bytes_mut()[0] = DIR_ENTRY_UNUSED;
+        i
+    }
+    pub fn unused_and_last_entry() -> Self {
+        let mut i = Self::empty();
+        i.as_bytes_mut()[0] = DIR_ENTRY_LAST_AND_UNUSED;
+        i
     }
     pub fn as_bytes(&self) -> &[u8] {
         unsafe {
