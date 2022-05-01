@@ -9,7 +9,7 @@ mod zram;
 use core::arch::asm;
 
 use address::VPNRange;
-pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
+pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum, PPNRange};
 pub use frame_allocator::{
     frame_alloc, frame_alloc_uninit, frame_dealloc, frame_reserve, unallocated_frames, FrameTracker,
 };

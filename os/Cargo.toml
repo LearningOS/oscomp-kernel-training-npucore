@@ -35,6 +35,7 @@ board_qemu = ["oom_handler"]
 board_k210 = ["k210-pac", "k210-hal", "k210-soc", "oom_handler"]
 board_fu740 = ["fu740-pac", "fu740-hal", "zero_init"]
 log_off = ["log/max_level_off"]
+comp = ["board_qemu", "log_off"]
 
 [profile.dev]
 opt-level = 1

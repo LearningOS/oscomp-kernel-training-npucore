@@ -36,6 +36,8 @@ mod timer;
 mod trap;
 
 core::arch::global_asm!(include_str!("entry.asm"));
+#[cfg(feature = "comp")]
+core::arch::global_asm!(include_str!("preload_app.S"));
 
 fn mem_clear() {
     extern "C" {
@@ -67,6 +69,8 @@ pub fn rust_main() -> ! {
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
     fs::directory_tree::init_fs();
+    #[cfg(feature = "comp")]
+    fs::flush_preload();
     task::add_initproc();
     task::run_tasks();
     panic!("Unreachable in rust_main!");

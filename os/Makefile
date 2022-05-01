@@ -110,10 +110,14 @@ bootloader:
 kernel:
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
-    ifeq ($(MODE), debug)
-		@cargo build --features "board_$(BOARD) $(LOG_OPTION)"
+    ifdef COMP
+		@cargo build --release --features "comp"
     else
-		@cargo build --release --features "board_$(BOARD) $(LOG_OPTION)"
+        ifeq ($(MODE), debug)
+			@cargo build --features "board_$(BOARD) $(LOG_OPTION)"
+        else
+			@cargo build --release --features "board_$(BOARD) $(LOG_OPTION)"
+        endif
     endif
 	@rm src/linker.ld
 
