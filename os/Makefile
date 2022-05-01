@@ -59,6 +59,11 @@ DISASM ?= -x
 # build: env $(KERNEL_BIN) $(FS_IMG) fat32
 build: env $(KERNEL_BIN)
 
+comp: build
+	@cp $(BOOTLOADER) $(BOOTLOADER).copy
+	@dd if=$(KERNEL_BIN) of=$(BOOTLOADER).copy bs=$(K210_BOOTLOADER_SIZE) seek=1
+	@mv $(BOOTLOADER).copy $(KERNEL_BIN)
+
 env:
 	(rustup target list | grep "riscv64gc-unknown-none-elf (installed)") || rustup target add $(TARGET)
 #	cargo install cargo-binutils --vers ~0.2
@@ -86,7 +91,6 @@ sdcard:
 
 $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
-#	@$(OBJDUMP) -S $(KERNEL_ELF) > $(KERNEL_ELF).S
 
 $(APPS):
 
@@ -109,7 +113,7 @@ kernel:
     else
 		@cargo build --release --features "board_$(BOARD)"
     endif
-		@rm src/linker.ld
+	@rm src/linker.ld
 
 clean:
 	@cargo clean

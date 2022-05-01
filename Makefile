@@ -15,4 +15,5 @@ $(BASH):
 	cd $(BASH_DIR) && make 
 	$(MUSL_OBJCOPY) --strip-debug $(BASH)
 
-all: $(BASH)	
+$(KERNEL): $(INITPROC) $(BASH)
+	cd $(OS_DIR) && make comp BOARD=k210 COMP=true
