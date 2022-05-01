@@ -204,7 +204,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             sys_faccessat2(args[0] as u32, args[1] as *const u8, args[2] as u32, 0u32)
         }
         SYSCALL_CHDIR => sys_chdir(args[0] as *const u8),
-        SYSCALL_OPEN => sys_openat(AT_FDCWD, args[0] as *const u8, args[1] as u32, 0777u32),
+        SYSCALL_OPEN => sys_openat(AT_FDCWD, args[0] as *const u8, args[1] as u32, 0o777u32),
         SYSCALL_OPENAT => sys_openat(
             args[0],
             args[1] as *const u8,

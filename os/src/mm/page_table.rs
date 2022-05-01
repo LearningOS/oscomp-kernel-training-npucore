@@ -8,7 +8,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
 use bitflags::*;
-use log::{debug, error, info, trace, warn};
 bitflags! {
     /// Page Table Entry flags
     pub struct PTEFlags: u8 {
@@ -538,7 +537,7 @@ pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
             .translate_va(VirtAddr::from(dst as usize))
             .unwrap();
         unsafe {
-            let mut dst_ptr = dst_pa.0 as *mut u8;
+            let dst_ptr = dst_pa.0 as *mut u8;
             core::slice::from_raw_parts_mut(dst_ptr, size)
                 .copy_from_slice(core::slice::from_raw_parts(src.as_ptr(), size));
             *dst_ptr.add(size) = b'\0';

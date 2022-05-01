@@ -1,16 +1,13 @@
 use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode};
-use crate::fs::{
-    ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Null, Stat, Zero, MNT_TABLE, TTY,
-};
+use crate::fs::{ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Null, Stat, Zero, TTY};
 use crate::mm::{
-    copy_from_user, copy_from_user_array, copy_to_user_array, translated_byte_buffer,
+    copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
     translated_byte_buffer_append_to_existed_vec, translated_ref, translated_refmut,
     translated_str, MapPermission, UserBuffer,
 };
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
 use crate::{move_ptr_to_opt, ptr_to_opt_ref, ptr_to_opt_ref_mut};
-use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -402,12 +399,9 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
-    let buf = translated_byte_buffer(token, dirp, count);
 
-    let dirent_size = size_of::<Dirent>();
-    let mut total_len: usize = 0;
-    let mut userbuf = UserBuffer::new(buf);
-    let mut dirent = Dirent::empty();
+    let mut offset: usize = 0;
+
     if fd == AT_FDCWD {
         if let Ok(file) = open(
             "/",
@@ -416,18 +410,19 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
             DiskInodeType::Directory,
         ) {
             loop {
-                if total_len + dirent_size > count {
+                if offset + size_of::<Dirent>() > count {
                     break;
                 }
-                if file.getdirent(&mut dirent) > 0 {
-                    userbuf.write_at(total_len, dirent.as_bytes());
-                    total_len += dirent_size;
+                if let Some(dirent) = file.get_dirent() {
+                    copy_to_user(token, dirent.as_ref(), unsafe { dirp.add(offset) }
+                        as *mut Dirent);
+                    offset += size_of::<Dirent>();
                 } else {
                     break;
                 }
             }
             info!("[sys_getdents64] fd: AT_FDCWD, count: {}", count);
-            total_len as isize //warning
+            offset as isize
         } else {
             info!("[sys_getdents64] fd: AT_FDCWD, count: {}", count);
             ENOENT
@@ -440,18 +435,19 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
         match &file_descriptor.file {
             FileLike::Regular(file) => {
                 loop {
-                    if total_len + dirent_size > count {
+                    if offset + size_of::<Dirent>() > count {
                         break;
                     }
-                    if file.getdirent(&mut dirent) > 0 {
-                        userbuf.write_at(total_len, dirent.as_bytes());
-                        total_len += dirent_size;
+                    if let Some(dirent) = file.get_dirent() {
+                        copy_to_user(token, dirent.as_ref(), unsafe { dirp.add(offset) }
+                            as *mut Dirent);
+                        offset += size_of::<Dirent>();
                     } else {
                         break;
                     }
                 }
                 info!("[sys_getdents64] fd: {}, count: {}", fd, count);
-                total_len as isize //warning
+                offset as isize
             }
             _ => ENOTDIR,
         }
@@ -554,8 +550,7 @@ bitflags! {
 pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
-    let mut userbuf = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<Stat>()));
-    let mut stat = Stat::empty();
+
     let flags = match FstatatFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -573,8 +568,7 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
         Err(errno) => return errno,
     };
 
-    inode.get_stat(&mut stat);
-    userbuf.write(stat.as_bytes());
+    copy_to_user(token, inode.stat().as_ref(), buf as *mut Stat);
     SUCCESS
 }
 
@@ -582,20 +576,17 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
-    let buf = translated_byte_buffer(token, statbuf, size_of::<Stat>());
-    let mut userbuf = UserBuffer::new(buf);
-    let mut kstat = Stat::empty();
 
     if fd == AT_FDCWD {
-        if let Ok(file) = open(
+        if let Ok(inode) = open(
             "/",
             inner.working_dir.as_str(),
             OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
         ) {
-            file.get_stat(&mut kstat);
-            info!("[syscall_fstat] fd = {}, size = {}", fd, kstat.st_size);
-            userbuf.write(kstat.as_bytes());
+            let stat = inode.stat();
+            copy_to_user(token, stat.as_ref(), statbuf as *mut Stat);
+            info!("[syscall_fstat] fd = {}, stat = {:?}", fd, stat);
             SUCCESS
         } else {
             ENOENT
@@ -605,20 +596,13 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
             return EBADF;
         }
         let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
-        match &file_descriptor.file {
-            FileLike::Regular(f) => {
-                f.get_stat(&mut kstat);
-                userbuf.write(kstat.as_bytes());
-                info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size);
-                SUCCESS
-            }
-            _ => {
-                let kstat = Stat::new_abstract();
-                userbuf.write(kstat.as_bytes());
-                info!("[sys_fstat] fd:{}; size:{}", fd, kstat.st_size);
-                SUCCESS
-            }
-        }
+        let stat = match &file_descriptor.file {
+            FileLike::Regular(inode) => inode.stat(),
+            FileLike::Abstract(abstract_file) => abstract_file.stat(),
+        };
+        copy_to_user(token, stat.as_ref(), statbuf as *mut Stat);
+        info!("[syscall_fstat] fd: {}, stat: {:?}", fd, stat);
+        SUCCESS
     }
 }
 

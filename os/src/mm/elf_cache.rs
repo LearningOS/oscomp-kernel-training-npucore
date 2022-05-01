@@ -15,7 +15,7 @@ lazy_static! {
 /// Push the elf area if found, or try to allocate space for reading in.
 /// If no space is left, a GC through `try_remove()` will be triggered.
 pub fn push_elf_area(file: Arc<crate::fs::OSInode>) -> Result {
-    let len: usize = file.get_size();
+    let len: usize = file.size();
     let rd = ELF_CACHE.read();
     let elf_file = rd.iter().find(|now| {
         if let FileLike::Regular(ref i) = now.map_file.as_ref().unwrap() {

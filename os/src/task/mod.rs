@@ -113,7 +113,7 @@ lazy_static! {
     pub static ref INITPROC: Arc<TaskControlBlock> = Arc::new({
         let inode = open("/", "initproc", OpenFlags::O_RDONLY, DiskInodeType::File).unwrap();
         let start: usize = crate::config::MMAP_BASE;
-        let len = inode.get_size();
+        let len = inode.size();
         crate::mm::KERNEL_SPACE.lock().insert_framed_area(
             start.into(),
             (start + len).into(),

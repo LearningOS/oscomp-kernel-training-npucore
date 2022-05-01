@@ -543,7 +543,7 @@ impl TaskControlBlock {
 }
 
 fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> isize {
-    let size = file.get_size();
+    let size = file.size();
     let start: usize = MMAP_BASE;
     let buffer = unsafe { core::slice::from_raw_parts_mut(start as *mut u8, size) };
     show_frame_consumption! {
@@ -590,7 +590,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
         DiskInodeType::File,
     ) {
         Ok(file) => {
-            if file.get_size() < 4 {
+            if file.size() < 4 {
                 return ENOEXEC;
             }
             let mut magic_number = Box::<[u8; 4]>::new([0; 4]);

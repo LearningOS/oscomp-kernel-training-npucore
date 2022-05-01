@@ -1,10 +1,11 @@
-use super::{Dirent, File, Stat, DT_DIR, DT_REG, DT_UNKNOWN};
+use super::{Dirent, File, OpenFlags, Stat, StatMode};
 use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
 use crate::timer::TimeSpec;
 use crate::{drivers::BLOCK_DEVICE, println};
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -57,56 +58,39 @@ impl OSInode {
         }
     }
 
-    pub fn getdirent(&self, dirent: &mut Dirent /*, offset:isize*/) -> isize {
+    pub fn get_dirent(&self) -> Option<Box<Dirent>> {
+        const DT_UNKNOWN: u8 = 0;
+        const DT_DIR: u8 = 4;
+        const DT_REG: u8 = 8;
+
         let mut inner = self.inner.lock();
         let offset = inner.offset as u32;
         if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset as usize) {
-            let mut d_type: u8 = 0;
-            if attri & ATTRIBUTE_DIRECTORY != 0 {
-                d_type = DT_DIR;
+            let d_type: u8 = if attri & ATTRIBUTE_DIRECTORY != 0 {
+                DT_DIR
             } else if attri & ATTRIBUTE_ARCHIVE != 0 {
-                d_type = DT_REG;
+                DT_REG
             } else {
-                d_type = DT_UNKNOWN;
-            }
-            //println!("name = {}", name.as_str());
-            dirent.fill_info(
-                name.as_str(),
+                DT_UNKNOWN
+            };
+            let dirent = Box::new(Dirent::new(
                 first_clu as usize,
                 (off - offset) as isize,
-                name.len() as u16,
                 d_type,
-            );
+                name.as_str(),
+            ));
             inner.offset = off as usize;
-            let len = (name.len() + 8 * 4) as isize;
-            len
+            Some(dirent)
         } else {
-            -1
+            None
         }
     }
+
     pub fn get_ino(&self) -> usize {
-        let mut i = Stat::new_abstract();
-        self.get_stat(&mut i);
-        i.get_ino()
+        self.stat().get_ino()
     }
 
-    pub fn get_stat(&self, stat: &mut Stat) {
-        let inner = self.inner.lock();
-        let vfile = inner.inode.clone();
-        let (size, atime, mtime, ctime, ino) = vfile.stat();
-        let st_mod: u32 = {
-            if vfile.is_dir() {
-                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
-                    .bits()
-            } else {
-                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
-                    .bits()
-            }
-        };
-        stat.fill_info(0, ino, st_mod, 1, size, atime, mtime, ctime);
-    }
-
-    pub fn get_size(&self) -> usize {
+    pub fn size(&self) -> usize {
         let inner = self.inner.lock();
         let (size, _, _, _, _) = inner.inode.stat();
         return size as usize;
@@ -144,37 +128,10 @@ impl OSInode {
         None
     }
 
-    pub fn clear(&self) {
-        let inner = self.inner.lock();
-        inner.inode.clear();
-    }
-
     pub fn delete(&self) -> usize {
         let inner = self.inner.lock();
         inner.inode.remove()
     }
-
-    pub fn set_head_cluster(&self, cluster: u32) {
-        let inner = self.inner.lock();
-        let vfile = &inner.inode;
-        vfile.set_first_cluster(cluster);
-    }
-
-    pub fn get_head_cluster(&self) -> u32 {
-        let inner = self.inner.lock();
-        let vfile = &inner.inode;
-        vfile.first_cluster()
-    }
-
-    pub fn set_delete_bit(&self) {
-        let inner = self.inner.lock();
-        inner.inode.set_delete_bit();
-    }
-
-    // pub fn set_offset(&self, off: usize) {
-    //     let mut inner = self.inner.lock();
-    //     inner.offset = off;
-    // }
 
     pub fn lseek(&self, offset: isize, whence: SeekWhence) -> isize {
         let mut inner = self.inner.lock();
@@ -230,23 +187,6 @@ lazy_static! {
         Arc::new( manager_reader.get_root_vfile(& fat32_manager) )
     };
 }
-/*
-lazy_static! {
-    // 目录栈
-    pub static ref DIR_STACK: Vec<Arc<Inode>> = vec![ROOT_INODE.clone()];
-}
-*/
-
-// pub fn init_rootfs() {
-//     println!("[fs] build rootfs ... start");
-//     println!("[fs] build rootfs: creating /proc");
-//     let file = open("/", "proc", OpenFlags::O_CREAT, DiskInodeType::Directory).unwrap();
-//     println!("[fs] build rootfs: init /proc");
-//     let file = open("/proc", "mounts", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
-//     let meminfo = open("/proc", "meminfo", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
-//     let file = open("/", "ls", OpenFlags::O_CREAT, DiskInodeType::File).unwrap();
-//     println!("[fs] build rootfs ... finish");
-// }
 
 pub fn list_apps() {
     println!("/**** APPS ****");
@@ -258,75 +198,6 @@ pub fn list_apps() {
     println!("**************/")
 }
 
-// TODO: 对所有的Inode加锁！
-// 在这一层实现互斥访问
-// pub fn list_files(work_path: &str, path: &str) {
-//     let work_inode = {
-//         if work_path == "/" || (path.len() > 0 && path.chars().nth(0).unwrap() == '/') {
-//             //println!("curr is root");
-//             ROOT_INODE.clone()
-//         } else {
-//             let wpath: Vec<&str> = work_path.split('/').collect();
-//             ROOT_INODE.find_vfile_bypath(wpath).unwrap()
-//         }
-//     };
-//     let mut pathv: Vec<&str> = path.split('/').collect();
-//     let cur_inode = work_inode.find_vfile_bypath(pathv).unwrap();
-
-//     let mut file_vec = cur_inode.ls_lite().unwrap();
-//     file_vec.sort();
-//     for i in 0..file_vec.len() {
-//         if file_vec[i].1 & ATTRIBUTE_DIRECTORY != 0 {
-//             println!("{}  ", color_text!(file_vec[i].0, 96));
-//         } else {
-//             // TODO: 统一配色！
-//             println!("{}  ", file_vec[i].0);
-//         }
-//     }
-// }
-
-bitflags! {
-    pub struct OpenFlags: u32 {
-        const O_RDONLY      =   0o0;
-        const O_WRONLY      =   0o1;
-        const O_RDWR        =   0o2;
-
-        const O_CREAT       =   0o100;
-        const O_EXCL        =   0o200;
-        const O_NOCTTY      =   0o400;
-        const O_TRUNC       =   0o1000;
-
-        const O_APPEND      =   0o2000;
-        const O_NONBLOCK    =   0o4000;
-        const O_DSYNC       =   0o10000;
-        const O_SYNC        =   0o4010000;
-        const O_RSYNC       =   0o4010000;
-        const O_DIRECTORY   =   0o200000;
-        const O_NOFOLLOW    =   0o400000;
-        const O_CLOEXEC     =   0o2000000;
-        const O_ASYNC       =   0o20000;
-        const O_DIRECT      =   0o40000;
-        const O_LARGEFILE   =   0o100000;
-        const O_NOATIME     =   0o1000000;
-        const O_PATH        =   0o10000000;
-        const O_TMPFILE     =   0o20200000;
-    }
-}
-
-impl OpenFlags {
-    /// Do not check validity for simplicity
-    /// Return (readable, writable)
-    pub fn read_write(&self) -> (bool, bool) {
-        if self.is_empty() {
-            (true, false)
-        } else if self.contains(Self::O_WRONLY) {
-            (false, true)
-        } else {
-            (true, true)
-        }
-    }
-}
-
 /// If `path` is absolute path, `working_dir` will be ignored.
 pub fn open(
     working_dir: &str,
@@ -336,7 +207,7 @@ pub fn open(
 ) -> Result<Arc<OSInode>, isize> {
     // DEBUG: 相对路径
     const BUSYBOX_PATH: &str = "/busybox";
-    const REDIRECT_TO_BUSYBOX: [&str;3] = ["/touch", "/rm", "/ls"];
+    const REDIRECT_TO_BUSYBOX: [&str; 3] = ["/touch", "/rm", "/ls"];
     let path = if REDIRECT_TO_BUSYBOX.contains(&path) {
         BUSYBOX_PATH
     } else {
@@ -390,38 +261,6 @@ pub fn open(
         Err(ENOENT)
     }
 }
-
-
-// pub fn clear_cache() {
-//     ROOT_INODE.clear_cache();
-// }
-
-// TODO: 不急
-// 复制文件/目录
-//pub fn fcopy(src_inode_id: u32, src_path: &str, dst_inode_id: u32, dst_path: &str )->bool{
-//    let spathv:Vec<&str> = src_path.split('/').collect();
-//    let dpathv:Vec<&str> = dst_path.split('/').collect();
-//    let src_ino = EasyFileSystem::get_inode(&ROOT_INODE.get_fs(), src_inode_id);
-//    src_ino.fcopy(spathv, dst_inode_id,dpathv)
-//}
-
-// 移动文件/目录
-//pub fn fmove(src_inode_id: u32, src_path: &str, dst_inode_id: u32, dst_path: &str )->bool{
-//    let spathv:Vec<&str> = src_path.split('/').collect();
-//    let dpathv:Vec<&str> = dst_path.split('/').collect();
-//    let src_ino = EasyFileSystem::get_inode(&ROOT_INODE.get_fs(), src_inode_id);
-//    src_ino.fmove(spathv, dst_inode_id,dpathv)
-//}
-
-// pub fn remove(inode_id: u32, path: &str, type_: DiskInodeType)->bool{
-//     // type_确认要删除的文件类型，如果是目录，递归删除
-//     let curr_inode = EasyFileSystem::get_inode(
-//         &ROOT_INODE.get_fs().clone(),
-//         inode_id
-//     );
-//     let pathv:Vec<&str> = path.split('/').collect();
-//     curr_inode.remove(pathv,type_)
-// }
 
 impl File for OSInode {
     fn readable(&self) -> bool {
@@ -500,36 +339,19 @@ impl File for OSInode {
             }
         }
     }
-}
-
-bitflags! {
-    pub struct StatMode: u32 {
-        const S_IFMT    =   0o170000; //bit mask for the file type bit field
-        const S_IFSOCK  =   0o140000; //socket
-        const S_IFLNK   =   0o120000; //symbolic link
-        const S_IFREG   =   0o100000; //regular file
-        const S_IFBLK   =   0o060000; //block device
-        const S_IFDIR   =   0o040000; //directory
-        const S_IFCHR   =   0o020000; //character device
-        const S_IFIFO   =   0o010000; //FIFO
-
-        const S_ISUID   =   0o4000; //set-user-ID bit (see execve(2))
-        const S_ISGID   =   0o2000; //set-group-ID bit (see below)
-        const S_ISVTX   =   0o1000; //sticky bit (see below)
-
-        const S_IRWXU   =   0o0700; //owner has read, write, and execute permission
-        const S_IRUSR   =   0o0400; //owner has read permission
-        const S_IWUSR   =   0o0200; //owner has write permission
-        const S_IXUSR   =   0o0100; //owner has execute permission
-
-        const S_IRWXG   =   0o0070; //group has read, write, and execute permission
-        const S_IRGRP   =   0o0040; //group has read permission
-        const S_IWGRP   =   0o0020; //group has write permission
-        const S_IXGRP   =   0o0010; //group has execute permission
-
-        const S_IRWXO   =   0o0007; //others (not in group) have read, write,and execute permission
-        const S_IROTH   =   0o0004; //others have read permission
-        const S_IWOTH   =   0o0002; //others have write permission
-        const S_IXOTH   =   0o0001; //others have execute permission
+    fn stat(&self) -> Box<Stat> {
+        let inner = self.inner.lock();
+        let vfile = inner.inode.clone();
+        let (size, atime, mtime, ctime, ino) = vfile.stat();
+        let st_mod: u32 = {
+            if vfile.is_dir() {
+                (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
+                    .bits()
+            } else {
+                (StatMode::S_IFREG | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
+                    .bits()
+            }
+        };
+        Box::new(Stat::new(0, ino, st_mod, 1, 0, size, atime, mtime, ctime))
     }
 }
