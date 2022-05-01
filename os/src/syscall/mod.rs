@@ -200,6 +200,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_IOCTL => sys_ioctl(args[0], args[1] as u32, args[2]),
         SYSCALL_MKDIRAT => sys_mkdirat(args[0], args[1] as *const u8, args[2] as u32),
         SYSCALL_UNLINKAT => sys_unlinkat(args[0], args[1] as *const u8, args[2] as u32),
+        SYSCALL_UMOUNT2 => sys_umount2(args[0] as *const u8, args[1] as u32),
+        SYSCALL_MOUNT => sys_mount(
+            args[0] as *const u8,
+            args[1] as *const u8,
+            args[2] as *const u8,
+            args[3],
+            args[4] as *const u8,
+        ),
         SYSCALL_FACCESSAT => {
             sys_faccessat2(args[0] as u32, args[1] as *const u8, args[2] as u32, 0u32)
         }

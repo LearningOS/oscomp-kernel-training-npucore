@@ -860,6 +860,88 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
     SUCCESS
 }
 
+bitflags! {
+    pub struct UmountFlags: u32 {
+        const MNT_FORCE           =   1;
+        const MNT_DETACH          =   2;
+        const MNT_EXPIRE          =   4;
+        const UMOUNT_NOFOLLOW     =   8;
+    }
+}
+
+pub fn sys_umount2(target: *const u8, flags: u32) -> isize {
+    if target.is_null() {
+        return EINVAL;
+    }
+    let token = current_user_token();
+    let target = translated_str(token, target);
+    let flags = match UmountFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => return EINVAL,
+    };
+    info!("[sys_umount2] target: {}, flags: {:?}", target, flags);
+    warn!("[sys_umount2] fake implementation!");
+    SUCCESS
+}
+
+bitflags! {
+    pub struct MountFlags: usize {
+        const MS_RDONLY         =   1;
+        const MS_NOSUID         =   2;
+        const MS_NODEV          =   4;
+        const MS_NOEXEC         =   8;
+        const MS_SYNCHRONOUS    =   16;
+        const MS_REMOUNT        =   32;
+        const MS_MANDLOCK       =   64;
+        const MS_DIRSYNC        =   128;
+        const MS_NOATIME        =   1024;
+        const MS_NODIRATIME     =   2048;
+        const MS_BIND           =   4096;
+        const MS_MOVE           =   8192;
+        const MS_REC            =   16384;
+        const MS_SILENT         =   32768;
+        const MS_POSIXACL       =   (1<<16);
+        const MS_UNBINDABLE     =   (1<<17);
+        const MS_PRIVATE        =   (1<<18);
+        const MS_SLAVE          =   (1<<19);
+        const MS_SHARED         =   (1<<20);
+        const MS_RELATIME       =   (1<<21);
+        const MS_KERNMOUNT      =   (1<<22);
+        const MS_I_VERSION      =   (1<<23);
+        const MS_STRICTATIME    =   (1<<24);
+        const MS_LAZYTIME       =   (1<<25);
+        const MS_NOREMOTELOCK   =   (1<<27);
+        const MS_NOSEC          =   (1<<28);
+        const MS_BORN           =   (1<<29);
+        const MS_ACTIVE         =   (1<<30);
+        const MS_NOUSER         =   (1<<31);
+    }
+}
+
+pub fn sys_mount(
+    source: *const u8,
+    target: *const u8,
+    filesystemtype: *const u8,
+    mountflags: usize,
+    data: *const u8,
+) -> isize {
+    if source.is_null() || target.is_null() || filesystemtype.is_null() {
+        return EINVAL;
+    }
+    let token = current_user_token();
+    let source = translated_str(token, source);
+    let target = translated_str(token, target);
+    let filesystemtype = translated_str(token, filesystemtype);
+    // infallible
+    let mountflags = MountFlags::from_bits(mountflags).unwrap();
+    info!(
+        "[sys_mount] source: {}, target: {}, filesystemtype: {}, mountflags: {:?}, data: {:?}",
+        source, target, filesystemtype, mountflags, data
+    );
+    warn!("[sys_mount] fake implementation!");
+    SUCCESS
+}
+
 pub fn sys_utimensat(
     dirfd: usize,
     pathname: *const u8,
