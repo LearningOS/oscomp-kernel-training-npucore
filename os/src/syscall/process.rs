@@ -422,7 +422,7 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
 }
 
 #[allow(unused)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RLimit {
     rlim_cur: usize, /* Soft limit */
     rlim_max: usize, /* Hard limit (ceiling for rlim_cur) */
@@ -465,9 +465,12 @@ pub fn sys_prlimit(
         let task = current_task().unwrap();
         let inner = task.acquire_inner_lock();
         let token = inner.get_user_token();
+        let resource = Resource::from_primitive(resource);
+        info!("[sys_prlimit] pid: {}, resource: {:?}", pid, resource);
+
         drop(inner);
         if !old_limit.is_null() {
-            match Resource::from_primitive(resource) {
+            match resource {
                 Resource::NPROC => {
                     copy_to_user(
                         token,
@@ -493,7 +496,20 @@ pub fn sys_prlimit(
             }
         }
         if !new_limit.is_null() {
-            todo!();
+            let rlimit = &mut RLimit {rlim_cur: 0, rlim_max: 0};
+            copy_from_user(
+                token,
+                new_limit,
+                rlimit,
+            );
+            warn!("[sys_prlimit] new_limit is not implemented yet, but it's not null! new_limit: {:?}", rlimit);
+            match resource {
+                Resource::NOFILE => {
+                    // Not implemented yet, for the sake of test we don't panic.
+                }
+                Resource::ILLEAGAL => return EINVAL,
+                _ => todo!(),
+            }
         }
     } else {
         todo!();
