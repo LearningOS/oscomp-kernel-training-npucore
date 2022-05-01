@@ -1,23 +1,16 @@
 use alloc::collections::BTreeMap;
 use core::fmt::{self, Debug, Error, Formatter};
 use log::{debug, error, info, trace, warn};
-use riscv::register::{
-    scause::{self, Exception, Interrupt, Trap},
-    sie, stval, stvec,
-};
+use num_enum::FromPrimitive;
+use riscv::register::{scause, stval};
 
 use crate::config::*;
 use crate::mm::{copy_from_user, copy_to_user, translated_ref, translated_refmut};
 use crate::syscall::errno::*;
-use crate::task::{block_current_and_run_next, current_trap_cx, exit_current_and_run_next};
+use crate::task::{block_current_and_run_next, exit_current_and_run_next};
 use crate::trap::TrapContext;
 
 use super::current_task;
-
-/// Default action.
-pub const SIG_DFL: usize = 0;
-/// Ignore signal.  
-pub const SIG_IGN: usize = 1;
 
 bitflags! {
     /// Signal
@@ -89,7 +82,7 @@ impl Signals {
 
 bitflags! {
     /// Bits in `sa_flags' used to denote the default signal action.
-    pub struct SaFlags: usize{
+    pub struct SigActionFlags: usize{
     /// Don't send SIGCHLD when children stop.
         const SA_NOCLDSTOP = 1		   ;
     /// Don't create zombie on child death.
@@ -106,41 +99,39 @@ bitflags! {
         const SA_RESETHAND = 0x80000000;
     /// Historical no-op.
         const SA_INTERRUPT = 0x20000000;
-    /// I don't know what it means, but it presents in busybox!
+    /// Use signal trampoline provided by C library's wrapper function.
         const SA_RESTORER  = 0x04000000;
     }
 }
 
+#[allow(non_camel_case_types)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, FromPrimitive)]
+#[repr(usize)]
+pub enum SigActionHandler {
+    /// Default action.
+    SIG_DFL = 0,
+    /// Ignore signal.  
+    SIG_IGN = 1,
+    #[num_enum(default)]
+    SIG_HANDLER,
+}
 #[derive(Clone, Copy)]
 #[repr(C)]
-// sigset_t   sa_mask;//保存的是当进程在处理信号的时候，收到的信号
-// int        sa_flags;//SA_SIGINFO，OS在处理信号的时候，调用的就是sa_sigaction函数指针当中
-// //保存的值0，在处理信号的时候，调用sa_handler保存的函数
-
 pub struct SigAction {
-    /// 有的平台上是个union:
-    /// void     (*sa_handler)(int);//函数指针，保存了内核对信号的处理方式
-    /// void     (*sa_sigaction)(int, siginfo_t *, void *);//
-    pub sa_handler: usize,
-    //pub sa_sigaction: SaFlags,
-    /// 指定本次信号行为的标识
-    pub sa_flags: SaFlags,
-    /// 执行的时候需要阻塞的信号,另外除非SA_NODEFER定义,否则也需要阻塞本次触发的信号
-    pub sa_mask: Signals,
-    // void     (*sa_restorer)(void); NOT USED BY LINUX/POSIX!
+    pub handler: SigActionHandler,
+    pub flags: SigActionFlags,
+    pub restorer: usize,
+    pub mask: Signals,
 }
 
 impl SigAction {
     pub fn new() -> Self {
         Self {
-            sa_handler: SIG_DFL,
-            sa_flags: SaFlags::empty(),
-            sa_mask: Signals::empty(),
+            handler: SigActionHandler::SIG_DFL,
+            flags: SigActionFlags::empty(),
+            restorer: 0,
+            mask: Signals::empty(),
         }
-    }
-
-    pub fn is_null(&self) -> bool {
-        self.sa_handler == 0 && self.sa_flags.is_empty() && self.sa_mask.is_empty()
     }
 }
 #[derive(Clone)]
@@ -170,8 +161,8 @@ impl Debug for SigInfo {
 impl Debug for SigAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
-            "[ sa_handler: 0x{:X}, sa_mask: ({:?}), sa_flags: ({:?}) ]",
-            self.sa_handler, self.sa_mask, self.sa_flags
+            "[ sa_handler: 0x{:?}, sa_mask: ({:?}), sa_flags: ({:?}) ]",
+            self.handler, self.mask, self.flags
         ))
     }
 }
@@ -208,9 +199,11 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
             if act as usize != 0 {
                 let sigact = &mut SigAction::new();
                 copy_from_user(token, act, sigact);
-                sigact.sa_mask.remove(Signals::SIGSTOP | Signals::SIGKILL);
+                sigact.mask.remove(Signals::SIGILL | Signals::SIGSEGV | Signals::SIGKILL | Signals::SIGSTOP);
                 // push to PCB, ignore mask and flags now
-                if !(sigact.sa_handler == SIG_DFL || sigact.sa_handler == SIG_IGN) {
+                if !(sigact.handler == SigActionHandler::SIG_DFL
+                    || sigact.handler == SigActionHandler::SIG_IGN)
+                {
                     inner.siginfo.signal_handler.insert(signal, *sigact);
                 };
                 trace!("[sigaction] *act: {:?}", sigact);
@@ -245,15 +238,15 @@ pub fn do_signal() {
                 } else {
                     copy_to_user(inner.get_user_token(), trap_cx, sp as *mut TrapContext); // restore context on user stack
                     trap_cx.set_sp(sp as usize); // update sp, because we pushed trapcontext into stack
-                    trap_cx.x[10] = signal.to_signum().unwrap(); // a0 <= signum, parameter.
-                    trap_cx.x[1] = SIGNAL_TRAMPOLINE; // ra <= __call_sigreturn, when handler ret, we will go to __call_sigreturn
-                    trap_cx.sepc = act.sa_handler; // recover pc with addr of handler
+                    trap_cx.x[10] = signal.to_signum().unwrap(); // a0 <- signum, parameter.
+                    trap_cx.x[1] = SIGNAL_TRAMPOLINE; // ra <- __call_sigreturn, when handler ret, we will go to __call_sigreturn
+                    trap_cx.sepc = act.handler as usize; // recover pc with addr of handler
                 }
                 trace!(
-                    "[do_signal] signal: {:?}, signum: {:?}, handler: 0x{:X} (ra: 0x{:X}, sp: 0x{:X})",
+                    "[do_signal] signal: {:?}, signum: {:?}, handler: 0x{:?} (ra: 0x{:X}, sp: 0x{:X})",
                     signal,
                     signal.to_signum().unwrap(),
-                    act.sa_handler,
+                    act.handler,
                     trap_cx.x[1],
                     trap_cx.x[2]
                 );
@@ -312,6 +305,9 @@ bitflags! {
 }
 
 /// fetch and/or change the signal mask of the calling thread.
+/// # Warning
+/// In fact, `set` & `oldset` should be 1024 bits `sigset_t`, but we only support 64 signals now.
+/// For the sake of performance, we use `Signals` instead.
 pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
