@@ -296,15 +296,10 @@ impl FATDirEnt {
     /// Trailing periods are ignored.
     /// No '~' or trailing numbers
     pub fn gen_short_name_prefix(s: String) -> String {
-        "TESTXT".to_string()
-        // let mut m = s;
-        // m.to_uppercase().retain(|c| !r#" "#.contains(c));
-        // m = m.trim_start_matches(".").to_string();
-        // if m.len() <= 8 {
-        //     m = m.split_off(8);
-        // }
-        // todo!();
-        // m
+        //        "TESTXT".to_string()
+        let mut m = s;
+	
+        m
     }
     pub fn get_ord(&self) -> usize {
         self.ord()
