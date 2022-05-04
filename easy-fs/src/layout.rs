@@ -72,49 +72,6 @@ pub struct BPB {
     pub fil_sys_type: [u8; 8],
 }
 
-/*impl Clone for BPB {
-    fn clone(&self) -> Self {
-        unsafe {
-            Self {
-                bs_jmp_boot: self.bs_jmp_boot.clone(),
-                bs_oem_name: self.bs_oem_name.clone(),
-                byts_per_sec: self.byts_per_sec.clone(),
-                sec_per_clus: self.sec_per_clus.clone(),
-                rsvd_sec_cnt: self.rsvd_sec_cnt.clone(),
-                num_fats: self.num_fats.clone(),
-                root_ent_cnt: self.root_ent_cnt.clone(),
-                tot_sec16: self.tot_sec16.clone(),
-                media: self.media.clone(),
-                fat_sz16: self.fat_sz16.clone(),
-                sec_per_trk: self.sec_per_trk.clone(),
-                num_heads: self.num_heads.clone(),
-                hidd_sec: self.hidd_sec.clone(),
-                tot_sec32: self.tot_sec32.clone(),
-                fat_sz32: self.fat_sz32.clone(),
-                ext_flags: self.ext_flags.clone(),
-                fs_ver: self.fs_ver.clone(),
-                root_clus: self.root_clus.clone(),
-                fs_info: self.fs_info.clone(),
-                bk_boot_sec: self.bk_boot_sec.clone(),
-                reserved: self.reserved.clone(),
-                drv_num: self.drv_num.clone(),
-                resvered1: self.resvered1.clone(),
-                boot_sig: self.boot_sig.clone(),
-                vol_id: self.vol_id.clone(),
-                vol_lab: self.vol_lab.clone(),
-                fil_sys_type: self.fil_sys_type.clone(),
-            }
-        }
-    }
-}*/
-
-/* impl Debug for BPB {
- *     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
- *         f.debug_struct("BPB")
- *             .field("total_sec32", &self.tot_sec32)
- *             .finish()
- *     }
- * } */
 pub enum FatType {
     FAT32,
     FAT16,
@@ -273,33 +230,107 @@ impl Debug for FATDirEnt {
 impl FATDirEnt {
     /// Test whether `self` is a short entry
     /// and whether the short entry name of `self` is the same type of `prefix`.
-    pub fn short_ent_name_match(&self, prefix: &String) -> bool {
-        let name = self.get_name();
-        if self.is_short() && {
-            if let Some(i) = name.split_once("~") {
-                i.0 == prefix
-            } else {
-                *prefix == name
-            }
-        } {
-            true
-        } else {
-            false
+
+    pub fn gen_short_name_numtail(v: Vec<FATDirEnt>, name_res: &mut [u8; 11]) {
+        if v.iter()
+            .find(|i| i.get_short_name_array()[..] == name_res[..])
+            .is_none()
+        {
+            return;
         }
-    }
-    pub fn is_8_3(s: String) -> bool {
-        s.is_ascii() && s.to_ascii_uppercase() == s
+        let mut lead = [0; 8];
+        let mut baselen: usize = name_res
+            .iter()
+            .enumerate()
+            .find(|i| *i.1 == ' ' as u8)
+            .map_or_else(|| 8, |i| i.0);
+        let numtail2_baselen = 2;
+        let numtail_baselen = 6;
+        // 如果基本文件名超过6位(7或者8),则其文件名
+        if baselen > 6 {
+            //这时候优先用最后两位
+            baselen = numtail_baselen;
+            name_res[7] = ' ' as u8;
+        }
+        // 将文件基本名长度处替换为~,尝试单个数字
+        name_res[baselen] = '~' as u8;
+        for i in 1..10 {
+            name_res[baselen + 1] = i + '0' as u8;
+            // 如果单个数字能确保找不到,则用单个数字
+            if v.iter()
+                .find(|i| i.get_short_name_array()[..] == name_res[..])
+                .is_none()
+            {
+                return;
+            }
+        }
+        //好吧,如果到这里就是都找到了
+        //然后开始伪随机
+        let jiffies = 19382022; //随便选的数字
+        let mut i = jiffies & 0xffff;
+        let sz = ((jiffies >> 10) & 0x7) as u8;
+        if baselen > 2 {
+            //如果基本名长度超过2则使用6位数字
+            baselen = numtail2_baselen;
+            name_res[7] = ' ' as u8;
+        }
+
+        name_res[baselen + 4] = '~' as u8;
+        name_res[baselen + 5] = '1' as u8 + sz;
+        loop {
+            name_res[baselen..baselen + 4]
+                .copy_from_slice(&(format!("{:04X}", i).as_bytes())[0..4]);
+            if v.iter()
+                .find(|i| i.get_short_name_array()[..] == name_res[..])
+                .is_none()
+            {
+                break;
+            }
+            i -= 11;
+        }
     }
     /// Embedded spaces within a long name are allowed.
     /// Leading and trailing spaces in a long name are ignored.
     /// Leading and embedded periods are allowed in a name and are stored in the long name.
     /// Trailing periods are ignored.
     /// No '~' or trailing numbers
-    pub fn gen_short_name_prefix(s: String) -> String {
-        //        "TESTXT".to_string()
-        let mut m = s;
-	
-        m
+    pub fn gen_short_name_prefix(mut s: String) -> String {
+        s.remove_matches(' ');
+        s.make_ascii_uppercase();
+        let split_res = s.rsplit_once('.');
+        let (base, ext) = if split_res.is_some() {
+            split_res.unwrap()
+        } else {
+            (&s[..], "")
+        };
+        let (base, ext) = if base.len() == 0 && ext.len() != 0 {
+            (ext, base)
+        } else {
+            (base, ext)
+        };
+        let base = {
+            let mut i = 0;
+            while i != base.len() && base[i..].starts_with('.') {
+                i += 1;
+            }
+            if i == base.len() {
+                base
+            } else {
+                &base[i..]
+            }
+        };
+        let base = base.trim_matches('.');
+        let base = if ext.len() != 0 || base.len() != 0 {
+            format!("{: <8}", base.split_at(8.min(base.len())).0)
+        } else {
+            "".to_string()
+        };
+        let ext = if ext.len() != 0 || base.len() != 0 {
+            format!("{: <3}", ext.split_at(3.min(ext.len())).0)
+        } else {
+            "".to_string()
+        };
+        [base, ext].concat()
     }
     pub fn get_ord(&self) -> usize {
         self.ord()
@@ -396,6 +427,9 @@ impl FATDirEnt {
                 self.short_entry.name().to_string()
             }
         }
+    }
+    pub fn get_short_name_array(&self) -> [u8; 11] {
+        unsafe { self.short_entry.name }
     }
     pub fn unused(&self) -> bool {
         self.last_and_unused() || self.unused_not_last()

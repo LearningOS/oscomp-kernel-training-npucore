@@ -1,5 +1,8 @@
 //#![no_std]
 
+#![feature(string_remove_matches)]
+
+
 extern crate alloc;
 
 mod bitmap;

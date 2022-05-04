@@ -155,7 +155,7 @@ static int vfat_create_shortname(
 		 * uses the extension as the name and sets no extension.
 		 */
 		name_start = &uname[0];
-          // 跳过vfat标准要求跳过的字符(下划线,空格和点)
+          // 跳过vfat标准要求跳过的字符(空格和点)
 		while (name_start < ext_start) {
 			if (!vfat_skip_char(*name_start))
 				break;
@@ -173,8 +173,7 @@ static int vfat_create_shortname(
 	}
 #+end_src
 注意C语言注释提到,Win95将纯扩展名形式的文件名的扩展名的作为文件名,而完全不设"扩展名"
-***** 结论
-不存在扩展名的两种情况分别是文件名最后一个字符为'.'和文件全局没有出现过一次'.'
+文件名最后一个字符为'.'和文件全局没有出现过一次'.',不存在扩展名的
 **** 基本名生成
 从最开始字符替换所有的非法字符直至基本名结束
 #+begin_src C

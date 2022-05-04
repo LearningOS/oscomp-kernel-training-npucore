@@ -252,7 +252,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         {
             Err(core::fmt::Error)
         } else {
-            let short_name = FATDirEnt::gen_short_name_prefix(name.clone());
+            let mut short_name = FATDirEnt::gen_short_name_prefix(name.clone());
+            if short_name.len() == 0 || short_name.find(' ').unwrap_or(8) == 0 {
+                return Err(core::fmt::Error);
+            }
+            let mut short_name_slice: [u8; 11] = [32u8; 11];
+            short_name_slice.copy_from_slice(&short_name.as_bytes()[0..11]);
+            FATDirEnt::gen_short_name_numtail(
+                parent_dir.iter().short().collect(),
+                &mut short_name_slice,
+            );
             /* let mut number: usize = 0;
              * for i in parent_dir.iter().short() {
              *     if i.short_ent_name_match(&short_name) {
@@ -322,10 +331,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             {
                 let offset = iter.offset;
                 iter.to_backward();
-                let mut short_name_slice: [u8; 11] = [32u8; 11];
-                for i in 0..short_name_slice.len().min(short_name.len()) {
-                    short_name_slice[i] = short_name.as_bytes()[i]
-                }
                 let short = FATDirShortEnt::from_name(
                     short_name_slice,
                     fst_clus,
