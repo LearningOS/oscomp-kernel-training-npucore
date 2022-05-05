@@ -275,25 +275,11 @@ fn easy_fs_pack() -> std::io::Result<()> {
     );
     ls_test(rt.clone());
     println!("ls_test1 done");
-    create_test(rt.clone());
+    //create_test(rt.clone());
+    create_bench(rt.clone());
     println!("create_test done");
     ls_test(rt.clone());
 
-    let arc_2 = find_local(rt.clone(), "testxt".to_string()).unwrap();
-    println!(
-        "size{},read:{},{:?},lock:{:?}",
-        *arc_2.size.read(),
-        arc_2.read_at_block_cache(0, &mut res),
-        res,
-        *arc_2.direct.lock()
-    );
-    println!(
-        "get_all_clus{:?}",
-        rt.fs.fat.get_all_clus_num(66, &rt.fs.block_device)
-    );
-    for i in rt.ls() {
-        println!("{}: {}", i.0, i.1.get_first_clus());
-    }
     /*let i = easy_fs::find_local(rt.clone(), "lua_testcode.sh".to_string())
         .unwrap()
         .read_at_block_cache(0, &mut text);
@@ -463,7 +449,8 @@ fn rm_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
 }
 fn create_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
     let rt_ls = rt.ls();
-    let result = Inode::create(rt.clone(), "testxt".to_string(), DiskInodeType::File);
+    let result = Inode::create(rt.clone(), "testcodefdds".to_string(), DiskInodeType::File);
+    find_local(rt.clone(), "testcodefdds".to_string()).unwrap();
     if let Ok(arc) = result {
         let lock = arc.direct.lock();
         println!("{:?}", *lock);
@@ -484,21 +471,18 @@ fn create_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
     } else {
         println!("Error: test_dir not created.");
     }
-
-    if rt.ls().iter().find(|i| i.0 == "test_dir").is_some() {
-        for i in rt.iter().everything() {
-            if !i.unused() {
-                println!("{}", i.get_name());
-            } else {
-                println!("{:?}", i);
-            }
-        }
-        println!("done.");
-    } else {
-        println!("failed.");
+    for i in rt.iter() {
+        println!("{:?}", i);
     }
     println!(
         "free_fat_num:{}",
         rt.fs.fat.cnt_all_fat(&rt.fs.block_device),
     );
+}
+
+fn create_bench(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
+    //Inode::delete_from_disk(find_local(rt.clone(), "cat".to_string()).unwrap());
+    (0..10).for_each(|i| {
+        Inode::create(rt.clone(), i.to_string(), DiskInodeType::File).unwrap();
+    });
 }

@@ -1,13 +1,13 @@
 #![feature(test)]
 
-extern crate easy_fs;
 extern crate alloc;
+extern crate easy_fs;
 extern crate test;
 
-use easy_fs::*;
-use easy_fs::layout::DiskInodeType;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
+use easy_fs::layout::DiskInodeType;
+use easy_fs::*;
 use lazy_static::*;
 use spin::{Mutex, RwLock};
 use std::fs::{File, OpenOptions};
@@ -140,7 +140,7 @@ impl CacheManager for BlockCacheManager {
     fn try_get_block_cache(
         &mut self,
         block_id: usize,
-        inner_blk_id: usize,
+        _inner_blk_id: usize,
     ) -> Option<Arc<Mutex<BlockCache>>> {
         if let Some(pair) = self.queue.read().iter().find(|pair| pair.0 == block_id) {
             Some(Arc::clone(&pair.1))
@@ -153,7 +153,7 @@ impl CacheManager for BlockCacheManager {
         &mut self,
         block_id: usize,
         inner_blk_id: usize,
-        neighbor: FUNC,
+        _neighbor: FUNC,
         block_device: Arc<dyn BlockDevice>,
     ) -> Arc<Mutex<BlockCache>>
     where
@@ -192,7 +192,7 @@ impl CacheManager for BlockCacheManager {
         }
     }
 
-    fn new(fst_block_id: usize) -> Mutex<Self>
+    fn new(_fst_block_id: usize) -> Mutex<Self>
     where
         Self: Sized,
     {
@@ -230,9 +230,26 @@ use test::Bencher;
 
 #[bench]
 fn bench_create(b: &mut Bencher) {
+    //    let ls0 = &ROOT.ls()[0];
     b.iter(|| {
-        (0..10).for_each(|i| {
-            Inode::create(ROOT.clone(), i.to_string(), DiskInodeType::File).unwrap();
+        if ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device) == 0 {
+            Inode::delete_from_disk(find_local(ROOT.clone(), "cat".to_string()).unwrap()).unwrap();
+        }
+        println!(
+            "============FREE FAT: {}===========",
+            ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+        );
+        (0..20).for_each(|i| {
+            println!("Working on {}th creation.", i);
+            if Inode::create(ROOT.clone(), i.to_string(), DiskInodeType::File).is_ok() {
+                println!("Done with {}th creation.", i);
+            } else {
+                println!("Error on the {}th creation.", i);
+            }
+            println!(
+                "============FREE FAT: {}===========",
+                ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+            );
         });
     })
 }
@@ -242,11 +259,25 @@ const ZERO: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
 
 #[bench]
 fn bench_write(b: &mut Bencher) {
-    Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
-    let test = find_local(ROOT.clone(),"test".to_string()).unwrap();
-    b.iter(|| {
+    //    b.iter(|| {
+    //    Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+    if let Some(test) = find_local(ROOT.clone(), "test".to_string()) {
         (0..1024).for_each(|i| {
+            println!(
+                "============FREE FAT: {}===========",
+                ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+            );
             test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
         })
-    })
+    } else {
+        let test = Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+        (0..12).for_each(|i| {
+            println!(
+                "============FREE FAT: {}===========",
+                ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+            );
+            test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
+        })
+    }
+    //    })
 }

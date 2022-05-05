@@ -1,6 +1,6 @@
 use super::BLOCK_SZ;
 use alloc::string::{String, ToString};
-use core::{convert::TryInto, fmt::Debug, iter::empty, mem, ops::Add};
+use core::{convert::TryInto, fmt::Debug, mem};
 
 pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
 pub const DIR_ENTRY_UNUSED: u8 = 0xe5;
@@ -186,7 +186,7 @@ impl FSInfo {
     fn free_clus(clus_num: usize) {}
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone, Copy)]
 pub enum DiskInodeType {
     File,
     Directory,
@@ -238,7 +238,6 @@ impl FATDirEnt {
         {
             return;
         }
-        let mut lead = [0; 8];
         let mut baselen: usize = name_res
             .iter()
             .enumerate()
