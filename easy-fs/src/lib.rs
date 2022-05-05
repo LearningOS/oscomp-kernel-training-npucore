@@ -1,6 +1,7 @@
 //#![no_std]
 
 #![feature(string_remove_matches)]
+#![feature(int_roundings)]
 
 
 extern crate alloc;

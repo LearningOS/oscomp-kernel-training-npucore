@@ -178,17 +178,12 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Return clus number correspond to size.
     pub fn data_clus(&self) -> u32 {
-        self._data_clus(*self.size.read())
-    }
-    pub fn _data_clus(&self, file_size: u32) -> u32 {
-        (file_size + self.fs.byts_per_clus as u32 - 1) / self.fs.byts_per_clus as u32
+        (*self.size.read())
+        .div_ceil(self.fs.clus_size())
     }
     /// Return number of blocks needed after rounding according to the cluster number.
     pub fn total_clus(&self, size: u32) -> u32 {
-        let data_blocks = self._data_clus(size) as usize;
-        let mut total = data_blocks as usize;
-        total = (total + self.fs.clus_size() as usize - 1) / (self.fs.clus_size() as usize);
-        total as u32
+        size.div_ceil(self.fs.clus_size())
     }
 
     /// Delete the short and the long entry of `self` from `parent_dir`

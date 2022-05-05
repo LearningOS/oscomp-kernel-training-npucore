@@ -27,7 +27,7 @@ pub struct EasyFileSystem<T: CacheManager, F: CacheManager> {
     pub sec_per_clus: u8,
 
     /// Bytes per sector, 512 for SD card
-    pub byts_per_clus: u16,
+    pub byts_per_sec: u16,
 }
 #[allow(unused)]
 type DataBlock = [u8; crate::BLOCK_SZ];
@@ -55,7 +55,7 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
     }
     #[inline(always)]
     pub fn clus_size(&self) -> u32 {
-        self.byts_per_clus.into()
+        self.byts_per_sec as u32 * self.sec_per_clus as u32 
     }
 }
 
@@ -104,7 +104,7 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
                     ),
                     root_clus: super_block.root_clus,
                     sec_per_clus: super_block.sec_per_clus,
-                    byts_per_clus: super_block.byts_per_sec,
+                    byts_per_sec: super_block.byts_per_sec,
                     data_area_start_block: super_block.first_data_sector(),
                 };
                 Arc::new(efs)

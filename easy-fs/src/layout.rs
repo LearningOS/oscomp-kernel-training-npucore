@@ -462,15 +462,15 @@ pub struct FATDirShortEnt {
 
 impl FATDirShortEnt {
     pub fn from_name(name: [u8; 11], fst_clus: u32, file_type: DiskInodeType) -> Self {
-        let mut i = Self::empty();
-        i.set_fst_clus(fst_clus);
-        i.name.copy_from_slice(&name);
+        let mut short_ent = Self::empty();
+        short_ent.set_fst_clus(fst_clus);
+        short_ent.name.copy_from_slice(&name);
         if file_type == DiskInodeType::Directory {
-            i.attr = FATDiskInodeType::AttrDirectory;
+            short_ent.attr = FATDiskInodeType::AttrDirectory;
         } else {
-            i.attr = FATDiskInodeType::AttrArchive;
+            short_ent.attr = FATDiskInodeType::AttrArchive;
         }
-        return i;
+        return short_ent;
     }
     pub fn empty() -> Self {
         Self {
@@ -508,15 +508,9 @@ impl FATDirShortEnt {
 }
 impl FATDirShortEnt {
     pub fn name(&self) -> &str {
-        let len = if let Some(i) = (0usize..11).find(|i| self.name[*i] == 32) {
-            i
-        } else {
-            if self.name[0] == 32 {
-                0
-            } else {
-                11
-            }
-        };
+        let len = (0..self.name.len())
+                         .find(|i| self.name[*i] == ' ' as u8)
+                         .unwrap_or(self.name.len());
         core::str::from_utf8(&self.name[..len]).unwrap()
     }
 }
@@ -568,42 +562,37 @@ impl FATLongDirEnt {
         }
     }
     pub fn from_name_slice(is_last_ent: bool, order: usize, partial_name: [u16; 13]) -> Self {
-        let mut i = Self::empty();
+        let mut long_ent = Self::empty();
 
         unsafe {
-            core::ptr::addr_of_mut!(i.name1)
+            core::ptr::addr_of_mut!(long_ent.name1)
                 .write_unaligned(partial_name[..5].try_into().expect("Failed to cast!"));
-            core::ptr::addr_of_mut!(i.name2)
+            core::ptr::addr_of_mut!(long_ent.name2)
                 .write_unaligned(partial_name[5..11].try_into().expect("Failed to cast!"));
-            core::ptr::addr_of_mut!(i.name3)
+            core::ptr::addr_of_mut!(long_ent.name3)
                 .write_unaligned(partial_name[11..].try_into().expect("Failed to cast!"));
         }
         assert!(order < 0x47);
-        i.ord = order as u8;
+        long_ent.ord = order as u8;
         if is_last_ent {
-            i.ord |= LAST_LONG_ENTRY;
+            long_ent.ord |= LAST_LONG_ENTRY;
         }
 
-        i
+        long_ent
     }
     pub fn name(&self) -> String {
         let mut name_all: [u16; LONG_DIR_ENT_NAME_CAPACITY] = [0u16; LONG_DIR_ENT_NAME_CAPACITY];
 
-        name_all[..5].copy_from_slice(unsafe { &core::ptr::addr_of!(self.name1).read_unaligned() });
+        name_all[..5]
+            .copy_from_slice(unsafe { &core::ptr::addr_of!(self.name1).read_unaligned() });
         name_all[5..11]
             .copy_from_slice(unsafe { &core::ptr::addr_of!(self.name2).read_unaligned() });
         name_all[11..]
             .copy_from_slice(unsafe { &core::ptr::addr_of!(self.name3).read_unaligned() });
-        String::from_utf16_lossy(
-            &name_all[..if let Some((i, _)) = name_all
-                .iter()
-                .enumerate()
-                .find(|here| -> bool { *here.1 == 0 })
-            {
-                i
-            } else {
-                LONG_DIR_ENT_NAME_CAPACITY
-            }],
-        )
+
+        let len = (0..name_all.len())
+                  .find(|i| name_all[*i] == 0)
+                  .unwrap_or(name_all.len());
+        String::from_utf16_lossy(&name_all[..len])
     }
 }

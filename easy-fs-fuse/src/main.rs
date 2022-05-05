@@ -242,8 +242,8 @@ fn easy_fs_pack() -> std::io::Result<()> {
     let i: Arc<EasyFileSystem<BlockCacheManager, BlockCacheManager>> =
         EasyFileSystem::open(block_file, BLOCK_CACHE_MANAGER.clone());
     println!(
-        "data_area_start_block: {}, \nsec_per_clus: {}, \nbyts_per_clus: {}, \nroot_clus:{}",
-        i.data_area_start_block, i.sec_per_clus, i.byts_per_clus, i.root_clus
+        "data_area_start_block: {}, \nsec_per_clus: {}, \nbyts_per_sec: {}, \nroot_clus:{}",
+        i.data_area_start_block, i.sec_per_clus, i.byts_per_sec, i.root_clus
     );
     //    println!("fat ent no:{:?}", i.fat.tot_ent);
     let rt = Arc::new(Inode::new(
