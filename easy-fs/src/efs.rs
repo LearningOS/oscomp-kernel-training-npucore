@@ -55,7 +55,7 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
     }
     #[inline(always)]
     pub fn clus_size(&self) -> u32 {
-        self.byts_per_sec as u32 * self.sec_per_clus as u32 
+        self.byts_per_sec as u32 * self.sec_per_clus as u32
     }
 }
 

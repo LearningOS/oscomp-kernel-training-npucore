@@ -509,8 +509,8 @@ impl FATDirShortEnt {
 impl FATDirShortEnt {
     pub fn name(&self) -> &str {
         let len = (0..self.name.len())
-                         .find(|i| self.name[*i] == ' ' as u8)
-                         .unwrap_or(self.name.len());
+            .find(|i| self.name[*i] == ' ' as u8)
+            .unwrap_or(self.name.len());
         core::str::from_utf8(&self.name[..len]).unwrap()
     }
 }
@@ -583,16 +583,15 @@ impl FATLongDirEnt {
     pub fn name(&self) -> String {
         let mut name_all: [u16; LONG_DIR_ENT_NAME_CAPACITY] = [0u16; LONG_DIR_ENT_NAME_CAPACITY];
 
-        name_all[..5]
-            .copy_from_slice(unsafe { &core::ptr::addr_of!(self.name1).read_unaligned() });
+        name_all[..5].copy_from_slice(unsafe { &core::ptr::addr_of!(self.name1).read_unaligned() });
         name_all[5..11]
             .copy_from_slice(unsafe { &core::ptr::addr_of!(self.name2).read_unaligned() });
         name_all[11..]
             .copy_from_slice(unsafe { &core::ptr::addr_of!(self.name3).read_unaligned() });
 
         let len = (0..name_all.len())
-                  .find(|i| name_all[*i] == 0)
-                  .unwrap_or(name_all.len());
+            .find(|i| name_all[*i] == 0)
+            .unwrap_or(name_all.len());
         String::from_utf16_lossy(&name_all[..len])
     }
 }

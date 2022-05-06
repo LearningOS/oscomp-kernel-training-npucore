@@ -1,10 +1,12 @@
 use core::convert::TryInto;
 use core::mem;
 use core::ops::{AddAssign, SubAssign};
+
 //use core::panicking::panic;
 //use core::panicking::panic;
 
 use super::{DiskInodeType, EasyFileSystem};
+//use proc_macro::bridge::server::Types;
 
 use alloc::string::String;
 
@@ -15,6 +17,22 @@ use crate::{DataBlock, BLOCK_SZ};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::{Mutex, RwLock};
+
+pub enum DirFilter {
+    Name(String),
+    FstClus(u64),
+    None,
+}
+
+impl DirFilter {
+    /// Returns `true` if the dir filter is [`None`].
+    ///
+    /// [`None`]: DirFilter::None
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
 /// The functionality of ClusLi & Inode can be merged.
 /// The struct for file information
 /* *ClusLi was DiskInode*
@@ -121,7 +139,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn rename(&self, new_name: String) -> core::fmt::Result {
         Err(core::fmt::Error)
     }
-
+    /* pub fn open_li() -> Result<Arc<Self>, core::fmt::Error> {
+     *     static file_li: BTreeMap<usize, Arc<Self>> = BTreeMap::new();
+     * } */
     /// Constructor for Inodes
     /// # Arguments
     /// `fst_clus`: The first cluster of the file
@@ -178,8 +198,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Return clus number correspond to size.
     pub fn data_clus(&self) -> u32 {
-        (*self.size.read())
-        .div_ceil(self.fs.clus_size())
+        (*self.size.read()).div_ceil(self.fs.clus_size())
     }
     /// Return number of blocks needed after rounding according to the cluster number.
     pub fn total_clus(&self, size: u32) -> u32 {
@@ -192,8 +211,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut iter = dir.iter();
         iter.set_offset(*offset);
         if *offset >= self.parent_dir.as_ref().unwrap().0.get_size() {
+            println!(
+                "deleting short: {:?},name:{}",
+                iter.current_clone(),
+                iter.current_clone().unwrap().get_name()
+            );
             iter.write_to_current_ent(&FATDirEnt::unused_and_last_entry());
         } else {
+            println!(
+                "deleting short: {:?},name:{}",
+                iter.current_clone(),
+                iter.current_clone().unwrap().get_name()
+            );
             iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
         }
         iter = iter.backward();
@@ -210,6 +239,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if iter.current_clone().unwrap().is_last_long_dir_ent() {
                 after_last_fat_dir_ent = true;
             }
+            println!(
+                "deleting long: {:?},name:{}",
+                iter.current_clone(),
+                iter.current_clone().unwrap().get_name()
+            );
             iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
             iter.next();
         }
@@ -220,7 +254,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn delete_from_disk(trash: Arc<Self>) -> core::fmt::Result {
         if trash.is_dir() {
             //see if the dir is empty
-            let v = trash.ls();
+            let v = trash.ls(DirFilter::None);
             if v.len() > 2 {
                 return Err(core::fmt::Error);
             }
@@ -315,7 +349,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         if parent_dir.is_file()
             || name.len() >= 256
             || parent_dir
-                .ls()
+                .ls(DirFilter::None)
                 .iter()
                 .find(|s| s.0.to_uppercase() == name.to_uppercase())
                 .is_some()
@@ -582,7 +616,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         self.file_size()
     }
 
-    pub fn ls(&self) -> Vec<(String, FATDirShortEnt, usize)> {
+    pub fn ls(&self, cond: DirFilter) -> Vec<(String, FATDirShortEnt, usize)> {
         if !self.is_dir() {
             return Vec::new();
         } else {
@@ -609,7 +643,23 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                             //then match the name to see if it's correct.
                             if true {
                                 //if correct, push the concatenated name
-                                v.push((name.concat(), i.get_short_ent().unwrap().clone(), offset));
+                                let concat_name = name.concat();
+                                if match cond {
+                                    DirFilter::None => true,
+                                    DirFilter::Name(ref req_name) => *req_name == concat_name,
+                                    DirFilter::FstClus(inum) => {
+                                        inum as u32 == i.get_short_ent().unwrap().get_first_clus()
+                                    }
+                                } {
+                                    v.push((
+                                        concat_name,
+                                        i.get_short_ent().unwrap().clone(),
+                                        offset,
+                                    ));
+                                    if !cond.is_none() {
+                                        break;
+                                    }
+                                }
                                 name.clear();
                                 continue;
                             } else {
@@ -618,7 +668,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                             }
                         }
                         // only one short
-                        v.push((i.get_name(), i.get_short_ent().unwrap().clone(), offset));
+                        if match cond {
+                            DirFilter::None => true,
+                            DirFilter::Name(ref req_name) => *req_name == i.get_name(),
+                            DirFilter::FstClus(inum) => {
+                                inum as u32 == i.get_short_ent().unwrap().get_first_clus()
+                            }
+                        } {
+                            v.push((i.get_name(), i.get_short_ent().unwrap().clone(), offset));
+                            if !cond.is_none() {
+                                break;
+                            }
+                        }
                     }
                 } else {
                     break;
@@ -700,55 +761,14 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
 #[allow(unused)]
 pub fn find_local<T: CacheManager, F: CacheManager>(
-    inode: Arc<Inode<T, F>>,
+    inode: &Arc<Inode<T, F>>,
     target_name: String,
 ) -> Option<Arc<Inode<T, F>>> {
-    if inode.is_dir() {
-        let mut name = Vec::with_capacity(3);
-        let mut iter = inode.iter();
-        let mut wrap = iter.next();
-        let mut offset = 0;
-        let mut should_be_ord = 0;
-
-        while wrap.is_some() {
-            let i = wrap.unwrap();
-            offset = iter.get_offset();
-            wrap = iter.next();
-
-            if i.is_long() {
-                if (name.is_empty() && i.is_last_long_dir_ent()) || (i.ord() == should_be_ord) {
-                    should_be_ord = i.ord() - 1;
-                    name.insert(0, i.get_name());
-                } else {
-                    /*order_wrong/missing*/
-                    name.clear();
-                    name.insert(0, i.get_name());
-                }
-            } else {
-                if !name.is_empty() {
-                    //then match the name to see if it's correct.
-                    if true {
-                        //if correct, test the concatenated name
-                        if name.concat() == target_name {
-                            return Some(Arc::new(Inode::<T, F>::from_ent(
-                                &inode,
-                                i.get_short_ent().unwrap(),
-                                offset,
-                            )));
-                        };
-                        name.clear();
-                        continue;
-                    } else {
-                        // short name doesn't match... The previous long entries are not correct.
-                        name.clear();
-                    }
-                }
-                // only one short
-            }
-        }
+    let v = inode.ls(DirFilter::Name(target_name));
+    if v.is_empty() {
         None
     } else {
-        None
+        Some(Arc::new(Inode::from_ent(inode, &v[0].1, v[0].2)))
     }
 }
 

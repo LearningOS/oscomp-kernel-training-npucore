@@ -348,7 +348,37 @@ extlen = 0;
 #+end_src
 *** 需求分析
 首先考虑到我们的操作系统暂时不支持,可以只考虑英文的情况因此其代码的UTF8转换可以简化
-当前的系统多数使用NT版本而非95的,可以少一些分支
-最后,Linux的原版数字生成代码可能造成死循环(虽然几乎不会发生),也许会有更好的办法,这里可以不用死循环,而是一定次数后就报告失败
+当前的系统多数使用NT版本而非95的,可以少一些分支.
+另外,数字结尾的生成算法过于复杂,可以考虑借鉴Linux写法
+** 
+* 文件打开表
+** 最初的尝试
+按照之前的实现,如果我们保留泛型,那么文件打开表的处理会非常复杂.特别是由于没有文件打开表,我们无法通过`Inode`的实例获取`Arc<Inode>`.
+这时候很多人会考虑使用`lazy_static`, 很遗憾,虽然这是Rust下`static`的常见方法,但这回可能是不行的.
+因为Inode是Inode<T,F>, 而`lazy_static`知道类型才能实例化,而对于EasyFS, 此时的类型实际上是Arc<Mutex<BTreeMap<usize,Arc<Inode<T,F>>>>>, 可以看到其中有两个未知的类型.
+如果尝试像C++一样,使用per-type static又如何呢?很遗憾,还是不行,因为Rust不允许将`struct`的一个域声明为`static`. 但这可能给了我们一个思路: 如果使用某个static的函数/方法,或许可以绕过这个问题
+** 绕过失败
+这就得提到笔者大二学编译原理的一个故事了,当时我们的老师,一位擅长给学生高分的老师,
+要求大家不允许使用全局变量,只能传参数,本意是让大家多少用全局变量,
+但我这个人就是不听话,所以在C语言下开发出了这样的奇怪打法
+#+begin_src C
+int global_variable_a(bool is_set_mode, int val){
+    static int a = 0;
+    if (is_set_mode) a=val;
+    else return a;
+}
+void set_a(int val) {global_variable_a(1,val);}
+int get_a(){return global_variable_a(0,0);}
+#+end_src
+强行绕过了这个限制,老师最终也没有说什么.
+有没有一种可能,老师实际上是Rust爱好者呢?不过不要紧,这就试一下
+#+begin_src rustic
+  impl<T: CacheManager, F: CacheManager> Inode<T, F> {
+      fn open_li(){
+	    static map = BTreeMap<usize, Arc<Self>>::new();
+      }
+  }
+#+end_src
+很遗憾,即使是这个失败的版本,Rust-analyzer就直接报错了,因为Rust不允许方法中的static有泛型.恐怕只能另辟蹊径
 * 后续的思路
 事实上,由上述分析,EasyFS的代码中的文件系统可以继续抽象,将其Inode继续抽象出来,然后使用泛型

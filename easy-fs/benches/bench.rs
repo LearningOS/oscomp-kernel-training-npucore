@@ -10,6 +10,7 @@ use easy_fs::layout::DiskInodeType;
 use easy_fs::*;
 use lazy_static::*;
 use spin::{Mutex, RwLock};
+use std::ascii::AsciiExt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -233,13 +234,13 @@ fn bench_create(b: &mut Bencher) {
     //    let ls0 = &ROOT.ls()[0];
     b.iter(|| {
         if ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device) == 0 {
-            Inode::delete_from_disk(find_local(ROOT.clone(), "cat".to_string()).unwrap()).unwrap();
+            Inode::delete_from_disk(find_local(&ROOT, "cat".to_string()).unwrap()).unwrap();
         }
         println!(
             "============FREE FAT: {}===========",
             ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
         );
-        (0..20).for_each(|i| {
+        (0..20).for_each(|i: i32| {
             println!("Working on {}th creation.", i);
             if Inode::create(ROOT.clone(), i.to_string(), DiskInodeType::File).is_ok() {
                 println!("Done with {}th creation.", i);
@@ -257,27 +258,97 @@ fn bench_create(b: &mut Bencher) {
 const BUFFER_SIZE: usize = 8192;
 const ZERO: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
 
+/* #[bench]
+ * fn bench_write(b: &mut Bencher) {
+ *     b.iter(|| {
+ *         //    Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+ *         if let Some(test) = find_local(ROOT.clone(), "test".to_string()) {
+ *             (0..1024).for_each(|i| {
+ *                 let sz = test.file_size();
+ *                 if ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device) >= sz + i * BUFFER_SIZE {
+ *                     test.modify_size(-(sz as isize));
+ *                 }
+ *                 println!(
+ *                     "============FREE FAT: {}===========",
+ *                     ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+ *                 );
+ *                 test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
+ *             })
+ *         } else {
+ *             let test =
+ *                 Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+ *             (0..12).for_each(|i| {
+ *                 let sz = test.file_size();
+ *                 if ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device) >= sz + i * BUFFER_SIZE {
+ *                     test.modify_size(-(sz as isize));
+ *                 }
+ *                 println!(
+ *                     "============FREE FAT: {}===========",
+ *                     ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+ *                 );
+ *                 test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
+ *             })
+ *         }
+ *     })
+ * } */
+
 #[bench]
-fn bench_write(b: &mut Bencher) {
-    //    b.iter(|| {
-    //    Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
-    if let Some(test) = find_local(ROOT.clone(), "test".to_string()) {
-        (0..1024).for_each(|i| {
-            println!(
-                "============FREE FAT: {}===========",
-                ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
-            );
-            test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
-        })
-    } else {
-        let test = Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
-        (0..12).for_each(|i| {
-            println!(
-                "============FREE FAT: {}===========",
-                ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
-            );
-            test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
-        })
-    }
-    //    })
+fn bench_write_2(b: &mut Bencher) {
+    b.iter(|| {
+        let lock = BLOCK_CACHE_MANAGER.lock();
+        let mut wr = lock.queue.write();
+        for i in wr.iter_mut() {
+            let mut j = i.1.lock();
+            j.sync();
+            drop(j);
+        }
+        drop(wr);
+        drop(lock);
+        if let Some(i) = ROOT
+            .ls(DirFilter::None)
+            .iter()
+            .find(|i| i.0 == "cat")
+            .map(|i| Arc::new(Inode::from_ent(&ROOT, &i.1, i.2)))
+        {
+            Inode::delete_from_disk(i);
+            for i in ROOT.ls(DirFilter::None) {
+                println!("{}", i.0);
+            }
+        }
+        for i in ROOT.ls(DirFilter::None) {
+            if i.0.to_ascii_uppercase() == i.0 {
+                let mut j = ROOT.iter();
+                j.set_offset(i.2);
+                println!("{:?}", j.current_clone().unwrap());
+            }
+        }
+        Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+        //    Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+        if let Some(test) = find_local(&ROOT, "test".to_string()) {
+            (0..5).for_each(|i| {
+                println!(
+                    "============FREE FAT: {}===========",
+                    ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+                );
+                test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
+            });
+        } else {
+            let test =
+                Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+            (0..5).for_each(|i| {
+                println!(
+                    "============FREE FAT: {}===========",
+                    ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+                );
+                test.write_at_block_cache(i * BUFFER_SIZE, &ZERO);
+            })
+        }
+        for i in ROOT.ls(DirFilter::None) {
+            println!("{:?}", i);
+        }
+        Inode::delete_from_disk(find_local(&ROOT, "test".to_string()).unwrap()).unwrap();
+        for i in ROOT.ls(DirFilter::None) {
+            println!("{:?}", i);
+        }
+    })
 }

@@ -3,7 +3,6 @@
 #![feature(string_remove_matches)]
 #![feature(int_roundings)]
 
-
 extern crate alloc;
 
 mod bitmap;
@@ -23,4 +22,5 @@ pub use efs::EasyFileSystem;
 pub use layout::DataBlock;
 use layout::*;
 pub use vfs::find_local;
+pub use vfs::DirFilter;
 pub use vfs::Inode;
