@@ -4,7 +4,7 @@ use alloc::sync::Arc;
 use clap::{App, Arg};
 use easy_fs::block_cache::{Cache, CacheManager};
 use easy_fs::layout::{DiskInodeType, FATDirEnt};
-use easy_fs::{find_local, BlockDevice, EasyFileSystem, Inode};
+use easy_fs::{find_local, BlockDevice, DirFilter, EasyFileSystem, Inode};
 use lazy_static::*;
 use spin::{Mutex, RwLock};
 use std::fs::{File, OpenOptions};
@@ -256,7 +256,7 @@ fn easy_fs_pack() -> std::io::Result<()> {
     println!("size:{:?}", rt.size);
     println!("clus:{:?}", rt.direct.lock());
     let mut res: [u8; 30] = [0u8; 30];
-    let file_li = rt.ls();
+    let file_li = rt.ls(DirFilter::None);
 
     for i in &file_li {
         println!("{}: {}", i.0, i.1.get_first_clus());
@@ -386,7 +386,7 @@ fn efs_test() -> std::io::Result<()> {
 }
 */
 fn ls_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
-    for i in rt.ls() {
+    for i in rt.ls(DirFilter::None) {
         println!("{}", i.0);
         if i.1.is_dir() {
             let dir = Arc::new(Inode::from_ent(&rt, &i.1, i.2));
@@ -431,7 +431,7 @@ fn rm_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
 
     let rm = || {
         println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
-        let v = rt.ls();
+        let v = rt.ls(DirFilter::None);
         let (_, ent, offset) = v.iter().find(|&i| i.0 == "cat").unwrap();
         println!("{:?}", ent);
         let cat = Arc::new(Inode::from_ent(&rt.clone(), ent, *offset));
@@ -441,16 +441,21 @@ fn rm_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
         println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
     };
     rm();
-    if rt.ls().iter().find(|&i| i.0 == "cat").is_none() {
+    if rt
+        .ls(DirFilter::None)
+        .iter()
+        .find(|&i| i.0 == "cat")
+        .is_none()
+    {
         println!("succeed!");
     } else {
         println!("failed!");
     }
 }
 fn create_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
-    let rt_ls = rt.ls();
+    let rt_ls = rt.ls(DirFilter::None);
     let result = Inode::create(rt.clone(), "testcodefdds".to_string(), DiskInodeType::File);
-    find_local(rt.clone(), "testcodefdds".to_string()).unwrap();
+    find_local(&rt, "testcodefdds".to_string()).unwrap();
     if let Ok(arc) = result {
         let lock = arc.direct.lock();
         println!("{:?}", *lock);

@@ -323,7 +323,7 @@ fn bench_write_2(b: &mut Bencher) {
             }
         }
         Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
-        //    Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
+
         if let Some(test) = find_local(&ROOT, "test".to_string()) {
             (0..5).for_each(|i| {
                 println!(
