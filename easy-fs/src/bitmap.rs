@@ -221,24 +221,8 @@ impl<T: CacheManager> Fat<T> {
         *hlock = (free_clus_id + 1) as usize % self.tot_ent;
         drop(hlock);
 
-        self.fat_cache_mgr
-            .lock()
-            .get_block_cache(
-                self.this_fat_sec_num(free_clus_id as u32) as usize,
-                self.this_fat_inner_cache_num(free_clus_id as u32),
-                || -> Vec<usize> { self.get_eight_blk(free_clus_id as u32) },
-                Arc::clone(block_device),
-            )
-            .lock()
-            .modify(
-                self.this_fat_ent_offset(free_clus_id as u32) as usize,
-                |bitmap_block: &mut u32| {
-                    assert_eq!((*bitmap_block & EOC), FAT_ENTRY_FREE);
-                    println!("[alloc_one]bitmap_block:{}->{}", *bitmap_block, EOC);
-                    *bitmap_block = EOC;
-                    Some(free_clus_id)
-                },
-            )
+        self.set_next_clus(block_device, free_clus_id, EOC);
+        Some(free_clus_id)
     }
 
     fn get_next_free_clus(&self, start: u32, block_device: &Arc<dyn BlockDevice>) -> Option<u32> {

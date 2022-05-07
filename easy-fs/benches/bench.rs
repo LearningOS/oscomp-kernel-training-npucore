@@ -233,6 +233,7 @@ use test::Bencher;
 fn bench_create(b: &mut Bencher) {
     //    let ls0 = &ROOT.ls()[0];
     b.iter(|| {
+
         if ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device) == 0 {
             Inode::delete_from_disk(find_local(&ROOT, "cat".to_string()).unwrap()).unwrap();
         }
@@ -244,6 +245,7 @@ fn bench_create(b: &mut Bencher) {
             println!("Working on {}th creation.", i);
             if Inode::create(ROOT.clone(), i.to_string(), DiskInodeType::File).is_ok() {
                 println!("Done with {}th creation.", i);
+                Inode::delete_from_disk(find_local(&ROOT, i.to_string()).unwrap()).unwrap();
             } else {
                 println!("Error on the {}th creation.", i);
             }
@@ -315,13 +317,13 @@ fn bench_write_2(b: &mut Bencher) {
                 println!("{}", i.0);
             }
         }
-        for i in ROOT.ls(DirFilter::None) {
-            if i.0.to_ascii_uppercase() == i.0 {
-                let mut j = ROOT.iter();
-                j.set_offset(i.2);
-                println!("{:?}", j.current_clone().unwrap());
-            }
-        }
+        // for i in ROOT.ls(DirFilter::None) {
+        //     if i.0.to_ascii_uppercase() == i.0 {
+        //         let mut j = ROOT.iter();
+        //         j.set_offset(i.2);
+        //         println!("{:?}", j.current_clone().unwrap());
+        //     }
+        // }
         Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
 
         if let Some(test) = find_local(&ROOT, "test".to_string()) {

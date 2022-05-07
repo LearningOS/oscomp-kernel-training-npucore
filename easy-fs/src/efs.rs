@@ -99,7 +99,8 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
                     fat: Fat::new(
                         super_block.rsvd_sec_cnt as usize,
                         super_block.byts_per_sec as usize,
-                        (super_block.data_sector_count() / super_block.clus_size()) as usize,
+                        (super_block.data_sector_count() / super_block.sec_per_clus as u32)
+                            as usize,
                         fat_cache_mgr,
                     ),
                     root_clus: super_block.root_clus,

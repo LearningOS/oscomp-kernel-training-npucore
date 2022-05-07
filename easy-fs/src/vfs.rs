@@ -1,6 +1,7 @@
 use core::convert::TryInto;
 use core::mem;
 use core::ops::{AddAssign, SubAssign};
+use std::error::Error;
 
 //use core::panicking::panic;
 //use core::panicking::panic;
@@ -57,12 +58,8 @@ pub struct Inode<T: CacheManager, F: CacheManager> {
 
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn first_sector(&self) -> Option<u32> {
-        let lock = self.direct.lock();
-        if !lock.is_empty() {
-            Some(self.fs.first_sector_of_cluster(lock[0]))
-        } else {
-            None
-        }
+        self.first_clus()
+            .map(|clus| self.fs.first_sector_of_cluster(clus))
     }
 
     pub fn first_clus(&self) -> Option<u32> {
@@ -121,20 +118,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         name: &String,
         long_ent_num: usize,
     ) -> [u16; LONG_DIR_ENT_NAME_CAPACITY] {
-        let v: Vec<u16> = name.encode_utf16().collect();
+        let mut v: Vec<u16> = name.encode_utf16().collect();
         assert!(long_ent_num >= 1);
         assert!((long_ent_num - 1) * LONG_DIR_ENT_NAME_CAPACITY < v.len());
-        if LONG_DIR_ENT_NAME_CAPACITY * long_ent_num <= v.len() {
-            return v[LONG_DIR_ENT_NAME_CAPACITY * (long_ent_num - 1)
-                ..(LONG_DIR_ENT_NAME_CAPACITY * long_ent_num)]
-                .try_into()
-                .expect("should be able to cast");
-        } else {
-            let mut ret = [0u16; LONG_DIR_ENT_NAME_CAPACITY];
-            ret[0..v.len() % LONG_DIR_ENT_NAME_CAPACITY]
-                .copy_from_slice(&v[LONG_DIR_ENT_NAME_CAPACITY * (long_ent_num - 1)..v.len()]);
-            return ret;
+        while v.len() < long_ent_num * LONG_DIR_ENT_NAME_CAPACITY {
+            v.push(0);
         }
+        let start = (long_ent_num - 1) * LONG_DIR_ENT_NAME_CAPACITY;
+        v[start..]
+        .try_into()
+        .expect("should be able to cast")
     }
     pub fn rename(&self, new_name: String) -> core::fmt::Result {
         Err(core::fmt::Error)
@@ -156,35 +149,32 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         parent_dir: Option<(Arc<Self>, usize)>,
         fs: Arc<EasyFileSystem<T, F>>,
     ) -> Self {
-        let mut clus_size_as_size = false;
-        let i = Inode {
-            file_cache_mgr: (T::new(if fst_clus != 0 {
+
+        let fst_block_id = 
+            if fst_clus != 0 {
                 fs.first_sector_of_cluster(fst_clus as u32) as usize
             } else {
                 ((parent_dir.as_ref().unwrap().0.get_inode_num().unwrap() as usize) << 32)
                     | (parent_dir.as_ref().unwrap().1 as usize)
-            })),
-            direct: Mutex::new(if fst_clus != 0 {
+            };
+        
+        let file_cache_mgr = T::new(fst_block_id);
+
+        let direct = Mutex::new(
+            if fst_clus != 0 {
                 fs.fat.get_all_clus_num(fst_clus as u32, &fs.block_device)
             } else {
                 Vec::new()
-            }),
-            type_,
-            size: if let Some(size) = size {
-                clus_size_as_size = true;
-                RwLock::new(size as u32)
-            } else {
-                RwLock::new(0 as u32)
-            },
-            parent_dir,
-            fs,
-        };
-        if !clus_size_as_size {
-            i.size
-                .write()
-                .add_assign(i.direct.lock().len() as u32 * i.fs.clus_size());
-        }
-        return i;
+            }
+        );
+
+        let size = size.unwrap_or_else(||{
+            direct.lock().len() as usize
+            * fs.clus_size() as usize
+        });
+        let size = RwLock::new(size as u32);
+
+        Inode { size, direct, type_, parent_dir, file_cache_mgr, fs }
     }
     pub fn file_size(&self) -> usize {
         *self.size.read() as usize
@@ -198,7 +188,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Return clus number correspond to size.
     pub fn data_clus(&self) -> u32 {
-        (*self.size.read()).div_ceil(self.fs.clus_size())
+        self.total_clus(self.file_size() as u32)
     }
     /// Return number of blocks needed after rounding according to the cluster number.
     pub fn total_clus(&self, size: u32) -> u32 {
@@ -206,46 +196,51 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
 
     /// Delete the short and the long entry of `self` from `parent_dir`
-    pub fn delete_self_dir_ent(&self) -> DirIter<T, F> {
+    pub fn delete_self_dir_ent(&self){
         let (dir, offset) = self.parent_dir.as_ref().unwrap();
-        let mut iter = dir.iter();
+        let mut iter = dir.iter(DirIterMode::UsedIter);
         iter.set_offset(*offset);
-        if *offset >= self.parent_dir.as_ref().unwrap().0.get_size() {
-            println!(
-                "deleting short: {:?},name:{}",
-                iter.current_clone(),
-                iter.current_clone().unwrap().get_name()
-            );
-            iter.write_to_current_ent(&FATDirEnt::unused_and_last_entry());
-        } else {
-            println!(
-                "deleting short: {:?},name:{}",
-                iter.current_clone(),
-                iter.current_clone().unwrap().get_name()
-            );
-            iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
-        }
+        println!(
+            "deleting short: {:?},name:{}",
+            iter.current_clone(),
+            iter.current_clone().unwrap().get_name()
+        );
+        iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
         iter = iter.backward();
-        iter.set_offset(*offset);
-        iter.next();
-        let mut after_last_fat_dir_ent = false;
-        loop {
-            if after_last_fat_dir_ent
-                || iter.current_clone().is_none()
-                || iter.current_clone().unwrap().is_short()
-            {
-                break iter;
+
+        //check this dir_ent is a short dir_ent 
+        {
+            let dir_ent = iter.next();
+
+            if dir_ent.is_none() {
+                return;
             }
-            if iter.current_clone().unwrap().is_last_long_dir_ent() {
-                after_last_fat_dir_ent = true;
+            let dir_ent = dir_ent.unwrap();
+            if !dir_ent.is_long() {
+                return;
+            }
+        }
+
+        //remove long dir_ents
+        loop{
+            let dir_ent = iter.current_clone();
+            if dir_ent.is_none() {
+                panic!("illegal long dir_ent");
+            }
+            let dir_ent = dir_ent.unwrap();
+            if !dir_ent.is_long() {
+                panic!("illegal long dir_ent");
             }
             println!(
                 "deleting long: {:?},name:{}",
-                iter.current_clone(),
-                iter.current_clone().unwrap().get_name()
+                dir_ent,
+                dir_ent.get_name()
             );
             iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
             iter.next();
+            if dir_ent.is_last_long_dir_ent() {
+                return;
+            }
         }
     }
     /// Delete the file from the disk,
@@ -273,71 +268,51 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     fn expand_dir_size(&self, exp_num: usize) -> core::fmt::Result {
         let buf = FATDirEnt::unused_not_last_entry();
-        for _ in 0..exp_num - 1 {
-            if self.write_at_block_cache(self.get_size(), buf.as_bytes()) != buf.as_bytes().len() {
+        //fill with "unused not last" sign
+        for _ in 0..exp_num {
+            if self.write_at_block_cache(self.file_size(), buf.as_bytes()) != buf.as_bytes().len() {
                 return Err(core::fmt::Error);
             }
-        }
-        let buf = FATDirEnt::unused_and_last_entry();
-        if self.write_at_block_cache(self.get_size(), buf.as_bytes()) != buf.as_bytes().len() {
-            return Err(core::fmt::Error);
         }
         Ok(())
     }
 
     #[inline(always)]
     fn gen_short_name_slice(
-        dir_iter: DirIter<T, F>,
+        parent_dir: &Arc<Self>,
         name: &String,
         short_name_slice: &mut [u8; 11],
     ) -> core::fmt::Result {
-        {
-            let short_name = FATDirEnt::gen_short_name_prefix(name.clone());
-            if short_name.len() == 0 || short_name.find(' ').unwrap_or(8) == 0 {
-                return Err(core::fmt::Error);
-            }
-            short_name_slice.copy_from_slice(&short_name.as_bytes()[0..11]);
-            FATDirEnt::gen_short_name_numtail(dir_iter.short().collect(), short_name_slice);
+        let short_name = FATDirEnt::gen_short_name_prefix(name.clone());
+        if short_name.len() == 0 || short_name.find(' ').unwrap_or(8) == 0 {
+            return Err(core::fmt::Error);
         }
+        short_name_slice.copy_from_slice(&short_name.as_bytes()[0..11]);
+        FATDirEnt::gen_short_name_numtail(
+            parent_dir
+                .iter(DirIterMode::ShortIter)
+                .collect(), 
+            short_name_slice);
         Ok(())
     }
-
+    /// return the offset of last free entry
     fn alloc_dir_ent(
         parent_dir: &Arc<Self>,
-        iter: &mut DirIter<T, F>,
-        long_ent_num: usize,
-        fst_clus: &mut u32,
-        file_type: &DiskInodeType,
-    ) -> bool {
-        true && match iter.alloc_dir_ent(long_ent_num + 1) {
-            Ok(_) => {
-                true // allocate the directory in current size
+        num: usize,
+    ) -> Result<usize, core::fmt::Error> {
+        let mut iter = parent_dir.iter(DirIterMode::Enum);
+        if let Err(matched) = iter.alloc_dir_ent(num) {
+            if let Err(_) = parent_dir.expand_dir_size(num - matched) {
+                return Err(core::fmt::Error);
             }
-            Err(trailing_unused) => {
-                if parent_dir
-                    .expand_dir_size(1 + long_ent_num - trailing_unused)
-                    .is_ok()
-                // or succeed in expanding the dir size...
-                {
-                    for _ in 0..long_ent_num - trailing_unused {
-                        iter.next();
-                    }
-                    true
-                } else {
-                    false
-                }
+            // now iterator points to the last found directory entry
+            // we just need iterate left entries ^-^
+            if let Err(_) = iter.alloc_dir_ent(num - matched) {
+                return Err(core::fmt::Error);
             }
-        } && (*file_type != DiskInodeType::Directory // the directory should be allocated ahead of use for a new directory.
-                || if let Some(i) = parent_dir
-                    .fs
-                    .fat
-                    .alloc_one(&parent_dir.fs.block_device, None)
-                {
-                    *fst_clus = i;
-                    true
-                } else {
-                    false
-                })
+        }
+        println!("found {:?}", iter.get_offset());
+        Ok(iter.get_offset().unwrap())
     }
 
     /// Create a file or a directory from the parent.
@@ -356,41 +331,51 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         {
             Err(core::fmt::Error)
         } else {
-            let mut short_name_slice: [u8; 11] = [32u8; 11];
-            if Self::gen_short_name_slice(parent_dir.iter(), &name, &mut short_name_slice).is_err()
-            {
+            //get short name slice
+            let mut short_name_slice: [u8; 11] = [' ' as u8; 11];
+            if Self::gen_short_name_slice(&parent_dir, &name, &mut short_name_slice).is_err() {
                 return Err(core::fmt::Error);
             }
-            let long_ent_num =
-                (name.len() + LONG_DIR_ENT_NAME_CAPACITY - 1) / LONG_DIR_ENT_NAME_CAPACITY;
-            let mut iter = parent_dir.iter();
-            let mut fst_clus = 0;
-            if Self::alloc_dir_ent(
-                &parent_dir,
-                &mut iter,
-                long_ent_num,
-                &mut fst_clus,
-                &file_type,
-            ) {
-                // write the directory entries
-                let offset = iter.offset;
-                let short = Self::write_back_dir_ent(
-                    &mut iter,
-                    &name,
-                    long_ent_num,
-                    short_name_slice,
-                    fst_clus,
-                    &file_type,
-                );
-                let arc = Arc::new(Inode::from_ent(&parent_dir, &short, offset));
-                if fst_clus != 0 {
-                    Self::fill_empty_dir(fst_clus, &parent_dir, &arc);
-                }
-                // create an empty directory.
-                return Ok(arc);
-            } else {
+            //alloc parent's directory entries
+            let long_ent_num = name.len().div_ceil(LONG_DIR_ENT_NAME_CAPACITY);
+            let short_ent_num = 1;
+            let short_ent_offset = 
+                Self::alloc_dir_ent(&parent_dir,long_ent_num + short_ent_num);
+            if short_ent_offset.is_err() {
                 return Err(core::fmt::Error);
-            };
+            }
+            let short_ent_offset = short_ent_offset.unwrap();
+            //if file_type is Directory, alloc first cluster
+            let fst_clus = 
+                if file_type == DiskInodeType::Directory {
+                    let fst_clus = parent_dir.fs.fat.alloc_one(&parent_dir.fs.block_device, None);
+                    if fst_clus.is_none() {
+                        return Err(core::fmt::Error);
+                    }
+                    fst_clus.unwrap()
+                } else {
+                    0
+                };
+            //write back parent's directory entry
+            let short = 
+                Self::write_back_dir_ent(
+                    &parent_dir, 
+                    short_ent_offset, 
+                    &name, 
+                    long_ent_num, 
+                    short_name_slice, 
+                    fst_clus, 
+                    &file_type);
+            //generate arc
+            let arc = Arc::new(Inode::from_ent(&parent_dir, &short, short_ent_offset));
+            //if file_type is Directory, set first 3 directory entry
+            if file_type == DiskInodeType::Directory {
+                //set size
+                *arc.size.write() = 3 * core::mem::size_of::<FATDirEnt>() as u32;
+                //fill content
+                Self::fill_empty_dir(fst_clus, &parent_dir, &arc);
+            }
+            Ok(arc)
         }
     }
 
@@ -398,18 +383,24 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Write back both long and short directories.
     /// The short directory is created from the `fst_clus` and the `name`.
     fn write_back_dir_ent(
-        iter: &mut DirIter<T, F>,
+        parent_dir: &Arc<Self>,
+        short_ent_offset: usize,
         name: &String,
         long_ent_num: usize,
         short_name_slice: [u8; 11],
         fst_clus: u32,
         file_type: &DiskInodeType,
     ) -> FATDirShortEnt {
+        //we have graranteed we have alloc enough entries
+        //so we use Enum mode
+        let mut iter = parent_dir.iter(DirIterMode::Enum);
+        iter.set_offset(short_ent_offset);
         iter.to_backward();
         let short = FATDirShortEnt::from_name(short_name_slice, fst_clus, *file_type);
         iter.write_to_current_ent(&FATDirEnt { short_entry: short });
-        iter.next();
+        
         for i in 1..long_ent_num {
+            iter.next();
             iter.write_to_current_ent(&FATDirEnt {
                 long_entry: FATLongDirEnt::from_name_slice(
                     false,
@@ -417,8 +408,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     Self::get_long_name_slice(name, i),
                 ),
             });
-            iter.next();
         }
+        iter.next();
         iter.write_to_current_ent(&FATDirEnt {
             long_entry: FATLongDirEnt::from_name_slice(
                 true,
@@ -432,40 +423,32 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Fill out an empty directory with only the '.' & '..' entries.
     #[inline(always)]
     fn fill_empty_dir(fst_clus: u32, parent_dir: &Arc<Inode<T, F>>, arc: &Arc<Inode<T, F>>) {
-        let sz = arc.get_size();
-        let mut buf = FATDirEnt::empty();
-        buf.as_bytes_mut()[11] = 0;
 
-        let mut new_iter = arc.iter();
-        let mut short_name: [u8; 11] = [32u8; 11];
-
+        let mut iter = arc.iter(DirIterMode::Enum);
+        let mut short_name: [u8; 11] = [' ' as u8; 11];
+        //.
+        iter.next();
         short_name[0] = '.' as u8;
-        new_iter.write_to_current_ent(&FATDirEnt {
+        iter.write_to_current_ent(&FATDirEnt {
             short_entry: FATDirShortEnt::from_name(
                 short_name,
                 fst_clus as u32,
                 DiskInodeType::Directory,
             ),
         });
-        new_iter.next();
+        //..
+        iter.next();
         short_name[1] = '.' as u8;
-        new_iter.write_to_current_ent(&FATDirEnt {
+        iter.write_to_current_ent(&FATDirEnt {
             short_entry: FATDirShortEnt::from_name(
                 short_name,
                 parent_dir.get_inode_num().unwrap(),
                 DiskInodeType::Directory,
             ),
         });
-        new_iter.next();
-        new_iter.write_to_current_ent(&FATDirEnt::unused_and_last_entry());
-        new_iter.next();
-        loop {
-            if new_iter.offset == sz {
-                break;
-            }
-            new_iter.write_to_current_ent(&buf);
-            new_iter.offset += buf.as_bytes().len();
-        }
+        //add "unused and last" sign
+        iter.next();
+        iter.write_to_current_ent(&FATDirEnt::unused_and_last_entry());
     }
     /// Get the addition of clusters needed to increase the file size.
     pub fn clus_num_needed(&self, new_size: u32) -> u32 {
@@ -510,7 +493,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// * `block_device`: the block_dev
     pub fn read_at_block_cache(&self, offset: usize, buf: &mut [u8]) -> usize {
         let mut start = offset;
-        let size = { *self.size.read() };
+        let size = *self.size.read();
         let end = (offset + buf.len()).min(size as usize);
         if start >= end {
             return 0;
@@ -611,90 +594,72 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         // you haven't cleared the directory entry in the self.parent_dir
         mem::take(&mut lock)
     }
-    #[inline(always)]
-    fn get_size(&self) -> usize {
-        self.file_size()
-    }
 
     pub fn ls(&self, cond: DirFilter) -> Vec<(String, FATDirShortEnt, usize)> {
         if !self.is_dir() {
             return Vec::new();
-        } else {
-            let mut v = Vec::with_capacity(30);
-            let mut name = Vec::with_capacity(3);
-            let mut iter = self.iter();
+        }
+        let mut v = Vec::with_capacity(30);
+        let mut name = Vec::with_capacity(3);
+        let mut iter = self.iter(DirIterMode::UsedIter);
 
-            let mut should_be_ord = 0;
-            loop {
-                let offset = iter.get_offset();
-                if let Some(i) = iter.next() {
-                    if i.is_long() {
-                        if (name.is_empty() && i.is_last_long_dir_ent())
-                            || (i.ord() == should_be_ord)
-                        {
-                            should_be_ord = i.ord() - 1;
-                            name.insert(0, i.get_name());
-                        } else {
-                            name.clear();
-                            name.insert(0, i.get_name());
-                        }
-                    } else {
-                        if !name.is_empty() {
-                            //then match the name to see if it's correct.
-                            if true {
-                                //if correct, push the concatenated name
-                                let concat_name = name.concat();
-                                if match cond {
-                                    DirFilter::None => true,
-                                    DirFilter::Name(ref req_name) => *req_name == concat_name,
-                                    DirFilter::FstClus(inum) => {
-                                        inum as u32 == i.get_short_ent().unwrap().get_first_clus()
-                                    }
-                                } {
-                                    v.push((
-                                        concat_name,
-                                        i.get_short_ent().unwrap().clone(),
-                                        offset,
-                                    ));
-                                    if !cond.is_none() {
-                                        break;
-                                    }
-                                }
-                                name.clear();
-                                continue;
-                            } else {
-                                // short name doesn't match... The previous long entries are not correct.
-                                name.clear();
-                            }
-                        }
-                        // only one short
-                        if match cond {
-                            DirFilter::None => true,
-                            DirFilter::Name(ref req_name) => *req_name == i.get_name(),
-                            DirFilter::FstClus(inum) => {
-                                inum as u32 == i.get_short_ent().unwrap().get_first_clus()
-                            }
-                        } {
-                            v.push((i.get_name(), i.get_short_ent().unwrap().clone(), offset));
-                            if !cond.is_none() {
-                                break;
-                            }
-                        }
+        let mut should_be_ord = usize::MAX;
+        while let Some(dir_ent) = iter.next() {
+            if dir_ent.is_long() {
+                if dir_ent.is_last_long_dir_ent() {
+                    if !name.is_empty() {
+                        //be warn future
+                        panic!("why name isn't empty???");
                     }
-                } else {
-                    break;
+                    name.push(dir_ent.get_name());
+                    should_be_ord = dir_ent.ord() - 1;
+                }
+                else if dir_ent.ord() == should_be_ord {
+                    name.push(dir_ent.get_name());
+                    should_be_ord -= 1;
+                }
+                else {
+                    unreachable!()
+                }
+            } else if dir_ent.is_short() {
+                let filename: String; 
+                if name.is_empty() {
+                    filename = dir_ent.get_name();
+                }
+                else {
+                    name.reverse();
+                    filename = name.concat();
+                    name.clear();
+                    //then match the name to see if it's correct.
+                    //todo
+                };
+                if match cond {
+                    DirFilter::None => true,
+                    DirFilter::Name(ref req_name) => *req_name == filename,
+                    DirFilter::FstClus(inum) => {
+                        inum as u32 == dir_ent.get_short_ent().unwrap().get_first_clus()
+                    }
+                } {
+                    v.push((
+                        filename,
+                        dir_ent.get_short_ent().unwrap().clone(),
+                        iter.get_offset().unwrap(),
+                    ));
+                    if !cond.is_none() {
+                        break;
+                    }
                 }
             }
-            return v;
-        }
+        } 
+        return v;
     }
 
-    pub fn iter(&self) -> DirIter<T, F> {
+    pub fn iter(&self, mode: DirIterMode) -> DirIter<T, F> {
         DirIter {
             dir: self,
-            offset: 0,
+            offset: None,
             forward: true,
-            mode: Mutex::new(DirIterMode::UsedIter),
+            mode,
         }
     }
 
@@ -704,13 +669,14 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn modify_size(&self, diff: isize) {
         //println!("hi2");
         let mut take = FATDirEnt::empty();
-        if let Some(ref par) = self.parent_dir {
-            par.0.read_at_block_cache(par.1, take.as_bytes_mut());
+        if let Some((inode, offset)) = &self.parent_dir {
+            inode.read_at_block_cache(*offset, take.as_bytes_mut());
         }
-        let size = self.get_size();
+        let size = self.file_size();
         if diff.abs() as usize > size && diff < 0 {
             return;
         }
+        
         if diff > 0 {
             // clus_sz: 512, fsz:512, diff:32, should: true
             // clus_sz: 1024, fsz:512, diff:32, should: false
@@ -751,8 +717,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             }
         }
         *self.size.write() += diff as u32;
-        take.set_size(self.get_size() as u32);
-        println!("{}", self.get_size());
+        take.set_size(self.file_size() as u32);
+        println!("{}", self.file_size());
         if let Some(ref par) = self.parent_dir {
             par.0.write_at_block_cache(par.1, take.as_bytes());
         }
@@ -813,28 +779,45 @@ impl DirIterMode {
 
 pub struct DirIter<T: CacheManager, F: CacheManager> {
     dir: *const Inode<T, F>,
-    offset: usize,
-    mode: Mutex<DirIterMode>,
+    offset: Option<usize>,
+    mode: DirIterMode,
     forward: bool,
 }
-
+const STEP_SIZE: usize = core::mem::size_of::<FATDirEnt>();
 impl<T: CacheManager, F: CacheManager> DirIter<T, F> {
     fn is_file(&self) -> bool {
         unsafe { (*self.dir).is_file() }
     }
-    pub fn get_offset(&self) -> usize {
+    fn file_size(&self) -> usize {
+        unsafe { (*self.dir).file_size() } 
+    }
+    pub fn get_offset(&self) -> Option<usize> {
         self.offset
     }
     pub fn set_offset(&mut self, offset: usize) {
-        self.offset = offset;
+        self.offset = Some(offset);
+    }
+    pub fn set_iter_offset(&mut self, offset: usize) {
+        if self.forward {
+            if offset == 0 {
+                self.offset = None;
+            }
+            else {
+                self.offset = Some(offset - STEP_SIZE);
+            }
+        }
+        else {
+            self.offset = Some(offset + STEP_SIZE);            
+        }
     }
     pub fn current_clone(&self) -> Option<FATDirEnt> {
-        let mut i = FATDirEnt::empty();
+        let mut dir_ent = FATDirEnt::empty();
         unsafe {
-            if self.offset < (*(self.dir)).get_size()
-                && (*self.dir).read_at_block_cache(self.offset, i.as_bytes_mut()) != 0
+            if  self.offset.is_some()
+                && self.offset.unwrap() < (*(self.dir)).file_size()
+                && (*self.dir).read_at_block_cache(self.offset.unwrap(), dir_ent.as_bytes_mut()) != 0
             {
-                Some(i)
+                Some(dir_ent)
             } else {
                 None
             }
@@ -858,35 +841,34 @@ impl<T: CacheManager, F: CacheManager> DirIter<T, F> {
         self.forward = !self.forward;
         self
     }
-    pub fn short(self) -> Self {
-        *self.mode.lock() = DirIterMode::ShortIter;
+    pub fn short(mut self) -> Self {
+        self.mode = DirIterMode::ShortIter;
         self
     }
-    pub fn long(self) -> Self {
-        *self.mode.lock() = DirIterMode::LongIter;
+    pub fn long(mut self) -> Self {
+        self.mode = DirIterMode::LongIter;
         self
     }
-    pub fn everything(self) -> Self {
-        *self.mode.lock() = DirIterMode::Enum;
+    pub fn everything(mut self) -> Self {
+        self.mode = DirIterMode::Enum;
         self
     }
-    pub fn all(self) -> Self {
-        *self.mode.lock() = DirIterMode::UsedIter;
+    pub fn all(mut self) -> Self {
+        self.mode = DirIterMode::UsedIter;
         self
     }
-    pub fn unused(self) -> Self {
-        *self.mode.lock() = DirIterMode::Unused;
+    pub fn unused(mut self) -> Self {
+        self.mode = DirIterMode::Unused;
         self
     }
     pub fn write_to_current_ent(&self, ent: &FATDirEnt) {
-        if unsafe {
-            let i = (*(self.dir)).write_at_block_cache(self.offset, ent.as_bytes());
-            println!("[write_to_current_ent]i:{}", i);
-            i
-        } != ent.as_bytes().len()
-        {
-            panic!("Failed!");
+        let len = unsafe {
+            (*(self.dir)).write_at_block_cache(self.offset.unwrap(), ent.as_bytes())
+        };
+        if len != ent.as_bytes().len() {
+            panic!("failed!");
         }
+        println!("[write_to_current_ent] offset:{}, content:{:?}", self.offset.unwrap(), ent.as_bytes());
     }
     /// Allocate unused directory entries for future use without expanding file size
     /// The search starts from the current offset of `self`.
@@ -899,89 +881,89 @@ impl<T: CacheManager, F: CacheManager> DirIter<T, F> {
     /// * On failure, return Err(Error).
     pub fn alloc_dir_ent(&mut self, num: usize) -> Result<(), usize> {
         let mut found = 0;
-        *self.mode.lock() = DirIterMode::Enum;
+        self.forward = true;
+        self.mode = DirIterMode::Enum;
         println!("[alloc_dir_ent] num{}", num);
         loop {
-            if let Some(ref i) = self.current_clone() {
-                if i.unused() {
-                    found += 1;
-                    println!(
-                        "[alloc_dir_ent]found+=1->{} @ offset:{}",
-                        found, self.offset
-                    );
-                } else {
-                    found = 0;
+            let dir_ent = self.step();
+            if dir_ent.is_none() {
+                break;
+            }
+            let dir_ent = dir_ent.unwrap();
+            if dir_ent.unused() {
+                println!("[alloc_dir_ent] found free {:?}", self.offset);
+                found += 1;
+                if found >= num {
+                    println!("[alloc_dir_ent] ok");
+                    return Ok(());
                 }
             }
-            if found >= num {
-                println!("[alloc_dir_ent] Ok");
-                break Ok(());
-            } else if self.next().is_none() {
-                break Err(found);
-            };
+            else {
+                found = 0;
+            }
         }
+        
+        println!("[alloc_dir_ent] Error unmatched {}", found);
+        Err(found)
+    }
+    pub fn step(&mut self) -> Option<FATDirEnt> {
+        let mut dir_ent: FATDirEnt = FATDirEnt::empty();
+        if self.forward {
+            // if offset is None => 0
+            // if offset is non-negative => offset + STEP_SIZE
+            let offset = 
+                self.offset
+                .map(|offset| offset + STEP_SIZE)
+                .unwrap_or(0);
+            if offset >= self.file_size() {
+                return None;
+            } 
+            (unsafe { (*self.dir).read_at_block_cache(offset, dir_ent.as_bytes_mut()) });
+            match self.mode {
+                DirIterMode::Enum => (),
+                _ => {
+                    // if directory entry is "last and unused", next is unavailable
+                    if dir_ent.last_and_unused() {
+                        return None;
+                    }
+                }
+            }
+            self.offset = Some(offset);
+        } else {
+            if self.offset.is_none() {
+                return None;
+            }
+            if self.offset.unwrap() == 0 {
+                self.offset = None;
+                return None;
+            }
+            self.offset = self.offset.map(|offset| offset - STEP_SIZE);
+            (unsafe { (*self.dir).read_at_block_cache(self.offset.unwrap(), dir_ent.as_bytes_mut()) });
+        }
+        // println!("offset {:?}, unused: {:?}, {:?}", self.offset, dir_ent.unused(), dir_ent);
+        Some(dir_ent)
     }
 }
 impl<T: CacheManager, F: CacheManager> Iterator for DirIter<T, F> {
     type Item = FATDirEnt;
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_file() {
-            None
-        } else {
-            let mut i: FATDirEnt = FATDirEnt::empty();
-            /// Move one step forward or backward depending on `self.forward`
-            macro_rules! step {
-                () => {
-                    /* println!("step one to {}", self.offset); */
-                    (unsafe { (*self.dir).read_at_block_cache(self.offset, i.as_bytes_mut()) });
-                    if self.forward {
-                        self.offset += core::mem::size_of::<FATDirEnt>();
-                    } else {
-                        self.offset -= core::mem::size_of::<FATDirEnt>();
-                    }
-                };
-            }
-
-            if !self.forward && self.offset == 0 || unsafe { *(*(self.dir)).size.read() == 0 } {
-                return None;
-            }
-
-            step!();
-
-            let lock = self.mode.lock();
-            while {
-                if self.forward {
-                    self.offset < unsafe { (*self.dir).get_size() }
-                } else {
-                    self.offset != 0
+            return None;
+        }
+        while let Some(dir_ent) = self.step() {
+            fn check_dir_ent_legality(mode: &DirIterMode, dir_ent: &FATDirEnt) -> bool {
+                match mode {
+                    DirIterMode::Unused => dir_ent.unused_not_last(),
+                    DirIterMode::UsedIter => !dir_ent.unused(),
+                    DirIterMode::LongIter => !dir_ent.unused() && dir_ent.is_long(),
+                    DirIterMode::ShortIter => !dir_ent.unused() && dir_ent.is_short(),
+                    DirIterMode::Enum => true
                 }
-            } && match *lock {
-                DirIterMode::Unused => !i.unused(),
-                DirIterMode::UsedIter => i.unused_not_last(),
-                DirIterMode::LongIter => i.unused_not_last() || i.is_short(),
-                DirIterMode::ShortIter => i.unused_not_last() || i.is_long(),
-                DirIterMode::Enum => false,
-            } {
-                step!();
             }
-
-            if {
-                if self.forward {
-                    self.offset <= unsafe { (*self.dir).get_size() }
-                } else {
-                    self.offset != 0
-                }
-            } && match *lock {
-                DirIterMode::Unused => i.unused(),
-                DirIterMode::UsedIter => !i.unused(),
-                DirIterMode::LongIter => !i.unused() && i.is_long(),
-                DirIterMode::ShortIter => !i.unused() && i.is_short(),
-                DirIterMode::Enum => !i.last_and_unused() || !self.forward,
-            } {
-                Some(i)
-            } else {
-                None
+            if check_dir_ent_legality(&self.mode, &dir_ent) {
+                return Some(dir_ent);
             }
         }
+        None
     }
 }
