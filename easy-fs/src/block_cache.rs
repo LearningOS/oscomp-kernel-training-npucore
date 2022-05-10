@@ -16,7 +16,7 @@ pub trait CacheManager {
     type CacheType: Cache;
 
     /// Constructor to the struct.
-    fn new(fst_block_id: usize) -> Mutex<Self>
+    fn new() -> Self
     where
         Self: Sized;
 

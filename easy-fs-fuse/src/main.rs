@@ -387,7 +387,8 @@ fn efs_test() -> std::io::Result<()> {
 */
 fn ls_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
     for i in rt.ls(DirFilter::None) {
-        println!("{}", i.0);
+        println!("{:?}", i);
+        /*
         if i.1.is_dir() {
             let dir = Arc::new(Inode::from_ent(&rt, &i.1, i.2));
             println!("{} is a directory made up of:", i.0);
@@ -397,14 +398,17 @@ fn ls_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
                     .fat
                     .get_next_clus_num(dir.direct.lock()[0], &rt.fs.block_device)
             );
+            
             for j in dir.iter().everything() {
                 println!("{:?}", j);
             }
             println!("(end of it)");
             println!("total_size: {}", dir.file_size());
         }
+        */
     }
 }
+/*
 fn rm_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
     let print_iter = || {
         let mut iter = rt.iter().everything();
@@ -491,3 +495,4 @@ fn create_bench(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
         Inode::create(rt.clone(), i.to_string(), DiskInodeType::File).unwrap();
     });
 }
+*/

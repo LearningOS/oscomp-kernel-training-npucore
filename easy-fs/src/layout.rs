@@ -389,11 +389,20 @@ impl FATDirEnt {
             self.short_entry.file_size = size
         };
     }
+    pub fn get_fst_clus(&self) -> u32 {
+        if !self.is_short() {
+            panic!("this cluster is not a short dir ent")
+        }
+        unsafe {
+            self.short_entry.get_first_clus()
+        }
+    }
     pub fn set_fst_clus(&mut self, fst_clus: u32) {
-        if self.is_short() {
-            unsafe {
-                self.short_entry.set_fst_clus(fst_clus);
-            }
+        if !self.is_short() {
+            panic!("this cluster is not a short dir ent")
+        }
+        unsafe {
+            self.short_entry.set_fst_clus(fst_clus);
         }
     }
     pub fn is_long(&self) -> bool {

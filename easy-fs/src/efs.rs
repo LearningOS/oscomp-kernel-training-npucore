@@ -116,7 +116,7 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
         let rt_clus = efs.root_clus;
         // release efs lock
         Inode::new(
-            rt_clus as usize,
+            rt_clus,
             DiskInodeType::Directory,
             None,
             None,

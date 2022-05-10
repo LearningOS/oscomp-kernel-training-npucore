@@ -11,6 +11,7 @@ mod block_dev;
 mod efs;
 pub mod layout;
 mod vfs;
+mod dir_iter;
 
 pub const BLOCK_SZ: usize = 512;
 pub const CACHE_SZ: usize = 8 * BLOCK_SZ;
