@@ -39,6 +39,12 @@ impl TaskManager {
             .find(|task| task.pid.0 == pid)
             .cloned()
     }
+    pub fn ready_count(&self) -> u16 {
+        self.ready_queue.len() as u16
+    }
+    pub fn interruptible_count(&self) -> u16 {
+        self.interruptible_queue.len() as u16
+    }
 }
 
 lazy_static! {
@@ -83,6 +89,11 @@ pub fn find_task_by_pid(pid: usize) -> Option<Arc<TaskControlBlock>> {
     } else {
         TASK_MANAGER.lock().find_by_pid(pid)
     }
+}
+
+pub fn procs_count() -> u16 {
+    let manager = TASK_MANAGER.lock();
+    manager.ready_count() + manager.interruptible_count()
 }
 
 pub struct WaitQueue {

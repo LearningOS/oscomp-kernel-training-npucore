@@ -527,7 +527,10 @@ pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *
     }
 }
 
-// Automatically add `\0` in the end. I think this function can be improve...
+/// Automatically add `'\0'` in the end,
+/// so total written length is `src.len() + 1` (with trailing `'\0'`).
+/// # Warning
+/// Caller should ensure `src` is not too large, or this function will write out of bound.
 pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
     let size = src.len();
     // if all data of `*dst` is in the same page, write directly

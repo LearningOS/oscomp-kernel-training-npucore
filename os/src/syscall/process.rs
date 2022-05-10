@@ -1,16 +1,19 @@
 use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE};
 use crate::mm::{
-    copy_from_user, copy_to_user, mmap, munmap, sbrk, translated_byte_buffer, translated_ref,
-    translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
+    copy_from_user, copy_to_user, copy_to_user_string, mmap, munmap, sbrk, translated_byte_buffer,
+    translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
-    exit_current_and_run_next, find_task_by_pid, signal::*, suspend_current_and_run_next,
-    wake_interruptible, Rusage, TaskStatus,
+    exit_current_and_run_next, find_task_by_pid, procs_count, signal::*,
+    suspend_current_and_run_next, wake_interruptible, Rusage, TaskStatus,
 };
-use crate::timer::{get_time, get_time_ms, ITimerVal, TimeSpec, TimeVal, TimeZone, NSEC_PER_SEC, Times};
+use crate::timer::{
+    get_time, get_time_ms, get_time_sec, ITimerVal, TimeSpec, TimeVal, TimeZone, Times,
+    NSEC_PER_SEC,
+};
 use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -21,6 +24,52 @@ use num_enum::FromPrimitive;
 
 pub fn sys_exit(exit_code: u32) -> ! {
     exit_current_and_run_next((exit_code & 0xff) << 8);
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Eq, PartialEq, FromPrimitive)]
+#[repr(u32)]
+pub enum SyslogAction {
+    CLOSE = 0,
+    OPEN = 1,
+    READ = 2,
+    READ_ALL = 3,
+    READ_CLEAR = 4,
+    CLEAR = 5,
+    CONSOLE_OFF = 6,
+    CONSOLE_ON = 7,
+    CONSOLE_LEVEL = 8,
+    SIZE_UNREAD = 9,
+    SIZE_BUFFER = 10,
+    #[default]
+    ILLEAGAL,
+}
+
+pub fn sys_syslog(type_: u32, buf: *mut u8, len: u32) -> isize {
+    const LOG_BUF_LEN: usize = 4096;
+    const LOG: &str = "<5>[    0.000000] Linux version 5.10.102.1-microsoft-standard-WSL2 (rtrt@TEAM-NPUCORE) (gcc (Ubuntu 9.4.0-1ubuntu1~20.04) 9.4.0, GNU ld (GNU Binutils for Ubuntu) 2.34) #1 SMP Thu Mar 10 13:31:47 CST 2022";
+    let token = current_user_token();
+    let type_ = SyslogAction::from(type_);
+    let len = LOG.len().min(len as usize);
+    match type_ {
+        SyslogAction::CLOSE | SyslogAction::OPEN => SUCCESS,
+        SyslogAction::READ => {
+            copy_to_user_string(token, &LOG[..len], buf);
+            len as isize
+        }
+        SyslogAction::READ_ALL => {
+            copy_to_user_string(token, &LOG[LOG.len() - len..], buf);
+            len as isize
+        }
+        SyslogAction::READ_CLEAR => todo!(),
+        SyslogAction::CLEAR => todo!(),
+        SyslogAction::CONSOLE_OFF => todo!(),
+        SyslogAction::CONSOLE_ON => todo!(),
+        SyslogAction::CONSOLE_LEVEL => todo!(),
+        SyslogAction::SIZE_UNREAD => todo!(),
+        SyslogAction::SIZE_BUFFER => LOG_BUF_LEN as isize,
+        SyslogAction::ILLEAGAL => EINVAL,
+    }
 }
 
 pub fn sys_yield() -> isize {
@@ -214,6 +263,59 @@ pub fn sys_getpgid(pid: usize) -> isize {
 // For user, tid is pid in kernel
 pub fn sys_gettid() -> isize {
     current_task().unwrap().pid.0 as isize
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct Sysinfo {
+    uptime: usize,     /* Seconds since boot */
+    loads: [usize; 3], /* 1, 5, and 15 minute load averages */
+    totalram: usize,   /* Total usable main memory size */
+    freeram: usize,    /* Available memory size */
+    sharedram: usize,  /* Amount of shared memory */
+    bufferram: usize,  /* Memory used by buffers */
+    totalswap: usize,  /* Total swap space size */
+    freeswap: usize,   /* Swap space still available */
+    procs: u16,        /* Number of current processes */
+    totalhigh: usize, /* Total high memory size */
+    freehigh: usize,  /* Available high memory size */
+    mem_unit: u32,    /* Memory unit size in bytes */
+                      //char __reserved[256];
+                      // In the above structure, sizes of the memory and swap fields are given as multiples of mem_unit bytes.
+}
+
+pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
+    const LINUX_SYSINFO_LOADS_SCALE: usize = 65536;
+    const SEC_1_MIN: usize = 60;
+    const SEC_5_MIN: usize = SEC_1_MIN * 5;
+    const SEC_15_MIN: usize = SEC_1_MIN * 15;
+    const UNIMPLEMENT: usize = 0;
+    let token = current_user_token();
+    let procs = procs_count();
+    copy_to_user(
+        token,
+        &Sysinfo {
+            uptime: get_time_sec(),
+            // Use only current sample (as average) to evaluate
+            loads: [
+                procs as usize * LINUX_SYSINFO_LOADS_SCALE / SEC_1_MIN,
+                procs as usize * LINUX_SYSINFO_LOADS_SCALE / SEC_5_MIN,
+                procs as usize * LINUX_SYSINFO_LOADS_SCALE / SEC_15_MIN,
+            ],
+            totalram: crate::config::MEMORY_END - crate::config::MEMORY_START,
+            freeram: crate::mm::unallocated_frames() * PAGE_SIZE,
+            sharedram: UNIMPLEMENT,
+            bufferram: UNIMPLEMENT,
+            totalswap: 0,
+            freeswap: 0,
+            procs: procs,
+            totalhigh: 0,
+            freehigh: 0,
+            mem_unit: 1,
+        },
+        info,
+    );
+    SUCCESS
 }
 
 pub fn sys_sbrk(increment: isize) -> isize {
@@ -496,12 +598,11 @@ pub fn sys_prlimit(
             }
         }
         if !new_limit.is_null() {
-            let rlimit = &mut RLimit {rlim_cur: 0, rlim_max: 0};
-            copy_from_user(
-                token,
-                new_limit,
-                rlimit,
-            );
+            let rlimit = &mut RLimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            copy_from_user(token, new_limit, rlimit);
             warn!("[sys_prlimit] new_limit is not implemented yet, but it's not null! new_limit: {:?}", rlimit);
             match resource {
                 Resource::NOFILE => {

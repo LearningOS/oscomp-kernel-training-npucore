@@ -15,7 +15,7 @@ pub use signal::*;
 use switch::__switch;
 pub use task::{execve, FdTable, Rusage, TaskControlBlock, TaskStatus};
 
-pub use manager::{add_task, find_task_by_pid, sleep_interruptible, wake_interruptible};
+pub use manager::{add_task, find_task_by_pid, sleep_interruptible, wake_interruptible, procs_count};
 pub use pid::{pid_alloc, KernelStack, PidHandle};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
