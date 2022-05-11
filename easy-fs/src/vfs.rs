@@ -359,7 +359,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             }
         }
         dir_ent.set_size(new_size);
-        println!("{}", new_size);
+        //println!("{}", new_size);
         // Write back
         if let Some((par_inode, offset)) = &self.parent_dir {
             par_inode.write_at_block_cache(
@@ -577,7 +577,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if dir_ent.unused() {
                 found_free_dir_ent += 1;
                 if found_free_dir_ent >= alloc_num {
-                    println!("found {:?}", iter.get_offset());
+                    //println!("found {:?}", iter.get_offset());
                     let offset = iter.get_offset().unwrap();
                     let lock = iter.lock;
                     return Ok((offset, lock));
@@ -601,11 +601,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let (inode, offset) = self.parent_dir.as_ref().unwrap();
         let lock = inode.file_content.lock();
         let mut iter = inode.dir_iter(lock, Some(*offset), DirIterMode::UsedIter, BACKWARD);
-        println!(
-            "deleting short: {:?},name:{}",
-            iter.current_clone(),
-            iter.current_clone().unwrap().get_name()
-        );
+        /* println!(
+         *     "deleting short: {:?},name:{}",
+         *     iter.current_clone(),
+         *     iter.current_clone().unwrap().get_name()
+         * ); */
 
         iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
         // Check this dir_ent is a short dir_ent
@@ -930,8 +930,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             self.get_inode_num().unwrap_or(0) as u64,
         )
     }
-    pub fn dirent_info(&self) -> Option<(String, usize, u64, FATDiskInodeType)> {
-        let offset = self.parent_dir.as_ref().unwrap().1 as u32;
+    pub fn dirent_info(&self, offset: u32) -> Option<(String, usize, u64, FATDiskInodeType)> {
         let mut v = self.ls(DirFilter::DirOffset(offset));
         v.pop().map(|i| {
             (

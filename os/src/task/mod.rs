@@ -202,4 +202,5 @@ pub struct ELFInfo {
     pub entry: usize,
     pub phnum: usize,
     pub phent: usize,
-    pub phdr: us
+    pub phdr: usize,
+}

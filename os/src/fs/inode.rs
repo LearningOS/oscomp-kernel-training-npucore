@@ -10,8 +10,6 @@ use _core::usize;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use alloc::vec::Vec;
 use bitflags::*;
 use easy_fs::layout::FATDiskInodeType;
@@ -20,7 +18,7 @@ use easy_fs::{DirFilter, EasyFileSystem, Inode};
 use lazy_static::*;
 use spin::Mutex;
 
-type InodeImpl = Inode;
+type InodeImpl = Inode<>;
 
 // 此inode实际被当作文件
 pub struct OSInode {
@@ -96,18 +94,6 @@ impl OSInode {
         v
     }
 
-    pub fn read_into(&self, buffer: &mut [u8]) {
-        unsafe {
-            let mut inner = self.inner.lock();
-            loop {
-                let len = inner.inode.read_into(inner.offset, buffer);
-                if len == 0 {
-                    break;
-                }
-                inner.offset += len;
-            }
-        }
-    }
     pub fn write_all(&self, str_vec: &Vec<u8>) -> usize {
         let mut inner = self.inner.lock();
         let mut remain = str_vec.len();
@@ -146,7 +132,7 @@ impl OSInode {
 
         let mut inner = self.inner.lock();
         let offset = inner.offset as u32;
-        if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset as usize) {
+        if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset) {
             let mut d_type: u8 = 0;
             if attri & FATDiskInodeType::AttrDirectory != 0 {
                 d_type = DT_DIR;
@@ -295,7 +281,20 @@ pub fn list_apps() {
     println!("**************/");
 }
 
-/// If `path` is absolute path, `working_dir` will be ignored.
+impl OpenFlags {
+    /// Do not check validity for simplicity
+    /// Return (readable, writable)
+    pub fn read_write(&self) -> (bool, bool) {
+        if self.is_empty() {
+            (true, false)
+        } else if self.contains(Self::WRONLY) {
+            (false, true)
+        } else {
+            (true, true)
+        }
+    }
+}
+
 pub fn open(
     working_dir: &str,
     path: &str,
