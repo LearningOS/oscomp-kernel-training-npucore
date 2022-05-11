@@ -146,7 +146,7 @@ impl OSInode {
 
         let mut inner = self.inner.lock();
         let offset = inner.offset as u32;
-        if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset as usize) {
+        if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset) {
             let mut d_type: u8 = 0;
             if attri & FATDiskInodeType::AttrDirectory != 0 {
                 d_type = DT_DIR;
@@ -295,7 +295,20 @@ pub fn list_apps() {
     println!("**************/");
 }
 
-/// If `path` is absolute path, `working_dir` will be ignored.
+impl OpenFlags {
+    /// Do not check validity for simplicity
+    /// Return (readable, writable)
+    pub fn read_write(&self) -> (bool, bool) {
+        if self.is_empty() {
+            (true, false)
+        } else if self.contains(Self::WRONLY) {
+            (false, true)
+        } else {
+            (true, true)
+        }
+    }
+}
+
 pub fn open(
     working_dir: &str,
     path: &str,

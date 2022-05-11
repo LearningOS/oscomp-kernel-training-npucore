@@ -930,8 +930,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             self.get_inode_num().unwrap_or(0) as u64,
         )
     }
-    pub fn dirent_info(&self) -> Option<(String, usize, u64, FATDiskInodeType)> {
-        let offset = self.parent_dir.as_ref().unwrap().1 as u32;
+    pub fn dirent_info(&self, offset: u32) -> Option<(String, usize, u64, FATDiskInodeType)> {
         let mut v = self.ls(DirFilter::DirOffset(offset));
         v.pop().map(|i| {
             (
