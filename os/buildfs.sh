@@ -1,6 +1,7 @@
 U_FAT32_DIR="../easy-fs-fuse"
 U_FAT32=$1
 
+touch ${U_FAT32}
 sudo dd if=/dev/zero of=${U_FAT32} bs=1M count=100
 sudo mkfs.vfat -F 32 ${U_FAT32}
 sudo fdisk -l ${U_FAT32}

@@ -90,7 +90,7 @@ $(KERNEL_BIN): kernel
 
 $(APPS):
 
-fat32: $(U_FAT32_DIR)/fat32.img
+fat32:
 	./buildfs.sh "$(U_FAT32_DIR)/fat32.img"
 
 fsimg-format:
