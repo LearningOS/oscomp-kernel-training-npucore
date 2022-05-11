@@ -584,10 +584,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             );
             // Generate long entries
             let mut long_ents = Vec::<FATLongDirEnt>::new();
-            for i in 0..long_ent_num {
+            for i in 1..=long_ent_num {
                 long_ents.push(
                     FATLongDirEnt::from_name_slice(
-                        i == long_ent_num - 1,
+                        i == long_ent_num,
                         i,
                         Self::get_long_name_slice(&name, i),
                     )
@@ -630,6 +630,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         long_ent_num: usize,
     ) -> [u16; LONG_DIR_ENT_NAME_CAPACITY] {
         let mut v: Vec<u16> = name.encode_utf16().collect();
+        assert!(long_ent_num >= 1);
+        let long_ent_num = long_ent_num - 1;
         assert!(long_ent_num * LONG_DIR_ENT_NAME_CAPACITY < v.len());
         while v.len() < (long_ent_num + 1) * LONG_DIR_ENT_NAME_CAPACITY {
             v.push(0);
