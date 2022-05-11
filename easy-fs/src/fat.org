@@ -1,0 +1,431 @@
+* 前言
+本文档遵循GNUDOC协议,用户有权自由使用和传播.
+** 简介
+这是一份如何从rCore::EasyFS改造出FAT32文件系统"前端"的教程(也就是说本文件系统支持多种后端)
+** 参考文献
+*** 常见
+**** 微软的FAT系列文件系统(exFAT除外)技术规格和夏新手机厂技术人员04年的翻译版(网传中文版)
+微软的技术资料叫做fatgen103.pdf,基本可以搜索到;
+
+中文翻译文件: FAT32中文版.pdf
+
+注意,后者在一些字段长度上有错,需要配合原版进行阅读
+**** 哈佛大学操作系统原理课的课程Slide(PDF)和作业指导
+用国外的搜索引擎搜索下列字符串
+#+begin_src 
+FAT32 File Structure
+Prof. James L. Frankel
+Harvard University
+Version of 9:45 PM 24-Mar-2021
+#+end_src
+*** 不太常见的资料
+**** 西北工业大学刘明轩学长的FAT32文件系统代码阅读汇报
+**** 日期为20090808,邮箱为gdfgd0218@126.com的大佬提供的FAT32的技术资料
+"FAT32文件系统详解.pdf"
+*** 上述文献的阅读建议
+最正宗的微软的技术规格自然是一切的根本,但不建议直接阅读,毕竟很多的技术规范在实际中不见得有人遵守,
+甚至你不实现对于比赛和实际使用的影响也没有想象中大,而且其中也不都是和现代操作系统使用相关的,
+而是向下兼容采取的权宜之计;但是,对于实现真正商品级的产品而不是玩具,这些规格必须遵守.
+
+中文版的资料在FAT本身的文件系统的文件分配表(File Allocation Table)的原理上叙述比微软要详细的多,实际上,其用整整几页(Pg9~Pg11)叙述的FAT的文件识别原理
+在英文版中几乎一笔带过,还不如你在操作系统课程上学得来的详细,而常见的中文版已经用下划线标出了笔记,所以体验还行.但对于形象的解释,其实后两个"不太常见的资料"也不错
+
+文件目录项部分哈佛的资料还算不错,除了技术规格还讲了很多实现上需要绕过的坑,比技术规格信息多,但技术规格也可看一看
+
+短文件名生成...建议看Linux代码
+** 鸣谢
+感谢我的指导老师,两位队友对我这种不靠谱的人的理解和支持和(主要是)容忍.
+
+最后,请让我膜拜伟大的THU和Harvard University的各位大佬orz
+
+(虽然可能只是他们一次信手拈来的作业罢了),也感谢这些巨佬和前辈的付出给我们提供了良好的框架和学习的对象
+* FAT文件系统布局
+出于简单考虑,本文献不考虑多分区/分区表处理
+而实际上,如果有需要,可以在原本的SDCard层上再抽象出一个分区对象,
+让分区实现一个BlockDevice(定义见下文)trait,然后按照常规思路继续实现.
+** FAT32 Layout
+*** Reserved Area
+**** DBR(Dos Boot Record, not mentioned in FAT32 layout)
+In our implementation, BS is used along with BPB.
+
+Besides, the items of the two are mixed instead of separated.
+***** (DOS)Boot Sector
+marked with BS.
+***** BPB
+*** FAT Region[(usu. 2)]
+*** File and Directory Data Region
+* rCore FS/VFS 布局 & 设计
+以下资料按照自顶向下的思路写成
+** 原版EasyFS
+*** Inode(vfs.rs)
+管理索引节点（即文件控制块）数据结构，并实现文件创建/文件打开/文件读写等成员函数来向上支持文件操作相关的系统调用的处理
+*** Disk block management layer(efs.rs)
+合并了上述核心数据结构和磁盘布局所形成的磁盘文件系统数据结构，以及创建/打
+开文件系统的相关处理和磁盘块的分配和回收处理
+*** Disk(layout.rs)
+Layout磁盘上的超级块、位图、索引节点、数据块、目录项等核心数据结构和相关处理
+*** BlockCache(block_cache.rs)
+在内存中建立磁盘上的
+*** BlockDevice(the Driver)(block_dev.rs)
+抽象的
+** Common: The Lowest 2 Layers
+Note: BlockCache should support direct mapping/copying without caching...
+* 面向FAT32的需求进行改造
+* Inode之争
+早期我的,也包括去年一些学校的设计,是将每个
+但我们经过对Linux的测试,发现其实
+* Short Name generation
+本来这个内容应当被归入Layout或者改名/创建文件夹,但考虑到他的难度,计划单列出一节.
+这个部分参考资料不多,部分常见的实现是不完整的,某些的生成的尾部数字扩展恒为1,且没有判断重复的能力;哈佛的pdf直接转发微软的技术规格[[fatgen103.pdf]],后者中的资料语焉不详,夏新手机厂中文版的翻译版和英文只是简单的翻译关系.本文献无意重复相关的资料和结果,但是我们可以使用Linux作为参考代码,分析相关内容.本文献的这部分呈现了笔者有关算法的理解和分析
+[[https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fat/namei_vfat.c]]
+通过分析函数`vfat_create_shortname`,我们可以得出其具体的情况
+** 摸Linux过河
+Linux的实现和Microsoft似乎有所不同,其是从寻找扩展名开始的序号
+*** 代码注释
+**** 其函数的头部声明
+#+begin_src C
+static int vfat_create_shortname(
+/*                             */struct inode *dir, 
+                                 struct nls_table *nls,
+                                 wchar_t *uname,
+                                 int ulen,
+				     unsigned char *name_res, 
+                                 unsigned char *lcase)
+{
+	wchar_t *ip, // 迭代器指针,指向原文件名uname
+            *ext_start, // 扩展名开始位置的指针,指向'.'
+            *end, // 长文件名结尾位置的指针
+            *name_start; // 指向文件名的首个字符
+	unsigned char base[9], // 基本名
+                  ext[4], // 扩展名
+                  buf[8], 
+                  *p; // 迭代器指针,指向base,ext或者buf之类的点
+
+// 用于宽字符向UTF-8转换接收结果的字符串缓存
+	unsigned char charbuf[NLS_MAX_CHARSET_SIZE];
+    // 接下来是用于unicode转utf-8储存在u8的两个变量
+	int chl, // 一个宽字符需要的短字符的长度
+        chi; // 可以认为是指针/迭代器的iter变量
+
+	int sz = 0, // 需要转换为的基本名的部分的长度
+        extlen, // 扩展名长度
+        baselen, // 基本名长度
+        i,
+        numtail_baselen,
+        numtail2_baselen;
+	int is_shortname;
+	struct shortname_info 
+        base_info, 
+        ext_info;
+	unsigned short opt_shortname = 
+                   MSDOS_SB(dir->i_sb)->options.shortname;
+    
+    // 默认为: 不需要长文件名(是符合"8.3"标准的短文件名)
+	is_shortname = 1;
+
+    // 记录短文件名更改的信息
+	INIT_SHORTNAME_INFO(&base_info);
+	INIT_SHORTNAME_INFO(&ext_info);
+#+end_src
+**** 扩展名部分识别
+从尾部向头部寻找扩展名,从而给出扩展名是否存在和如果存在,其主文件名长度(也就基本知道其扩展名的长度)如何
+检测方式为:从最后一位开始循环到第一个字符,如果指针指向点,则准备退出循环,对点的位置在最后一位的,则认为其没有扩展名,主文件名长度为此文件名长度
+#+begin_src C
+	ext_start = end = &uname[ulen];
+	while (--ext_start >= uname) {
+		if (*ext_start == 0x002E) {	/* is `.' */
+			if (ext_start == end - 1) {
+				sz = ulen;
+				ext_start = NULL;
+			}
+			break;
+		}
+	}
+#+end_src
+根据其结果向量(ext_start,sz)的第一位ext_start判断结果
+如果其扩展名的指针指向名字外(首个字符之前),则之前的while是跑完退出,则其对应的结果也是没有扩展名的
+否则,如果扩展名开始指针没有被设置为空,则是有扩展名的情况.
+**** 基本名部分识别
+对有扩展名的情况,
+#+begin_src C
+	if (ext_start == uname - 1) {
+		sz = ulen;
+		ext_start = NULL;
+	} else if (ext_start) {
+		/*
+		 * Names which start with a dot could be just
+		 * an extension eg. "...test".  In this case Win95
+		 * uses the extension as the name and sets no extension.
+		 */
+		name_start = &uname[0];
+          // 跳过vfat标准要求跳过的字符(空格和点)
+		while (name_start < ext_start) {
+			if (!vfat_skip_char(*name_start))
+				break;
+			name_start++;
+		}
+          // 跳过之后
+		if (name_start != ext_start) {
+			sz = ext_start - uname; //
+			ext_start++; 
+		} else {
+			sz = ulen;// 扩展名长度设为
+			ext_start = NULL;//也就是Linus注释提到的情况
+                  // 直接将扩展名定为基本名
+		}
+	}
+#+end_src
+注意C语言注释提到,Win95将纯扩展名形式的文件名的扩展名的作为文件名,而完全不设"扩展名"
+文件名最后一个字符为'.'和文件全局没有出现过一次'.',不存在扩展名的
+**** 基本名生成
+从最开始字符替换所有的非法字符直至基本名结束
+#+begin_src C
+	numtail_baselen = 6;
+	numtail2_baselen = 2;
+	for (baselen = i = 0, p = base, ip = uname; 
+       i < sz;
+       i++, ip++) 
+#+end_src
+以下是UTF32到UTF8的转换相关代码
+#+begin_src C
+{         // 转换编码同时跳过非法字符
+		chl = to_shortname_char(nls, 
+                                  charbuf, 
+                                  sizeof(charbuf),
+					ip, &base_info);
+		if (chl == 0) // 当前宽字符为被跳过字符,无法转化为
+                        // 合法u8,则下一个
+			continue;
+          // 似乎是为了保证在替换数字结尾时其中不会出现残存字符(半个UTF8)
+		if (baselen < 2 && (baselen + chl) > 2)
+			numtail2_baselen = baselen;
+		if (baselen < 6 && (baselen + chl) > 6)
+			numtail_baselen = baselen;
+#+end_src
+将替换好的基本名复制到基本名的数组中(p已经提前初始化为base的地址),同时增长基本名长度
+基本名长度等于8,判断:如果此时长度不足以表达整个编码,则此时必须使用长文件名,否则短文件名其实也够,此外其应当结束循环退出
+此外,一个全部由需要跳过字符组成的字符串无法作为合法的FAT文件名
+#+begin_src C
+		for (chi = 0; chi < chl; chi++) {
+			*p++ = charbuf[chi];
+			baselen++;
+			if (baselen >= 8)
+				break;
+		}
+		if (baselen >= 8) {
+			if ((chi < chl - 1) || (ip + 1) - uname < sz)
+				is_shortname = 0;
+			break;
+		}
+	}
+	if (baselen == 0) {
+		return -EINVAL;
+	}
+#+end_src
+**** 扩展名生成
+#+begin_src C
+extlen = 0;
+	if (ext_start) {// 如果存在扩展名
+		for (p = ext, ip = ext_start; 
+               extlen < 3 && ip < end; ip++) {
+			chl = to_shortname_char(
+                                          nls, 
+                                          charbuf,
+                                          sizeof(charbuf),
+						ip,
+                                          &ext_info);
+			if (chl == 0) // 当前宽字符为被跳过字符,无法转化为
+                                // 合法u8,则下一个
+				continue;
+
+			if ((extlen + chl) > 3) {
+				is_shortname = 0;
+				break;
+			}//超过3个字符,直接退出且需要使用长文件名
+
+			for (chi = 0; chi < chl; chi++) {
+				*p++ = charbuf[chi];
+				extlen++;
+			}//将其复制到ext数组
+
+			if (extlen >= 3) {
+				if (ip + 1 != end)
+					is_shortname = 0;
+				break;
+			}//如果扩展名超过3个字符还没结束,直接退出且需要使用长文件名
+		}
+	}
+	ext[extlen] = '\0'; // 写入'\0'为一会儿复制制造"墙"
+	base[baselen] = '\0';
+
+// 防止偶尔发生的将UNUSED标记写入短文件名的情况,将其改为0x05,
+// 尽管这可能会导致字符显示错误,但比起被标记为UNUSED, 这还是好多了
+	/* Yes, it can happen. ".\xe5" would do it. */
+	if (base[0] == DELETED_FLAG)
+		base[0] = 0x05;
+#+end_src
+**** 文件名拷贝和特殊情况判断
+这一段主要是判断各种的特殊情况和决定是否提前返回,为其文件系统提供帮助
+同时,也决定是否生成数字后缀
+#+begin_src C
+	/* OK, at this point we know that base is not longer than 8 symbols,
+	 * ext is not longer than 3, base is nonempty, both don't contain
+	 * any bad symbols (lowercase transformed to uppercase).
+	 */
+// 按照标准,将整个11个字符的函数初始化为空格
+	memset(name_res, ' ', MSDOS_NAME);
+// 复制基本名到用户提供的数组
+	memcpy(name_res, base, baselen);
+// 复制扩展名到用户提供的数组
+	memcpy(name_res + 8, ext, extlen);
+	*lcase = 0;
+
+	if (is_shortname && base_info.valid && ext_info.valid) {
+		if (vfat_find_form(dir, name_res) == 0)
+			return -EEXIST;//判重,同名则拒绝生成
+
+		if (opt_shortname & VFAT_SFN_CREATE_WIN95) {//WIN95模式
+			return (base_info.upper && ext_info.upper);
+		} else if (opt_shortname & VFAT_SFN_CREATE_WINNT) {
+                  // WIN NT模式,注意,这实际上是第一个有自动生成短文件名算法的版本
+			if ((base_info.upper || base_info.lower) &&
+			    (ext_info.upper || ext_info.lower)) {
+				if (!base_info.upper && base_info.lower)
+					*lcase |= CASE_LOWER_BASE;// 检测其是否基本名大写
+				if (!ext_info.upper && ext_info.lower)
+					*lcase |= CASE_LOWER_EXT;//检测扩展名大写情况
+				return 1;
+			}
+			return 0;
+		} else {// 其他模式目前不支持,应当报告BUG
+			BUG();
+		}
+	}
+// 从文件系统的元数据段获取数字结尾的选项,检查其目前是否有该数据
+	if (MSDOS_SB(dir->i_sb)->options.numtail == 0)
+		if (vfat_find_form(dir, name_res) < 0)
+			return 0;//如果没发现"重名"(类似名称),可以退出了,不用生成数字
+#+end_src
+**** 唯一扩展数字生成
+按照其微软提供的技术规格,这里的算法其实
+注意看这段开头的注释,完美的算法可能并不存在,只是比较合适而已.
+#+begin_src C
+	/*
+	 * Try to find a unique extension.  This used to
+	 * iterate through all possibilities sequentially,
+	 * but that gave extremely bad performance.  Windows
+	 * only tries a few cases before using random
+	 * values for part of the base.
+	 */
+// 如果基本文件名超过6位(7或者8),则其文件名
+	if (baselen > 6) {//这时候优先用最后两位
+		baselen = numtail_baselen;
+		name_res[7] = ' ';
+	}
+// 将文件基本名长度处替换为~,尝试单个数字
+	name_res[baselen] = '~';
+	for (i = 1; i < 10; i++) {
+		name_res[baselen + 1] = i + '0';
+// 如果单个数字能确保找不到,则用单个数字
+		if (vfat_find_form(dir, name_res) < 0)
+			return 0;
+	}
+//好吧,如果到这里就是都找到了
+//然后开始伪随机
+	i = jiffies & 0xffff;
+	sz = (jiffies >> 16) & 0x7;
+	if (baselen > 2) {//如果基本名长度超过2则使用6位数字
+		baselen = numtail2_baselen;
+		name_res[7] = ' ';
+	}
+
+	name_res[baselen + 4] = '~';
+	name_res[baselen + 5] = '1' + sz;
+	while (1) {
+		sprintf(buf, "%04X", i);
+		memcpy(&name_res[baselen], buf, 4);
+		if (vfat_find_form(dir, name_res) < 0)
+			break;
+		i -= 11;
+	}
+#+end_src
+*** 需求分析
+首先考虑到我们的操作系统暂时不支持,可以只考虑英文的情况因此其代码的UTF8转换可以简化
+当前的系统多数使用NT版本而非95的,可以少一些分支.
+另外,数字结尾的生成算法过于复杂,可以考虑借鉴Linux写法
+** 
+* 文件打开表
+** 最初的尝试
+按照之前的实现,如果我们保留泛型,那么文件打开表的处理会非常复杂.特别是由于没有文件打开表,我们无法通过`Inode`的实例获取`Arc<Inode>`.
+这时候很多人会考虑使用`lazy_static`, 很遗憾,虽然这是Rust下`static`的常见方法,但这回可能是不行的.
+因为Inode是Inode<T,F>, 而`lazy_static`知道类型才能实例化,而对于EasyFS, 此时的类型实际上是Arc<Mutex<BTreeMap<usize,Arc<Inode<T,F>>>>>, 可以看到其中有两个未知的类型.
+如果尝试像C++一样,使用per-type static又如何呢?很遗憾,还是不行,因为Rust不允许将`struct`的一个域声明为`static`. 但这可能给了我们一个思路: 如果使用某个static的函数/方法,或许可以绕过这个问题
+** 绕过失败
+这就得提到笔者大二学编译原理的一个故事了,当时我们的老师,一位擅长给学生高分的老师,
+要求大家不允许使用全局变量,只能传参数,本意是让大家多少用全局变量,
+但我这个人就是不听话,所以在C语言下开发出了这样的奇怪打法
+#+begin_src C
+int global_variable_a(bool is_set_mode, int val){
+    static int a = 0;
+    if (is_set_mode) a=val;
+    else return a;
+}
+void set_a(int val) {global_variable_a(1,val);}
+int get_a(){return global_variable_a(0,0);}
+#+end_src
+强行绕过了这个限制,老师最终也没有说什么.
+有没有一种可能,老师实际上是Rust爱好者呢?不过不要紧,这就试一下
+#+begin_src rustic
+  impl<T: CacheManager, F: CacheManager> Inode<T, F> {
+      fn open_li(){
+	    static map = BTreeMap<usize, Arc<Self>>::new();
+      }
+  }
+#+end_src
+很遗憾,即使是这个失败的版本,Rust-analyzer就直接报错了,因为Rust不允许方法中的static有泛型.恐怕只能另辟蹊径
+** unsafe万岁
+在队友的建议下,用unsafe裸指针解引用的方式解决编译通过的问题.大致思路如下:
+#+begin_src rust
+pub fn open_tab(file: OpenTabCmd<T, F>) -> Option<Arc<Self>> {
+    static mut ORG_LI: usize = 0;
+    unsafe {
+        if ORG_LI == 0 {
+            *(ORG_LI as *mut Mutex<alloc::collections::
+                         BTreeMap<u64, Arc<Self>>>) =
+                Mutex::new(alloc::collections::BTreeMap::new());
+        }
+//...
+    None
+}
+#+end_src
+首先,函数是Inode<T,F>的关联函数,在其中使用静态变量`ORG_LI`保持文件打开表.
+但是要注意,Rust中由于默认不允许关联函数使用泛型,所有的Inode<T,F>会共用一个open_tab(). 所以如果严谨的方法是利用非静态变量的TypeId(请自行搜索)建立一个BTreeMap然后对各个类型一一对应,但比较麻烦且对我们的两种运行环境没有意义(系统和FUSE模拟),所以完全可以忽略.
+另外,初始化的时候,如为多核,理论上Rust不使用原子操作保证其一致性,所以需要先完成初始化再打开第二个核,否则会出现竞争.
+然后是之后的命令设计.我们注意到,为了方便处理,此函数使用了OpenTabCmd<T,F>进行文件打开表的命令,其定义为:
+#+begin_src rust
+pub enum OpenTabCmd<T: CacheManager, F: CacheManager> {
+    InsertFile(Arc<Inode<T, F>>),
+    GetFileByInode(u64),
+    DropFileByInode(u64),
+    AddInode(u64, u64),
+}
+#+end_src
+共计4种功能,增,删,查,改,按照顺序分别叙述.
+*** 增
+**** 使用场景
+**** 具体需求
+**** 代码
+*** 删
+**** 使用场景
+**** 具体需求
+**** 代码
+*** 查
+**** 使用场景
+**** 具体需求
+**** 代码
+*** 改
+**** 使用场景
+**** 具体需求
+**** 代码
+* 后续的思路
+事实上,由上述分析,EasyFS的代码中的文件系统可以继续抽象,将其Inode继续抽象出来,然后使用泛型

@@ -230,7 +230,7 @@ impl ITimerVal {
     pub fn new() -> Self {
         Self {
             it_interval: TimeVal::new(),
-            it_value: TimeVal:: new(),
+            it_value: TimeVal::new(),
         }
     }
 }

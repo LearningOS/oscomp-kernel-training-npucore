@@ -7,7 +7,7 @@ KERNEL_ELF := target/$(TARGET)/$(MODE)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
 DISASM_TMP := target/$(TARGET)/$(MODE)/asm
 FS_IMG := ../user/target/$(TARGET)/$(MODE)/fs.img
-U_FAT32_DIR := ../fat32-fuse
+U_FAT32_DIR := ../easy-fs-fuse
 CORE_NUM := 1
 ifeq ($(BOARD), k210)
 	U_FAT32 := /dev/sdc

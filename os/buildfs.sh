@@ -1,4 +1,4 @@
-U_FAT32_DIR="../fat32-fuse"
+U_FAT32_DIR="../easy-fs-fuse"
 U_FAT32=$1
 
 sudo dd if=/dev/zero of=${U_FAT32} bs=1M count=100

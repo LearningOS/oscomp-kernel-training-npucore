@@ -6,7 +6,7 @@ pub use virtio_blk::VirtIOBlock;
 
 use crate::board::BlockDeviceImpl;
 use alloc::sync::Arc;
-use simple_fat32::BlockDevice;
+use easy_fs::BlockDevice;
 use lazy_static::*;
 
 lazy_static! {

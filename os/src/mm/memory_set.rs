@@ -355,7 +355,8 @@ impl MemorySet {
                     assert_eq!(ph.offset() % 0x1000, 0);
                     assert_eq!(
                         VirtAddr::from(ph.file_size() as usize).ceil().0,
-                        map_area.data_frames.vpn_range.get_end().0 - map_area.data_frames.vpn_range.get_start().0
+                        map_area.data_frames.vpn_range.get_end().0
+                            - map_area.data_frames.vpn_range.get_start().0
                     );
 
                     let kernel_start_vpn =
@@ -454,7 +455,10 @@ impl MemorySet {
                 .get_bytes_array()
                 .copy_from_slice(src_ppn.get_bytes_array());
         }
-        debug!("[fork] copy trap_cx area: {:?}", trap_cx_area.data_frames.vpn_range);
+        debug!(
+            "[fork] copy trap_cx area: {:?}",
+            trap_cx_area.data_frames.vpn_range
+        );
         memory_set.heap_area_idx = user_space.heap_area_idx;
         memory_set
     }
@@ -487,7 +491,7 @@ pub struct MapRangeDict {
 
 impl MapRangeDict {
     pub fn new(vpn_range: VPNRange) -> Self {
-        let len = vpn_range.get_end().0 - vpn_range.get_start().0; 
+        let len = vpn_range.get_end().0 - vpn_range.get_start().0;
         let mut new_dict = Self {
             vpn_range,
             data_frames: Vec::with_capacity(len),
@@ -497,12 +501,16 @@ impl MapRangeDict {
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
-    pub fn get(&self, key: &VirtPageNum) -> Option<&Arc<FrameTracker>>{
+    pub fn get(&self, key: &VirtPageNum) -> Option<&Arc<FrameTracker>> {
         self.data_frames[key.0 - self.vpn_range.get_start().0].as_ref()
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
-    pub fn insert(&mut self, key: VirtPageNum, value: Arc<FrameTracker>) -> Option<Arc<FrameTracker>> {
+    pub fn insert(
+        &mut self,
+        key: VirtPageNum,
+        value: Arc<FrameTracker>,
+    ) -> Option<Arc<FrameTracker>> {
         self.data_frames[key.0 - self.vpn_range.get_start().0].replace(value)
     }
     /// # Warning
@@ -571,7 +579,10 @@ impl MapArea {
     /// thus leaving `data_frames` empty.
     pub fn from_another(another: &MapArea) -> Self {
         Self {
-            data_frames: MapRangeDict::new(VPNRange::new(another.data_frames.vpn_range.get_start(), another.data_frames.vpn_range.get_end())),
+            data_frames: MapRangeDict::new(VPNRange::new(
+                another.data_frames.vpn_range.get_start(),
+                another.data_frames.vpn_range.get_end(),
+            )),
             map_type: another.map_type,
             map_perm: another.map_perm,
             map_file: another.map_file.clone(),

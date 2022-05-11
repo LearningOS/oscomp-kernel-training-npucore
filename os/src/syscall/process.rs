@@ -277,11 +277,11 @@ pub struct Sysinfo {
     totalswap: usize,  /* Total swap space size */
     freeswap: usize,   /* Swap space still available */
     procs: u16,        /* Number of current processes */
-    totalhigh: usize, /* Total high memory size */
-    freehigh: usize,  /* Available high memory size */
-    mem_unit: u32,    /* Memory unit size in bytes */
-                      //char __reserved[256];
-                      // In the above structure, sizes of the memory and swap fields are given as multiples of mem_unit bytes.
+    totalhigh: usize,  /* Total high memory size */
+    freehigh: usize,   /* Available high memory size */
+    mem_unit: u32,     /* Memory unit size in bytes */
+                       //char __reserved[256];
+                       // In the above structure, sizes of the memory and swap fields are given as multiples of mem_unit bytes.
 }
 
 pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {

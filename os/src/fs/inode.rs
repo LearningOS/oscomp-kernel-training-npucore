@@ -5,18 +5,22 @@ use crate::syscall::fs::SeekWhence;
 use crate::timer::TimeSpec;
 use crate::{drivers::BLOCK_DEVICE, println};
 
+use _core::convert::TryInto;
+use _core::usize;
 use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use alloc::vec::Vec;
+use bitflags::*;
+use easy_fs::layout::FATDiskInodeType;
+pub use easy_fs::DiskInodeType;
+use easy_fs::{DirFilter, EasyFileSystem, Inode};
 use lazy_static::*;
-use simple_fat32::{FAT32Manager, VFile, ATTRIBUTE_ARCHIVE, ATTRIBUTE_DIRECTORY};
 use spin::Mutex;
 
-#[derive(PartialEq, Copy, Clone, Debug)]
-pub enum DiskInodeType {
-    File,
-    Directory,
-}
+type InodeImpl = Inode;
 
 // 此inode实际被当作文件
 pub struct OSInode {
@@ -27,12 +31,12 @@ pub struct OSInode {
 }
 
 pub struct OSInodeInner {
-    offset: usize,     // 当前读写的位置
-    inode: Arc<VFile>, // inode引用
+    offset: usize,         // 当前读写的位置
+    inode: Arc<InodeImpl>, // inode引用
 }
 
 impl OSInode {
-    pub fn new(readable: bool, writable: bool, inode: Arc<VFile>) -> Self {
+    pub fn new(readable: bool, writable: bool, inode: Arc<InodeImpl>) -> Self {
         Self {
             readable,
             writable,
@@ -44,6 +48,83 @@ impl OSInode {
     pub fn is_dir(&self) -> bool {
         let inner = self.inner.lock();
         inner.inode.is_dir()
+    }
+
+    /* this func will not influence the file offset
+     * @parm: if offset == -1, file offset will be used
+     */
+    pub fn read_vec(&self, offset: isize, len: usize) -> Vec<u8> {
+        let mut inner = self.inner.lock();
+        let mut len = len;
+        let ori_off = inner.offset;
+        if offset >= 0 {
+            inner.offset = offset as usize;
+        }
+        let mut buffer = [0u8; 512];
+        let mut v: Vec<u8> = Vec::new();
+        loop {
+            let rlen = inner.inode.read_at_block_cache(inner.offset, &mut buffer);
+            if rlen == 0 {
+                break;
+            }
+            inner.offset += rlen;
+            v.extend_from_slice(&buffer[..rlen.min(len)]);
+            if len > rlen {
+                len -= rlen;
+            } else {
+                break;
+            }
+        }
+        if offset >= 0 {
+            inner.offset = ori_off;
+        }
+        v
+    }
+
+    pub fn read_all(&self) -> Vec<u8> {
+        let mut inner = self.inner.lock();
+        let mut buffer = [0u8; 512];
+        let mut v: Vec<u8> = Vec::new();
+        loop {
+            let len = inner.inode.read_at_block_cache(inner.offset, &mut buffer);
+            if len == 0 {
+                break;
+            }
+            inner.offset += len;
+            v.extend_from_slice(&buffer[..len]);
+        }
+        v
+    }
+
+    pub fn read_into(&self, buffer: &mut [u8]) {
+        unsafe {
+            let mut inner = self.inner.lock();
+            loop {
+                let len = inner.inode.read_into(inner.offset, buffer);
+                if len == 0 {
+                    break;
+                }
+                inner.offset += len;
+            }
+        }
+    }
+    pub fn write_all(&self, str_vec: &Vec<u8>) -> usize {
+        let mut inner = self.inner.lock();
+        let mut remain = str_vec.len();
+        let mut base = 0;
+        loop {
+            let len = remain.min(512);
+            inner
+                .inode
+                .write_at_block_cache(inner.offset, &str_vec.as_slice()[base..base + len]);
+            inner.offset += len;
+            base += len;
+            remain -= len;
+            if remain == 0 {
+                break;
+            }
+        }
+        return base;
     }
 
     pub fn find(&self, path: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
@@ -66,10 +147,11 @@ impl OSInode {
         let mut inner = self.inner.lock();
         let offset = inner.offset as u32;
         if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset as usize) {
-            let d_type: u8 = if attri & ATTRIBUTE_DIRECTORY != 0 {
-                DT_DIR
-            } else if attri & ATTRIBUTE_ARCHIVE != 0 {
-                DT_REG
+            let mut d_type: u8 = 0;
+            if attri & FATDiskInodeType::AttrDirectory != 0 {
+                d_type = DT_DIR;
+            } else if attri & FATDiskInodeType::AttrArchive != 0 {
+                d_type = DT_REG;
             } else {
                 DT_UNKNOWN
             };
@@ -125,15 +207,30 @@ impl OSInode {
                 )));
             }
         }
-        None
     }
 
-    pub fn delete(&self) -> usize {
+    pub fn clear(&self) {
         let inner = self.inner.lock();
-        inner.inode.remove()
+        inner.inode.clear_size();
     }
 
-    pub fn lseek(&self, offset: isize, whence: SeekWhence) -> isize {
+    pub fn delete(self) {
+        let inner = self.inner.lock();
+        Inode::delete_from_disk(inner.inode.clone())
+    }
+
+    pub fn get_head_cluster(&self) -> u32 {
+        let inner = self.inner.lock();
+        let vfile = &inner.inode;
+        vfile.first_cluster()
+    }
+
+    pub fn set_offset(&self, off: usize) {
+        let mut inner = self.inner.lock();
+        inner.offset = off;
+    }
+
+    pub fn lseek(&self, offset: isize, whence: i32) -> isize {
         let mut inner = self.inner.lock();
         let old_offset = inner.offset;
         match whence {
@@ -180,22 +277,22 @@ impl OSInode {
 
 lazy_static! {
     // 通过ROOT_INODE可以实现对efs的操作
-    pub static ref ROOT_INODE: Arc<VFile> = {
+    pub static ref ROOT_INODE: Arc<InodeImpl> = {
         // 此处载入文件系统
-        let fat32_manager = FAT32Manager::open(BLOCK_DEVICE.clone());
+        let fat32_manager = EasyFileSystem::open(BLOCK_DEVICE.clone());
         let manager_reader = fat32_manager.read();
-        Arc::new( manager_reader.get_root_vfile(& fat32_manager) )
+        Arc::new(manager_reader.get_root_vfile(& fat32_manager) )
     };
 }
 
 pub fn list_apps() {
     println!("/**** APPS ****");
-    for app in ROOT_INODE.ls_lite().unwrap() {
-        if app.1 & ATTRIBUTE_DIRECTORY == 0 {
+    for app in ROOT_INODE.ls(DirFilter::None) {
+        if !app.1.is_dir() {
             println!("{}", app.0);
         }
     }
-    println!("**************/")
+    println!("**************/");
 }
 
 /// If `path` is absolute path, `working_dir` will be ignored.
@@ -274,7 +371,7 @@ impl File for OSInode {
         let mut total_read_size = 0usize;
         for slice in buf.buffers.iter_mut() {
             // buffer存放的元素是[u8]而不是u8
-            let read_size = inner.inode.read_at(inner.offset, *slice);
+            let read_size = inner.inode.read_at_block_cache(inner.offset, *slice);
             if read_size == 0 {
                 break;
             }
@@ -288,7 +385,7 @@ impl File for OSInode {
         let mut inner = self.inner.lock();
         let mut total_write_size = 0usize;
         for slice in buf.buffers.iter() {
-            let write_size = inner.inode.write_at(inner.offset, *slice);
+            let write_size = inner.inode.write_at_block_cache(inner.offset, *slice);
             assert_eq!(write_size, slice.len());
             inner.offset += write_size;
             total_write_size += write_size;

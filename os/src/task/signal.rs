@@ -199,7 +199,9 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
             if act as usize != 0 {
                 let sigact = &mut SigAction::new();
                 copy_from_user(token, act, sigact);
-                sigact.mask.remove(Signals::SIGILL | Signals::SIGSEGV | Signals::SIGKILL | Signals::SIGSTOP);
+                sigact.mask.remove(
+                    Signals::SIGILL | Signals::SIGSEGV | Signals::SIGKILL | Signals::SIGSTOP,
+                );
                 // push to PCB, ignore mask and flags now
                 if !(sigact.handler == SigActionHandler::SIG_DFL
                     || sigact.handler == SigActionHandler::SIG_IGN)

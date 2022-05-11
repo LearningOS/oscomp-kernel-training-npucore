@@ -74,22 +74,22 @@ impl ProcClock {
 #[allow(unused)]
 #[derive(Clone, Copy)]
 pub struct Rusage {
-    pub ru_utime: TimeVal,  /* user CPU time used */
-    pub ru_stime: TimeVal,  /* system CPU time used */
-    ru_maxrss: isize,   // NOT IMPLEMENTED /* maximum resident set size */
-    ru_ixrss: isize,    // NOT IMPLEMENTED /* integral shared memory size */
-    ru_idrss: isize,    // NOT IMPLEMENTED /* integral unshared data size */
-    ru_isrss: isize,    // NOT IMPLEMENTED /* integral unshared stack size */
-    ru_minflt: isize,   // NOT IMPLEMENTED /* page reclaims (soft page faults) */
-    ru_majflt: isize,   // NOT IMPLEMENTED /* page faults (hard page faults) */
-    ru_nswap: isize,    // NOT IMPLEMENTED /* swaps */
-    ru_inblock: isize,  // NOT IMPLEMENTED /* block input operations */
-    ru_oublock: isize,  // NOT IMPLEMENTED /* block output operations */
-    ru_msgsnd: isize,   // NOT IMPLEMENTED /* IPC messages sent */
-    ru_msgrcv: isize,   // NOT IMPLEMENTED /* IPC messages received */
-    ru_nsignals: isize, // NOT IMPLEMENTED /* signals received */
-    ru_nvcsw: isize,    // NOT IMPLEMENTED /* voluntary context switches */
-    ru_nivcsw: isize,   // NOT IMPLEMENTED /* involuntary context switches */
+    pub ru_utime: TimeVal, /* user CPU time used */
+    pub ru_stime: TimeVal, /* system CPU time used */
+    ru_maxrss: isize,      // NOT IMPLEMENTED /* maximum resident set size */
+    ru_ixrss: isize,       // NOT IMPLEMENTED /* integral shared memory size */
+    ru_idrss: isize,       // NOT IMPLEMENTED /* integral unshared data size */
+    ru_isrss: isize,       // NOT IMPLEMENTED /* integral unshared stack size */
+    ru_minflt: isize,      // NOT IMPLEMENTED /* page reclaims (soft page faults) */
+    ru_majflt: isize,      // NOT IMPLEMENTED /* page faults (hard page faults) */
+    ru_nswap: isize,       // NOT IMPLEMENTED /* swaps */
+    ru_inblock: isize,     // NOT IMPLEMENTED /* block input operations */
+    ru_oublock: isize,     // NOT IMPLEMENTED /* block output operations */
+    ru_msgsnd: isize,      // NOT IMPLEMENTED /* IPC messages sent */
+    ru_msgrcv: isize,      // NOT IMPLEMENTED /* IPC messages received */
+    ru_nsignals: isize,    // NOT IMPLEMENTED /* signals received */
+    ru_nvcsw: isize,       // NOT IMPLEMENTED /* voluntary context switches */
+    ru_nivcsw: isize,      // NOT IMPLEMENTED /* involuntary context switches */
 }
 
 impl Rusage {
@@ -247,7 +247,7 @@ impl TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
-                working_dir:"/".to_string(),
+                working_dir: "/".to_string(),
                 trap_cx_ppn,
                 pgid,
                 sigmask: Signals::empty(),

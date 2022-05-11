@@ -3,7 +3,7 @@ use crate::mm::{
     frame_alloc, frame_dealloc, kernel_token, FrameTracker, PageTable, PhysAddr, PhysPageNum,
     StepByOne, VirtAddr,
 };
-use alloc::{vec::Vec, sync::Arc};
+use alloc::{sync::Arc, vec::Vec};
 use lazy_static::*;
 use spin::Mutex;
 use virtio_drivers::{VirtIOBlk, VirtIOHeader};
