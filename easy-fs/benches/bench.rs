@@ -138,6 +138,7 @@ impl BlockCacheManager {
 impl CacheManager for BlockCacheManager {
     type CacheType = BlockCache;
     const CACHE_SZ: usize = 512;
+
     fn try_get_block_cache(
         &mut self,
         block_id: usize,

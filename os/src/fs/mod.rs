@@ -1,3 +1,4 @@
+mod cache_mgr;
 mod dev;
 mod inode;
 mod pipe;

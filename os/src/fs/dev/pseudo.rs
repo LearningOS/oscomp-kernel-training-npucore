@@ -34,4 +34,3 @@ impl File for Null {
         return buf.len();
     }
 }
-

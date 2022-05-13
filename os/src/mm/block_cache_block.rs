@@ -98,13 +98,30 @@ impl BlockCacheManager {
             self.oom();
         }
     }
+
+    fn try_get_block_cache(
+        &self,
+        block_id: usize,
+        inner_cache_id: usize,
+    ) -> Option<Arc<Mutex<BufferCache>>> {
+        for buffer_cache in &self.cache_pool {
+            let mut locked = buffer_cache.lock();
+            if locked.block_id == block_id {
+                if locked.priority < PRIORITY_UPPERBOUND {
+                    locked.priority += 1;
+                }
+                return Some(buffer_cache.clone());
+            }
+        }
+        None
+    }
 }
 
 impl CacheManager for BlockCacheManager {
     const CACHE_SZ: usize = BUFFER_SIZE;
     type CacheType = BufferCache;
 
-    fn new(fst_block_id: usize) -> Mutex<Self> {
+    fn new() -> Self {
         let mut hold: Vec<Arc<FrameTracker>> = Vec::new();
         let mut cache_pool: Vec<Arc<Mutex<BufferCache>>> = Vec::new();
         for i in 0..CACHEPOOLPAGE {
@@ -115,12 +132,11 @@ impl CacheManager for BlockCacheManager {
                 cache_pool.push(Arc::new(Mutex::new(BufferCache::new(buffer_ptr))))
             }
         }
-        Mutex::new(Self {
+        Self {
             _hold: hold,
             cache_pool,
-        })
+        }
     }
-
     fn try_get_block_cache(
         &mut self,
         block_id: usize,

@@ -166,22 +166,21 @@ pub fn oom() {
 pub struct PageCacheManager {
     cache_pool: Vec<Weak<Mutex<PageCache>>>,
 }
-
 impl CacheManager for PageCacheManager {
     const CACHE_SZ: usize = PAGE_SIZE;
     type CacheType = PageCache;
 
-    fn new(fst_block_id: usize) -> Mutex<Self> {
-        Mutex::new(Self {
+    fn new() -> Self {
+        Self {
             cache_pool: Vec::new(),
-        })
+        }
     }
 
     fn try_get_block_cache(
         &mut self,
         block_id: usize,
         inner_cache_id: usize,
-    ) -> Option<Arc<Mutex<Self::CacheType>>> {
+    ) -> Option<Arc<Mutex<PageCache>>> {
         if inner_cache_id >= self.cache_pool.len() {
             return None;
         }

@@ -79,7 +79,7 @@ impl File for Teletype {
             false
         }
     }
-    
+
     #[cfg(not(any(feature = "board_k210")))]
     fn r_ready(&self) -> bool {
         let mut inner = self.inner.lock();
@@ -102,7 +102,9 @@ impl File for Teletype {
         let mut inner = self.inner.lock();
         // block read here, infallible
         unsafe {
-            buf.buffers[0].as_mut_ptr().write_volatile(console_getchar() as u8);
+            buf.buffers[0]
+                .as_mut_ptr()
+                .write_volatile(console_getchar() as u8);
         }
         // fake failed reading to make pseudo non-block reading,
         // in order to return properly in r_ready(),
@@ -150,13 +152,11 @@ impl File for Teletype {
         }
         user_buffer.len()
     }
-    
+
     fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
         let _inner = self.inner.lock();
         match offset {
-            Some(_) => {
-                ESPIPE as usize
-            }
+            Some(_) => ESPIPE as usize,
             None => {
                 match core::str::from_utf8(buffer) {
                     Ok(content) => print!("{}", content),
@@ -168,7 +168,11 @@ impl File for Teletype {
     }
 
     fn ioctl(&self, cmd: u32, argp: usize) -> isize {
-        info!("[tty_ioctl] cmd: {:?}, arg: {:X}", TeletypeCommand::from_primitive(cmd), argp);
+        info!(
+            "[tty_ioctl] cmd: {:?}, arg: {:X}",
+            TeletypeCommand::from_primitive(cmd),
+            argp
+        );
         let mut inner = self.inner.lock();
         let token = crate::task::current_user_token();
         match TeletypeCommand::from_primitive(cmd) {

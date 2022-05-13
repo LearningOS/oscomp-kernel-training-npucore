@@ -1,4 +1,5 @@
 use super::{Dirent, File, OpenFlags, Stat, StatMode};
+use crate::fs::cache_mgr::InfoCacheMgrWrapper;
 use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
@@ -8,17 +9,19 @@ use crate::{drivers::BLOCK_DEVICE, println};
 use _core::convert::TryInto;
 use _core::usize;
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
+//use easy_fs::block_cache::BlockCacheManagerWrapper;
 use easy_fs::layout::FATDiskInodeType;
 pub use easy_fs::DiskInodeType;
-use easy_fs::{DirFilter, EasyFileSystem, Inode};
+use easy_fs::{CacheManager, DirFilter, EasyFileSystem, Inode};
 use lazy_static::*;
 use spin::Mutex;
 
-type InodeImpl = Inode<>;
+type InodeImpl =
+    Inode<crate::fs::cache_mgr::DataCacheMgrWrapper, crate::fs::cache_mgr::InfoCacheMgrWrapper>;
 
 // 此inode实际被当作文件
 pub struct OSInode {
@@ -53,6 +56,7 @@ impl OSInode {
      */
     pub fn read_vec(&self, offset: isize, len: usize) -> Vec<u8> {
         let mut inner = self.inner.lock();
+        let mut file_content_lock = inner.inode.file_content.lock();
         let mut len = len;
         let ori_off = inner.offset;
         if offset >= 0 {
@@ -61,7 +65,10 @@ impl OSInode {
         let mut buffer = [0u8; 512];
         let mut v: Vec<u8> = Vec::new();
         loop {
-            let rlen = inner.inode.read_at_block_cache(inner.offset, &mut buffer);
+            let rlen =
+                inner
+                    .inode
+                    .read_at_block_cache(&mut file_content_lock, inner.offset, &mut buffer);
             if rlen == 0 {
                 break;
             }
@@ -81,10 +88,14 @@ impl OSInode {
 
     pub fn read_all(&self) -> Vec<u8> {
         let mut inner = self.inner.lock();
+        let mut file_content_lock = inner.inode.file_content.lock();
         let mut buffer = [0u8; 512];
         let mut v: Vec<u8> = Vec::new();
         loop {
-            let len = inner.inode.read_at_block_cache(inner.offset, &mut buffer);
+            let len =
+                inner
+                    .inode
+                    .read_at_block_cache(&mut file_content_lock, inner.offset, &mut buffer);
             if len == 0 {
                 break;
             }
@@ -96,13 +107,16 @@ impl OSInode {
 
     pub fn write_all(&self, str_vec: &Vec<u8>) -> usize {
         let mut inner = self.inner.lock();
+        let mut file_content_lock = inner.inode.file_content.lock();
         let mut remain = str_vec.len();
         let mut base = 0;
         loop {
             let len = remain.min(512);
-            inner
-                .inode
-                .write_at_block_cache(inner.offset, &str_vec.as_slice()[base..base + len]);
+            inner.inode.write_at_block_cache(
+                &mut file_content_lock,
+                inner.offset,
+                &str_vec.as_slice()[base..base + len],
+            );
             inner.offset += len;
             base += len;
             remain -= len;
@@ -116,12 +130,18 @@ impl OSInode {
     pub fn find(&self, path: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
         let inner = self.inner.lock();
         let pathv: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
-        match inner.inode.find_vfile_bypath(pathv) {
-            Some(vfile) => {
-                let (readable, writable) = flags.read_write();
-                Some(Arc::new(OSInode::new(readable, writable, vfile)))
+        /* match inner.inode.ls(DirFilter::Name()) {
+         *     Some(vfile) => {
+         *         let (readable, writable) = flags.read_write();
+         *         Some(Arc::new(OSInode::new(readable, writable, vfile)))
+         *     }
+         *     None => None,
+         * } */
+        for file in pathv {
+            let v = inner.inode.ls(DirFilter::Name(file.to_string()));
+            if v.is_empty() {
+                return None;
             }
-            None => None,
         }
     }
 
@@ -133,17 +153,22 @@ impl OSInode {
         let mut inner = self.inner.lock();
         let offset = inner.offset as u32;
         if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset) {
-            let mut d_type: u8 = 0;
-            if attri & FATDiskInodeType::AttrDirectory != 0 {
-                d_type = DT_DIR;
-            } else if attri & FATDiskInodeType::AttrArchive != 0 {
-                d_type = DT_REG;
+            let mut d_type: u8 = if [
+                FATDiskInodeType::AttrDirectory,
+                FATDiskInodeType::AttrVolumeID,
+            ]
+            .contains(&attri)
+            {
+                DT_DIR
+            } else if attri == (FATDiskInodeType::AttrArchive) {
+                DT_REG
             } else {
                 DT_UNKNOWN
             };
+
             let dirent = Box::new(Dirent::new(
                 first_clu as usize,
-                (off - offset) as isize,
+                (off - offset as usize) as isize,
                 d_type,
                 name.as_str(),
             ));
@@ -176,39 +201,28 @@ impl OSInode {
 
         if cur_inode.find_vfile_bypath(pathv.clone()).is_none() {
             let name = pathv.pop().unwrap();
-            if let Some(dir_file) = cur_inode.find_vfile_bypath(pathv.clone()) {
-                if !dir_file.is_dir() {
-                    return None;
-                }
-                let attribute = {
-                    match type_ {
-                        DiskInodeType::Directory => ATTRIBUTE_DIRECTORY,
-                        DiskInodeType::File => ATTRIBUTE_ARCHIVE,
-                    }
-                };
-                return Some(Arc::new(OSInode::new(
-                    readable,
-                    writable,
-                    dir_file.create(name, attribute).unwrap(),
-                )));
-            }
+            if let Some(dir_file) = cur_inode.find_vfile_bypath(pathv.clone()) {}
         }
     }
 
     pub fn clear(&self) {
         let inner = self.inner.lock();
-        inner.inode.clear_size();
+        let mut file_content_lock = inner.inode.file_content.lock();
+        let sz = inner.inode.get_file_size();
+        inner
+            .inode
+            .modify_size(&mut file_content_lock, -(sz as i64) as isize);
     }
 
     pub fn delete(self) {
         let inner = self.inner.lock();
-        Inode::delete_from_disk(inner.inode.clone())
+        Inode::delete_from_disk(inner.inode.clone());
     }
 
     pub fn get_head_cluster(&self) -> u32 {
         let inner = self.inner.lock();
         let vfile = &inner.inode;
-        vfile.first_cluster()
+        vfile.get_file_clus()
     }
 
     pub fn set_offset(&self, off: usize) {
@@ -216,7 +230,7 @@ impl OSInode {
         inner.offset = off;
     }
 
-    pub fn lseek(&self, offset: isize, whence: i32) -> isize {
+    pub fn lseek(&self, offset: isize, whence: SeekWhence) -> isize {
         let mut inner = self.inner.lock();
         let old_offset = inner.offset;
         match whence {
@@ -235,7 +249,7 @@ impl OSInode {
                 }
             }
             SeekWhence::SEEK_END => {
-                let new_offset = inner.inode.get_size() as isize + offset;
+                let new_offset = inner.inode.get_file_size() as isize + offset;
                 if new_offset >= 0 {
                     inner.offset = new_offset as usize;
                 } else {
@@ -249,7 +263,7 @@ impl OSInode {
             "[lseek] old offset: {}, new offset: {}, file size: {}",
             old_offset,
             inner.offset,
-            inner.inode.get_size()
+            inner.inode.get_file_size()
         );
         inner.offset as isize
     }
@@ -263,12 +277,20 @@ impl OSInode {
 
 lazy_static! {
     // 通过ROOT_INODE可以实现对efs的操作
-    pub static ref ROOT_INODE: Arc<InodeImpl> = {
+
         // 此处载入文件系统
-        let fat32_manager = EasyFileSystem::open(BLOCK_DEVICE.clone());
-        let manager_reader = fat32_manager.read();
-        Arc::new(manager_reader.get_root_vfile(& fat32_manager) )
-    };
+    pub static ref FILE_SYSTEM: Arc<EasyFileSystem<crate::fs::cache_mgr::DataCacheMgrWrapper, crate::fs::cache_mgr::InfoCacheMgrWrapper>> =
+        EasyFileSystem::open(
+        BLOCK_DEVICE.clone(),
+            Arc::new(Mutex::new(InfoCacheMgrWrapper::new()))
+        );
+    pub static ref ROOT_INODE: Arc<InodeImpl> = Inode::new(
+        FILE_SYSTEM.root_clus,
+        DiskInodeType::Directory,
+        None,
+        None,
+        FILE_SYSTEM.clone(),
+    );
 }
 
 pub fn list_apps() {
@@ -279,20 +301,6 @@ pub fn list_apps() {
         }
     }
     println!("**************/");
-}
-
-impl OpenFlags {
-    /// Do not check validity for simplicity
-    /// Return (readable, writable)
-    pub fn read_write(&self) -> (bool, bool) {
-        if self.is_empty() {
-            (true, false)
-        } else if self.contains(Self::WRONLY) {
-            (false, true)
-        } else {
-            (true, true)
-        }
-    }
 }
 
 pub fn open(
@@ -311,10 +319,23 @@ pub fn open(
     };
     let cur_inode = {
         if working_dir == "/" || path.starts_with("/") {
-            ROOT_INODE.clone()
+            let i = ROOT_INODE.clone();
+            Some(i)
         } else {
             let components: Vec<&str> = working_dir.split('/').collect();
-            ROOT_INODE.find_vfile_bypath(components).unwrap()
+            let now: Option<Arc<InodeImpl>>;
+            todo!();
+            for filename in components {
+                let v = now
+                    .unwrap()
+                    .ls(easy_fs::DirFilter::Name(filename.to_string()));
+                if v.is_empty() {
+                    now = None;
+                }
+                let (name, ent, offset) = v[0];
+                now = Some(InodeImpl::from_ent(&now.unwrap(), &ent, offset));
+            }
+            now
         }
     };
     let mut components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
@@ -341,16 +362,10 @@ pub fn open(
                 if !dir_file.is_dir() {
                     return Err(ENOTDIR);
                 }
-                let attribute = {
-                    match type_ {
-                        DiskInodeType::Directory => ATTRIBUTE_DIRECTORY,
-                        DiskInodeType::File => ATTRIBUTE_ARCHIVE,
-                    }
-                };
                 return Ok(Arc::new(OSInode::new(
                     readable,
                     writable,
-                    dir_file.create(name, attribute).unwrap(),
+                    dir_file.create(name, type_).unwrap(),
                 )));
             }
         }
@@ -368,9 +383,13 @@ impl File for OSInode {
     fn read(&self, mut buf: UserBuffer) -> usize {
         let mut inner = self.inner.lock();
         let mut total_read_size = 0usize;
+        let file_cont_lock = inner.inode.file_content.lock();
         for slice in buf.buffers.iter_mut() {
             // buffer存放的元素是[u8]而不是u8
-            let read_size = inner.inode.read_at_block_cache(inner.offset, *slice);
+            let read_size =
+                inner
+                    .inode
+                    .read_at_block_cache(&mut file_cont_lock, inner.offset, *slice);
             if read_size == 0 {
                 break;
             }
@@ -383,8 +402,13 @@ impl File for OSInode {
         //println!("ino_write");
         let mut inner = self.inner.lock();
         let mut total_write_size = 0usize;
+
+        let mut file_cont_lock = inner.inode.file_content.lock();
         for slice in buf.buffers.iter() {
-            let write_size = inner.inode.write_at_block_cache(inner.offset, *slice);
+            let write_size =
+                inner
+                    .inode
+                    .write_at_block_cache(&mut file_cont_lock, inner.offset, *slice);
             assert_eq!(write_size, slice.len());
             inner.offset += write_size;
             total_write_size += write_size;
@@ -400,14 +424,20 @@ impl File for OSInode {
     /// Buffer must be in kernel space
     fn kread(&self, offset: Option<&mut usize>, buffer: &mut [u8]) -> usize {
         let mut inner = self.inner.lock();
+        let file_cont_lock = inner.inode.file_content.lock();
         match offset {
             Some(offset) => {
-                let len = inner.inode.read_at(*offset, buffer);
+                let len = inner
+                    .inode
+                    .read_at_block_cache(&mut file_cont_lock, *offset, buffer);
                 *offset += len;
                 len
             }
             None => {
-                let len = inner.inode.read_at(inner.offset, buffer);
+                let len =
+                    inner
+                        .inode
+                        .read_at_block_cache(&mut file_cont_lock, inner.offset, buffer);
                 inner.offset += len;
                 len
             }
@@ -422,14 +452,20 @@ impl File for OSInode {
     /// Buffer must be in kernel space
     fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
         let mut inner = self.inner.lock();
+        let mut file_cont_lock = inner.inode.file_content.lock();
         match offset {
             Some(offset) => {
-                let len = inner.inode.write_at(*offset, buffer);
+                let len = inner
+                    .inode
+                    .write_at_block_cache(&mut file_cont_lock, *offset, buffer);
                 *offset += len;
                 len
             }
             None => {
-                let len = inner.inode.write_at(inner.offset, buffer);
+                let len =
+                    inner
+                        .inode
+                        .write_at_block_cache(&mut file_cont_lock, inner.offset, buffer);
                 inner.offset += len;
                 len
             }

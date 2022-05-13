@@ -2,12 +2,12 @@ use super::{
     frame_alloc, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne, VirtAddr,
     VirtPageNum,
 };
-use core::fmt::Error;
 use _core::ops::{Index, IndexMut};
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
 use bitflags::*;
+use core::fmt::Error;
 bitflags! {
     /// Page Table Entry flags
     pub struct PTEFlags: u8 {
@@ -23,6 +23,7 @@ bitflags! {
         const U = 1 << 4;
         const G = 1 << 5;
         const A = 1 << 6;
+    /// Dirty Bit, true if it is modified.
         const D = 1 << 7;
     }
 }
@@ -51,6 +52,9 @@ impl PageTableEntry {
     }
     pub fn is_valid(&self) -> bool {
         (self.flags() & PTEFlags::V) != PTEFlags::empty()
+    }
+    pub fn is_dirty(&self) -> bool {
+        (self.flags() & PTEFlags::D) != PTEFlags::empty()
     }
     pub fn readable(&self) -> bool {
         (self.flags() & PTEFlags::R) != PTEFlags::empty()
@@ -342,7 +346,7 @@ impl UserBuffer {
     }
 
     /// Write to `self` starting at `offset`, and return written bytes.
-    /// This funtion will try to write as much as possible data 
+    /// This funtion will try to write as much as possible data
     /// in the limit of `self.len()` and `src.len()`.
     /// It guarantees that won't read/write out of bound.
     pub fn write_at(&mut self, offset: usize, src: &[u8]) -> usize {
@@ -357,11 +361,11 @@ impl UserBuffer {
             //then we just need to intersect two intervals to get the corresponding interval
             let copy_dst_start = dst_start.max(offset);
             //we may worry about overflow,
-            //but we can guarantee that offset(we have checked before) and 
+            //but we can guarantee that offset(we have checked before) and
             //src.len()(because of limited memory) won't be too large
             let copy_dst_end = dst_end.min(src.len() + offset);
             if copy_dst_start >= copy_dst_end {
-                dst_start = dst_end;//don't forget to update dst_start
+                dst_start = dst_end; //don't forget to update dst_start
                 continue;
             }
             //mapping 'dst' categories to 'src' categories
@@ -373,7 +377,7 @@ impl UserBuffer {
             buffer[copy_buffer_start..copy_buffer_end]
                 .copy_from_slice(&src[copy_src_start..copy_src_end]);
             write_bytes += copy_dst_end - copy_dst_start;
-            dst_start = dst_end;//don't forget to update dst_start
+            dst_start = dst_end; //don't forget to update dst_start
         }
         write_bytes
     }
@@ -395,8 +399,7 @@ impl Index<usize> for UserBuffer {
         for buffer in &self.buffers {
             if (left as usize) < buffer.len() {
                 return &buffer[left];
-            }
-            else {
+            } else {
                 left -= buffer.len();
             }
         }
@@ -404,15 +407,13 @@ impl Index<usize> for UserBuffer {
     }
 }
 impl IndexMut<usize> for UserBuffer {
-
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         assert!((index as usize) < self.len);
         let mut left = index;
         for buffer in &mut self.buffers {
             if (left as usize) < buffer.len() {
                 return &mut buffer[left];
-            }
-            else {
+            } else {
                 left -= buffer.len();
             }
         }
@@ -472,7 +473,12 @@ pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut 
 
 /// Copy array `*src: [T;len]` to kernel space.
 /// `src` is a pointer in user space, `dst` is a pointer in kernel space.
-pub fn copy_from_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
+pub fn copy_from_user_array<T: 'static + Copy>(
+    token: usize,
+    src: *const T,
+    dst: *mut T,
+    len: usize,
+) {
     let size = core::mem::size_of::<T>() * len;
     // if all data of `*src` is in the same page, read directly
     if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size - 1) {
