@@ -302,7 +302,6 @@ pub fn list_apps() {
     }
     println!("**************/");
 }
-
 pub fn open(
     working_dir: &str,
     path: &str,
