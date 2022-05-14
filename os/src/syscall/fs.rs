@@ -1,4 +1,4 @@
-use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode};
+use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode, ROOT_INODE};
 use crate::fs::{ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Null, Stat, Zero, TTY};
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
@@ -403,30 +403,20 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
     let mut offset: usize = 0;
 
     if fd == AT_FDCWD {
-        if let Ok(file) = open(
-            "/",
-            inner.working_dir.as_str(),
-            OpenFlags::O_RDONLY,
-            DiskInodeType::Directory,
-        ) {
-            loop {
-                if offset + size_of::<Dirent>() > count {
-                    break;
-                }
-                if let Some(dirent) = file.get_dirent() {
-                    copy_to_user(token, dirent.as_ref(), unsafe { dirp.add(offset) }
-                        as *mut Dirent);
-                    offset += size_of::<Dirent>();
-                } else {
-                    break;
-                }
+        loop {
+            if offset + size_of::<Dirent>() > count {
+                break;
             }
-            info!("[sys_getdents64] fd: AT_FDCWD, count: {}", count);
-            offset as isize
-        } else {
-            info!("[sys_getdents64] fd: AT_FDCWD, count: {}", count);
-            ENOENT
+            if let Some(dirent) = inner.working_inode.get_dirent() {
+                copy_to_user(token, dirent.as_ref(), unsafe { dirp.add(offset) }
+                    as *mut Dirent);
+                offset += size_of::<Dirent>();
+            } else {
+                break;
+            }
         }
+        info!("[sys_getdents64] fd: AT_FDCWD, count: {}", count);
+        offset as isize
     } else {
         if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
             return EBADF;
@@ -578,19 +568,10 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
     let token = inner.get_user_token();
 
     if fd == AT_FDCWD {
-        if let Ok(inode) = open(
-            "/",
-            inner.working_dir.as_str(),
-            OpenFlags::O_RDONLY,
-            DiskInodeType::Directory,
-        ) {
-            let stat = inode.stat();
-            copy_to_user(token, stat.as_ref(), statbuf as *mut Stat);
-            info!("[syscall_fstat] fd = {}, stat = {:?}", fd, stat);
-            SUCCESS
-        } else {
-            ENOENT
-        }
+        let stat = inner.working_inode.stat();
+        copy_to_user(token, stat.as_ref(), statbuf as *mut Stat);
+        info!("[syscall_fstat] fd = {}, stat = {:?}", fd, stat);
+        SUCCESS
     } else {
         if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
             return EBADF;
@@ -615,7 +596,7 @@ pub fn sys_chdir(path: *const u8) -> isize {
 
     if path.starts_with("/") {
         match open(
-            "/",
+            &ROOT_INODE,
             path.as_str(),
             OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
@@ -624,6 +605,7 @@ pub fn sys_chdir(path: *const u8) -> isize {
                 if !inode.is_dir() {
                     return ENOTDIR;
                 }
+                inner.working_inode = inode;
                 inner.working_dir = path;
                 SUCCESS
             }
@@ -631,7 +613,7 @@ pub fn sys_chdir(path: *const u8) -> isize {
         }
     } else {
         match open(
-            inner.working_dir.as_str(),
+            &inner.working_inode,
             path.as_str(),
             OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
@@ -640,7 +622,8 @@ pub fn sys_chdir(path: *const u8) -> isize {
                 if !inode.is_dir() {
                     return ENOTDIR;
                 }
-                inner.working_dir += &path;
+                inner.working_inode = inode;
+                inner.working_dir += path.as_str();
                 SUCCESS
             }
             Err(errno) => errno,
@@ -686,11 +669,11 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         return fd as isize;
     }
     let result = if path.starts_with("/") {
-        open("/", path.as_str(), flags, DiskInodeType::File)
+        open(&ROOT_INODE, path.as_str(), flags, DiskInodeType::File)
     } else {
         if dirfd == AT_FDCWD {
             open(
-                inner.working_dir.as_str(),
+                &inner.working_inode,
                 path.as_str(),
                 flags,
                 DiskInodeType::File,
@@ -701,20 +684,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
             } else {
                 let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
                 match &file_descriptor.file {
-                    FileLike::Regular(dir_file) => {
-                        // because `OSInode` currently doesn't record the path
-                        // we can't call `OSInode::open` here...
-                        match dir_file.find(path.as_str(), flags) {
-                            Some(inode) => Ok(inode),
-                            None => {
-                                if flags.contains(OpenFlags::O_CREAT) {
-                                    Ok(dir_file.create(path.as_str(), DiskInodeType::File).unwrap())
-                                } else {
-                                    Err(ENOENT)
-                                }
-                            }
-                        }
-                    }
+                    FileLike::Regular(inode) => inode.open_by_relative_path(path.as_str(), flags, DiskInodeType::File),
                     FileLike::Abstract(_) => Err(ENOTDIR),
                 }
             }
@@ -776,7 +746,7 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
     );
     if path.starts_with("/") {
         match open(
-            "/",
+            &ROOT_INODE,
             path.as_str(),
             OpenFlags::O_CREAT | OpenFlags::O_EXCL,
             DiskInodeType::Directory,
@@ -787,7 +757,7 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
     } else {
         if dirfd == AT_FDCWD {
             match open(
-                inner.working_dir.as_str(),
+                &inner.working_inode,
                 path.as_str(),
                 OpenFlags::O_CREAT | OpenFlags::O_EXCL,
                 DiskInodeType::Directory,
@@ -801,17 +771,10 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
             }
             let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
             match &file_descriptor.file {
-                FileLike::Regular(dir_file) => {
-                    if !dir_file.is_dir() {
-                        return ENOTDIR;
-                    }
-                    if let Some(_) = dir_file.find(path.as_str(), OpenFlags::O_RDONLY) {
-                        EEXIST
-                    } else {
-                        dir_file
-                            .create(path.as_str(), DiskInodeType::Directory)
-                            .unwrap();
-                        SUCCESS
+                FileLike::Regular(inode) => {
+                    match inode.open_by_relative_path(path.as_str(), OpenFlags::O_CREAT | OpenFlags::O_EXCL, DiskInodeType::Directory) {
+                        Ok(_) => SUCCESS,
+                        Err(errno) => errno,
                     }
                 }
                 _ => ENOTDIR,
@@ -978,7 +941,7 @@ fn __openat(dirfd: usize, path: &str) -> Result<Arc<crate::fs::OSInode>, isize> 
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let inode = if path.starts_with("/") {
-        if let Ok(inode) = open("/", path, OpenFlags::O_RDONLY, DiskInodeType::File) {
+        if let Ok(inode) = open(&ROOT_INODE, path, OpenFlags::O_RDONLY, DiskInodeType::File) {
             inode
         } else {
             return Err(ENOENT);
@@ -986,7 +949,7 @@ fn __openat(dirfd: usize, path: &str) -> Result<Arc<crate::fs::OSInode>, isize> 
     } else {
         if dirfd == AT_FDCWD {
             if let Ok(inode) = open(
-                inner.working_dir.as_str(),
+                &inner.working_inode,
                 path,
                 OpenFlags::O_RDONLY,
                 DiskInodeType::File,
@@ -1001,17 +964,8 @@ fn __openat(dirfd: usize, path: &str) -> Result<Arc<crate::fs::OSInode>, isize> 
             }
             let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
             match &file_descriptor.file {
-                FileLike::Regular(dir_file) => {
-                    if !dir_file.is_dir() {
-                        return Err(ENOTDIR);
-                    }
-                    if let Some(inode) = dir_file.find(path, OpenFlags::O_RDONLY) {
-                        inode
-                    } else {
-                        return Err(ENOENT);
-                    }
-                }
-                _ => return Err(ENOTDIR),
+                FileLike::Regular(inode) => inode.open_by_relative_path(path, OpenFlags::O_RDONLY, DiskInodeType::File)?,
+                FileLike::Abstract(_) => return Err(ENOTDIR),
             }
         }
     };

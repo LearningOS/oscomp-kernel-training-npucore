@@ -5,6 +5,7 @@ use super::AuxvEntry;
 use super::AuxvType;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
+use crate::fs::ROOT_INODE;
 use crate::fs::{open, DiskInodeType, File, FileDescriptor, FileLike, OSInode, OpenFlags, TTY};
 use crate::mm::PageTable;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
@@ -35,6 +36,7 @@ pub struct TaskControlBlock {
 
 pub type FdTable = Vec<Option<FileDescriptor>>;
 pub struct TaskControlBlockInner {
+    pub working_inode: Arc<OSInode>,
     pub working_dir: String,
     pub sigmask: Signals,
     pub trap_cx_ppn: PhysPageNum,
@@ -247,6 +249,7 @@ impl TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
+                working_inode: ROOT_INODE.clone(),
                 working_dir: "/".to_string(),
                 trap_cx_ppn,
                 pgid,
@@ -493,6 +496,7 @@ impl TaskControlBlock {
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
                 //cloned(usu. still inherited)
+                working_inode: parent_inner.working_inode.clone(),
                 working_dir: parent_inner.working_dir.clone(),
                 siginfo: parent_inner.siginfo.clone(),
                 //new/empty
@@ -580,11 +584,11 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
     );
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    let working_dir = inner.working_dir.clone();
+    let working_inode = inner.working_inode.clone();
     drop(inner);
 
     match open(
-        working_dir.as_str(),
+        &working_inode,
         path.as_str(),
         OpenFlags::O_RDONLY,
         DiskInodeType::File,
@@ -600,7 +604,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
                 b"\x7fELF" => elf_exec(file, &argv_vec, &envp_vec),
                 b"#!" => {
                     let shell_file = open(
-                        working_dir.as_str(),
+                        &working_inode,
                         DEFAULT_SHELL,
                         OpenFlags::O_RDONLY,
                         DiskInodeType::File,

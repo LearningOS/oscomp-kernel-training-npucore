@@ -1,3 +1,4 @@
+use super::cache_mgr::DataCacheMgrWrapper;
 use super::{Dirent, File, OpenFlags, Stat, StatMode};
 use crate::fs::cache_mgr::InfoCacheMgrWrapper;
 use crate::mm::UserBuffer;
@@ -6,7 +7,6 @@ use crate::syscall::fs::SeekWhence;
 use crate::timer::TimeSpec;
 use crate::{drivers::BLOCK_DEVICE, println};
 
-use _core::convert::TryInto;
 use _core::usize;
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
@@ -27,7 +27,6 @@ type InodeImpl =
 pub struct OSInode {
     readable: bool,
     writable: bool,
-    //fd_cloexec: bool,
     inner: Mutex<OSInodeInner>,
 }
 
@@ -51,98 +50,135 @@ impl OSInode {
         inner.inode.is_dir()
     }
 
-    /* this func will not influence the file offset
-     * @parm: if offset == -1, file offset will be used
-     */
-    pub fn read_vec(&self, offset: isize, len: usize) -> Vec<u8> {
-        let mut inner = self.inner.lock();
-        let mut file_content_lock = inner.inode.file_content.lock();
-        let mut len = len;
-        let ori_off = inner.offset;
-        if offset >= 0 {
-            inner.offset = offset as usize;
-        }
-        let mut buffer = [0u8; 512];
-        let mut v: Vec<u8> = Vec::new();
-        loop {
-            let rlen =
-                inner
-                    .inode
-                    .read_at_block_cache(&mut file_content_lock, inner.offset, &mut buffer);
-            if rlen == 0 {
-                break;
-            }
-            inner.offset += rlen;
-            v.extend_from_slice(&buffer[..rlen.min(len)]);
-            if len > rlen {
-                len -= rlen;
-            } else {
-                break;
-            }
-        }
-        if offset >= 0 {
-            inner.offset = ori_off;
-        }
-        v
-    }
+    // /* this func will not influence the file offset
+    //  * @parm: if offset == -1, file offset will be used
+    //  */
+    // pub fn read_vec(&self, offset: isize, len: usize) -> Vec<u8> {
+    //     let mut inner = self.inner.lock();
+    //     let mut file_content_lock = inner.inode.file_content.lock();
+    //     let mut len = len;
+    //     let ori_off = inner.offset;
+    //     if offset >= 0 {
+    //         inner.offset = offset as usize;
+    //     }
+    //     let mut buffer = [0u8; 512];
+    //     let mut v: Vec<u8> = Vec::new();
+    //     loop {
+    //         let rlen =
+    //             inner
+    //                 .inode
+    //                 .read_at_block_cache(&mut file_content_lock, inner.offset, &mut buffer);
+    //         if rlen == 0 {
+    //             break;
+    //         }
+    //         inner.offset += rlen;
+    //         v.extend_from_slice(&buffer[..rlen.min(len)]);
+    //         if len > rlen {
+    //             len -= rlen;
+    //         } else {
+    //             break;
+    //         }
+    //     }
+    //     if offset >= 0 {
+    //         inner.offset = ori_off;
+    //     }
+    //     v
+    // }
 
-    pub fn read_all(&self) -> Vec<u8> {
-        let mut inner = self.inner.lock();
-        let mut file_content_lock = inner.inode.file_content.lock();
-        let mut buffer = [0u8; 512];
-        let mut v: Vec<u8> = Vec::new();
-        loop {
-            let len =
-                inner
-                    .inode
-                    .read_at_block_cache(&mut file_content_lock, inner.offset, &mut buffer);
-            if len == 0 {
-                break;
-            }
-            inner.offset += len;
-            v.extend_from_slice(&buffer[..len]);
-        }
-        v
-    }
+    // pub fn read_all(&self) -> Vec<u8> {
+    //     let mut inner = self.inner.lock();
+    //     let mut file_content_lock = inner.inode.file_content.lock();
+    //     let mut buffer = [0u8; 512];
+    //     let mut v: Vec<u8> = Vec::new();
+    //     loop {
+    //         let len =
+    //             inner
+    //                 .inode
+    //                 .read_at_block_cache(&mut file_content_lock, inner.offset, &mut buffer);
+    //         if len == 0 {
+    //             break;
+    //         }
+    //         inner.offset += len;
+    //         v.extend_from_slice(&buffer[..len]);
+    //     }
+    //     v
+    // }
 
-    pub fn write_all(&self, str_vec: &Vec<u8>) -> usize {
-        let mut inner = self.inner.lock();
-        let mut file_content_lock = inner.inode.file_content.lock();
-        let mut remain = str_vec.len();
-        let mut base = 0;
-        loop {
-            let len = remain.min(512);
-            inner.inode.write_at_block_cache(
-                &mut file_content_lock,
-                inner.offset,
-                &str_vec.as_slice()[base..base + len],
-            );
-            inner.offset += len;
-            base += len;
-            remain -= len;
-            if remain == 0 {
-                break;
-            }
-        }
-        return base;
-    }
-
-    pub fn find(&self, path: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
+    // pub fn write_all(&self, str_vec: &Vec<u8>) -> usize {
+    //     let mut inner = self.inner.lock();
+    //     let mut file_content_lock = inner.inode.file_content.lock();
+    //     let mut remain = str_vec.len();
+    //     let mut base = 0;
+    //     loop {
+    //         let len = remain.min(512);
+    //         inner.inode.write_at_block_cache(
+    //             &mut file_content_lock,
+    //             inner.offset,
+    //             &str_vec.as_slice()[base..base + len],
+    //         );
+    //         inner.offset += len;
+    //         base += len;
+    //         remain -= len;
+    //         if remain == 0 {
+    //             break;
+    //         }
+    //     }
+    //     return base;
+    // }
+    pub fn open_by_relative_path(
+        &self,
+        path: &str,
+        flags: OpenFlags,
+        type_: DiskInodeType,
+    ) -> Result<Arc<OSInode>, isize> {
         let inner = self.inner.lock();
-        let pathv: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
-        /* match inner.inode.ls(DirFilter::Name()) {
-         *     Some(vfile) => {
-         *         let (readable, writable) = flags.read_write();
-         *         Some(Arc::new(OSInode::new(readable, writable, vfile)))
-         *     }
-         *     None => None,
-         * } */
-        for file in pathv {
-            let v = inner.inode.ls(DirFilter::Name(file.to_string()));
-            if v.is_empty() {
-                return None;
+        let mut components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let (readable, writable) = flags.read_write();
+
+        let mut current_inode = inner.inode.clone();
+        if !current_inode.is_dir() {
+            return Err(ENOTDIR);
+        }
+        while let Some(component) = components.pop() {
+            if let Some((_, short_ent, offset)) = current_inode
+                .ls(DirFilter::Name(component.to_string())).unwrap().first()
+            {
+                current_inode = Inode::from_ent(&current_inode, short_ent, *offset)
+            } else {
+                if components.is_empty() && flags.contains(OpenFlags::O_CREAT) {
+                    if !current_inode.is_dir() {
+                        return Err(ENOTDIR);
+                    } else {
+                        return Ok(Arc::new(OSInode::new(
+                            readable,
+                            writable,
+                            Inode::<DataCacheMgrWrapper, InfoCacheMgrWrapper>::create(
+                                &current_inode,
+                                component.to_string(),
+                                type_,
+                            )
+                            .unwrap(),
+                        )));
+                    }
+                } else {
+                    return Err(ENOENT);
+                }
             }
         }
+
+        if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
+            return Err(EEXIST);
+        }
+        if flags.contains(OpenFlags::O_TRUNC) {
+            let mut file_content = current_inode.file_content.lock();
+            let diff = -(file_content.size as isize);
+            current_inode.modify_size(&mut file_content, diff);
+        }
+        let os_inode = Arc::from(OSInode::new(readable, writable, current_inode));
+        if flags.contains(OpenFlags::O_APPEND) {
+            os_inode.lseek(0, SeekWhence::SEEK_END);
+        }
+        Ok(os_inode)
     }
 
     pub fn get_dirent(&self) -> Option<Box<Dirent>> {
@@ -153,7 +189,7 @@ impl OSInode {
         let mut inner = self.inner.lock();
         let offset = inner.offset as u32;
         if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset) {
-            let mut d_type: u8 = if [
+            let d_type: u8 = if [
                 FATDiskInodeType::AttrDirectory,
                 FATDiskInodeType::AttrVolumeID,
             ]
@@ -189,22 +225,6 @@ impl OSInode {
         return size as usize;
     }
 
-    pub fn create(&self, path: &str, type_: DiskInodeType) -> Option<Arc<OSInode>> {
-        let inner = self.inner.lock();
-        let cur_inode = inner.inode.clone();
-        if !cur_inode.is_dir() {
-            println!("[create] {} is not a directory!", path);
-            return None;
-        }
-        let mut pathv: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
-        let (readable, writable) = (true, true);
-
-        if cur_inode.find_vfile_bypath(pathv.clone()).is_none() {
-            let name = pathv.pop().unwrap();
-            if let Some(dir_file) = cur_inode.find_vfile_bypath(pathv.clone()) {}
-        }
-    }
-
     pub fn clear(&self) {
         let inner = self.inner.lock();
         let mut file_content_lock = inner.inode.file_content.lock();
@@ -214,7 +234,7 @@ impl OSInode {
             .modify_size(&mut file_content_lock, -(sz as i64) as isize);
     }
 
-    pub fn delete(self) {
+    pub fn delete(&self) {
         let inner = self.inner.lock();
         Inode::delete_from_disk(inner.inode.clone());
     }
@@ -284,26 +304,26 @@ lazy_static! {
         BLOCK_DEVICE.clone(),
             Arc::new(Mutex::new(InfoCacheMgrWrapper::new()))
         );
-    pub static ref ROOT_INODE: Arc<InodeImpl> = Inode::new(
+    pub static ref ROOT_INODE: Arc<OSInode> = Arc::new(OSInode::new(true,true,Inode::new(
         FILE_SYSTEM.root_clus,
         DiskInodeType::Directory,
         None,
         None,
         FILE_SYSTEM.clone(),
-    );
+    )));
 }
 
 pub fn list_apps() {
     println!("/**** APPS ****");
-    for app in ROOT_INODE.ls(DirFilter::None) {
-        if !app.1.is_dir() {
-            println!("{}", app.0);
+    for (name, short_ent, _) in ROOT_INODE.inner.lock().inode.ls(DirFilter::None).unwrap() {
+        if !short_ent.is_dir() {
+            println!("{}", name);
         }
     }
     println!("**************/");
 }
 pub fn open(
-    working_dir: &str,
+    working_inode: &Arc<OSInode>,
     path: &str,
     flags: OpenFlags,
     type_: DiskInodeType,
@@ -316,59 +336,10 @@ pub fn open(
     } else {
         path
     };
-    let cur_inode = {
-        if working_dir == "/" || path.starts_with("/") {
-            let i = ROOT_INODE.clone();
-            Some(i)
-        } else {
-            let components: Vec<&str> = working_dir.split('/').collect();
-            let now: Option<Arc<InodeImpl>>;
-            todo!();
-            for filename in components {
-                let v = now
-                    .unwrap()
-                    .ls(easy_fs::DirFilter::Name(filename.to_string()));
-                if v.is_empty() {
-                    now = None;
-                }
-                let (name, ent, offset) = v[0];
-                now = Some(InodeImpl::from_ent(&now.unwrap(), &ent, offset));
-            }
-            now
-        }
-    };
-    let mut components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
-    let (readable, writable) = flags.read_write();
-
-    if let Some(inode) = cur_inode.find_vfile_bypath(components.clone()) {
-        if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
-            return Err(EEXIST);
-        }
-        if flags.contains(OpenFlags::O_TRUNC) {
-            // clear size
-            inode.clear();
-        }
-        let os_inode = Arc::new(OSInode::new(readable, writable, inode));
-        if flags.contains(OpenFlags::O_APPEND) {
-            os_inode.lseek(0, SeekWhence::SEEK_END);
-        }
-        Ok(os_inode)
+    if path.starts_with("/") {
+        ROOT_INODE.open_by_relative_path(path, flags, type_)
     } else {
-        if flags.contains(OpenFlags::O_CREAT) {
-            // create file
-            let name = components.pop().unwrap();
-            if let Some(dir_file) = cur_inode.find_vfile_bypath(components.clone()) {
-                if !dir_file.is_dir() {
-                    return Err(ENOTDIR);
-                }
-                return Ok(Arc::new(OSInode::new(
-                    readable,
-                    writable,
-                    dir_file.create(name, type_).unwrap(),
-                )));
-            }
-        }
-        Err(ENOENT)
+        working_inode.open_by_relative_path(path, flags, type_)
     }
 }
 
@@ -382,36 +353,38 @@ impl File for OSInode {
     fn read(&self, mut buf: UserBuffer) -> usize {
         let mut inner = self.inner.lock();
         let mut total_read_size = 0usize;
-        let file_cont_lock = inner.inode.file_content.lock();
+
+        let mut offset = inner.offset;
+        let mut file_cont_lock = inner.inode.file_content.lock();
         for slice in buf.buffers.iter_mut() {
-            // buffer存放的元素是[u8]而不是u8
-            let read_size =
-                inner
-                    .inode
-                    .read_at_block_cache(&mut file_cont_lock, inner.offset, *slice);
+            let read_size = inner.inode.read_at_block_cache(&mut file_cont_lock, offset, *slice);
             if read_size == 0 {
                 break;
             }
-            inner.offset += read_size;
+            offset += read_size;
             total_read_size += read_size;
         }
+        drop(file_cont_lock);
+        inner.offset = offset;
         total_read_size
     }
     fn write(&self, buf: UserBuffer) -> usize {
-        //println!("ino_write");
         let mut inner = self.inner.lock();
         let mut total_write_size = 0usize;
 
+        let mut offset = inner.offset;
         let mut file_cont_lock = inner.inode.file_content.lock();
         for slice in buf.buffers.iter() {
             let write_size =
                 inner
                     .inode
-                    .write_at_block_cache(&mut file_cont_lock, inner.offset, *slice);
+                    .write_at_block_cache(&mut file_cont_lock, offset, *slice);
             assert_eq!(write_size, slice.len());
-            inner.offset += write_size;
+            offset += write_size;
             total_write_size += write_size;
         }
+        drop(file_cont_lock);
+        inner.offset = offset;
         total_write_size
     }
     /// If offset is not `None`, `kread()` will start reading file from `*offset`,
@@ -423,7 +396,7 @@ impl File for OSInode {
     /// Buffer must be in kernel space
     fn kread(&self, offset: Option<&mut usize>, buffer: &mut [u8]) -> usize {
         let mut inner = self.inner.lock();
-        let file_cont_lock = inner.inode.file_content.lock();
+        let mut file_cont_lock = inner.inode.file_content.lock();
         match offset {
             Some(offset) => {
                 let len = inner
@@ -437,6 +410,7 @@ impl File for OSInode {
                     inner
                         .inode
                         .read_at_block_cache(&mut file_cont_lock, inner.offset, buffer);
+                drop(file_cont_lock);
                 inner.offset += len;
                 len
             }
@@ -465,6 +439,7 @@ impl File for OSInode {
                     inner
                         .inode
                         .write_at_block_cache(&mut file_cont_lock, inner.offset, buffer);
+                drop(file_cont_lock);
                 inner.offset += len;
                 len
             }

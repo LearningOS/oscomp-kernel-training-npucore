@@ -6,7 +6,7 @@ pub mod signal;
 mod switch;
 mod task;
 
-use crate::fs::{open, DiskInodeType, File, OpenFlags};
+use crate::fs::{open, DiskInodeType, File, OpenFlags, ROOT_INODE};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 use lazy_static::*;
@@ -113,7 +113,7 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
 
 lazy_static! {
     pub static ref INITPROC: Arc<TaskControlBlock> = Arc::new({
-        let inode = open("/", "initproc", OpenFlags::O_RDONLY, DiskInodeType::File).unwrap();
+        let inode = open(&ROOT_INODE, "initproc", OpenFlags::O_RDONLY, DiskInodeType::File).unwrap();
         let start: usize = crate::config::MMAP_BASE;
         let len = inode.size();
         crate::mm::KERNEL_SPACE.lock().insert_framed_area(
