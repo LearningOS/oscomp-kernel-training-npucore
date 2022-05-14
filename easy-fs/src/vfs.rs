@@ -931,27 +931,21 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         )
     }
     pub fn dirent_info(&self, offset: u32) -> Option<(String, usize, u64, FATDiskInodeType)> {
-        let mut v = self.ls(DirFilter::DirOffset(offset));
-        v.pop().map(|i| {
+        self.ls(DirFilter::DirOffset(offset)).first().map(|(filename, short_ent, offset)| {
             (
-                i.0,
+                *filename,
                 self.get_inode_num().unwrap_or(0) as usize,
-                i.2 as u64,
-                i.1.attr,
+                *offset as u64,
+                short_ent.attr,
             )
         })
     }
-}
-
-#[allow(unused)]
-pub fn find_local<T: CacheManager, F: CacheManager>(
-    inode: &Arc<Inode<T, F>>,
-    target_name: String,
-) -> Option<Arc<Inode<T, F>>> {
-    let v = inode.ls(DirFilter::Name(target_name));
-    if v.is_empty() {
-        None
-    } else {
-        Some(Inode::from_ent(inode, &v[0].1, v[0].2))
+    pub fn find_local(&self, target_name: String) -> Option<Arc<Inode<T, F>>> {
+        if let Some((filename, short_ent, offset)) = self.ls(DirFilter::Name(target_name)).first() {
+            Some(Inode::from_ent(self.clone(), short_ent, *offset))
+        } else {
+            None
+        }
     }
 }
+
