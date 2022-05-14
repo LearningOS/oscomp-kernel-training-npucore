@@ -9,6 +9,7 @@ use crate::{drivers::BLOCK_DEVICE, println};
 
 use _core::usize;
 use alloc::boxed::Box;
+use alloc::collections::VecDeque;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -132,16 +133,31 @@ impl OSInode {
         type_: DiskInodeType,
     ) -> Result<Arc<OSInode>, isize> {
         let inner = self.inner.lock();
-        let mut components: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut components: VecDeque<&str> = path.split('/').fold(VecDeque::new(), |mut v, s| {
+            if !s.is_empty() {
+                match s {
+                    "." => {}
+                    ".." => {
+                        v.pop_back();
+                    }
+                    s => {
+                        v.push_back(s);
+                    }
+                };
+            }
+            v
+        });
         let (readable, writable) = flags.read_write();
 
         let mut current_inode = inner.inode.clone();
         if !current_inode.is_dir() {
             return Err(ENOTDIR);
         }
-        while let Some(component) = components.pop() {
+        while let Some(component) = components.pop_front() {
             if let Some((_, short_ent, offset)) = current_inode
-                .ls(DirFilter::Name(component.to_string())).unwrap().first()
+                .ls(DirFilter::Name(component.to_string()))
+                .unwrap()
+                .first()
             {
                 current_inode = Inode::from_ent(&current_inode, short_ent, *offset)
             } else {
@@ -357,7 +373,9 @@ impl File for OSInode {
         let mut offset = inner.offset;
         let mut file_cont_lock = inner.inode.file_content.lock();
         for slice in buf.buffers.iter_mut() {
-            let read_size = inner.inode.read_at_block_cache(&mut file_cont_lock, offset, *slice);
+            let read_size = inner
+                .inode
+                .read_at_block_cache(&mut file_cont_lock, offset, *slice);
             if read_size == 0 {
                 break;
             }
@@ -375,10 +393,9 @@ impl File for OSInode {
         let mut offset = inner.offset;
         let mut file_cont_lock = inner.inode.file_content.lock();
         for slice in buf.buffers.iter() {
-            let write_size =
-                inner
-                    .inode
-                    .write_at_block_cache(&mut file_cont_lock, offset, *slice);
+            let write_size = inner
+                .inode
+                .write_at_block_cache(&mut file_cont_lock, offset, *slice);
             assert_eq!(write_size, slice.len());
             offset += write_size;
             total_write_size += write_size;
