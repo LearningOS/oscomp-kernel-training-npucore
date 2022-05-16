@@ -204,6 +204,11 @@ impl OSInode {
 
         let mut inner = self.inner.lock();
         let offset = inner.offset as u32;
+        log::debug!(
+            "[get_dirent]tot size{},offset {}",
+            inner.inode.get_file_size(),
+            offset
+        );
         if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset) {
             let d_type: u8 = if [
                 FATDiskInodeType::AttrDirectory,
@@ -224,6 +229,9 @@ impl OSInode {
                 d_type,
                 name.as_str(),
             ));
+            if off == inner.offset {
+                return None;
+            }
             inner.offset = off as usize;
             Some(dirent)
         } else {
