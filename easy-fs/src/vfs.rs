@@ -26,31 +26,31 @@ use spin::{Mutex, MutexGuard};
 pub enum DirFilter {
     Name(String),
     FstClus(u64),
-    DirOffset(u32),
+    DirentBegOffset(u32),
     None,
 }
 
-/* #[repr(C)]
- * pub struct LinuxDirents64 {
- *     /// Inode number
- *     d_ino: u64,
- *     /// Offset to next linux_dirent
- *     d_off: u64,
- *     /// Length of this linux_dirent
- *     d_reclen: u16,
- *     /// Filename (null-terminated) length is actually (d_reclen-2-offsetof(struct linux_dirent, d_name))
- *     d_name: String,
- *     /// Zero padding byte
- *     pad: u8,
- *     /// File type (only since Linux2.6.4); offset is (d_reclen - 1)
- *     d_type: u8,
- * } */
 impl DirFilter {
     /// Returns `true` if the dir filter is [`None`].
     ///
     /// [`None`]: DirFilter::None
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
+    }
+
+    pub fn as_dirent_beg_offset(&self) -> Option<&u32> {
+        if let Self::DirentBegOffset(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Returns `true` if the dir filter is [`DirentBegOffset`].
+    ///
+    /// [`DirentBegOffset`]: DirFilter::DirentBegOffset
+    pub fn is_dirent_beg_offset(&self) -> bool {
+        matches!(self, Self::DirentBegOffset(..))
     }
 }
 
@@ -91,7 +91,6 @@ impl<T: CacheManager, F: CacheManager> OpenTabCmd<T, F> {
     fn is_file(&self) -> bool {
         matches!(self, Self::InsertFile(..))
     }
-
     fn as_file(&self) -> Option<&Inode<T, F>> {
         if let Self::InsertFile(v) = self {
             Some(v)
@@ -866,6 +865,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
 // ls and find local
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
+    ////
+    #[inline(always)]
     pub fn ls(&self, cond: DirFilter) -> Result<Vec<(String, FATDirShortEnt, u32)>, ()> {
         if !self.is_dir() {
             return Err(());
@@ -874,7 +875,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut name = Vec::with_capacity(3);
         let lock = self.file_content.lock();
         let mut iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD);
-
+        if cond.is_dirent_beg_offset() {
+            iter.set_iter_offset(*cond.as_dirent_beg_offset().unwrap());
+        }
         let mut should_be_ord = usize::MAX;
         while let Some(dir_ent) = iter.next() {
             if dir_ent.is_long() {
@@ -903,25 +906,32 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     //todo
                 };
                 if match cond {
-                    DirFilter::DirOffset(_) | DirFilter::None => true,
+                    DirFilter::DirentBegOffset(_) | DirFilter::None => true,
                     DirFilter::Name(ref req_name) => *req_name == filename,
                     DirFilter::FstClus(inum) => {
                         inum as u32 == dir_ent.get_short_ent().unwrap().get_first_clus()
                     }
                 } {
-                    v.push((
-                        filename,
-                        dir_ent.get_short_ent().unwrap().clone(),
-                        iter.get_offset().unwrap(),
-                    ));
+                    v.push((filename, dir_ent.get_short_ent().unwrap().clone(), {
+                        if cond.is_dirent_beg_offset() {
+                            iter.next();
+                        }
+                        iter.get_offset().unwrap()
+                    }));
                     if !cond.is_none() {
                         break;
                     }
                 }
             }
         }
+        /* if iter.next().is_none() && cond.is_dirent_beg_offset() {
+         *     if let Some((_, _, offset)) = v.last_mut() {
+         *         (*offset) = ;
+         *     }
+         * } */
         return Ok(v);
     }
+    /// Return the `stat` structure to `self` file.
     pub fn stat(&self) -> (i64, i64, i64, i64, u64) {
         (
             self.get_file_size() as i64,
@@ -931,18 +941,23 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             self.get_inode_num().unwrap_or(0) as u64,
         )
     }
+
+    /// Get a dirent information from the `self` at `offset`
+    /// Return `None` if `self` is not a directory.
+    /// # Argument
+    /// `offset`: u32, the offset within the `self` directory.
     pub fn dirent_info(&self, offset: u32) -> Option<(String, usize, u64, FATDiskInodeType)> {
         if self.is_file() {
             return None;
         }
-        self.ls(DirFilter::DirOffset(offset))
+        self.ls(DirFilter::DirentBegOffset(offset))
             .unwrap()
             .pop()
             .map(|(filename, short_ent, offset)| {
                 (
                     filename,
-                    self.get_inode_num().unwrap_or(0) as usize,
-                    offset as u64,
+                    offset as usize,
+                    self.get_inode_num().unwrap_or(0) as u64,
                     short_ent.attr,
                 )
             })

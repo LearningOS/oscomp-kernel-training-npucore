@@ -177,7 +177,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         // SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
         // SYSCALL_WRITEV,
-        //SYSCALL_PPOLL,
+        SYSCALL_WAIT4,
+        //        SYSCALL_WAITPID,
         SYSCALL_GETPPID,
         SYSCALL_CLOCK_GETTIME,
     ]

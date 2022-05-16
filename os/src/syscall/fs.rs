@@ -684,7 +684,9 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
             } else {
                 let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
                 match &file_descriptor.file {
-                    FileLike::Regular(inode) => inode.open_by_relative_path(path.as_str(), flags, DiskInodeType::File),
+                    FileLike::Regular(inode) => {
+                        inode.open_by_relative_path(path.as_str(), flags, DiskInodeType::File)
+                    }
                     FileLike::Abstract(_) => Err(ENOTDIR),
                 }
             }
@@ -772,7 +774,11 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
             let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
             match &file_descriptor.file {
                 FileLike::Regular(inode) => {
-                    match inode.open_by_relative_path(path.as_str(), OpenFlags::O_CREAT | OpenFlags::O_EXCL, DiskInodeType::Directory) {
+                    match inode.open_by_relative_path(
+                        path.as_str(),
+                        OpenFlags::O_CREAT | OpenFlags::O_EXCL,
+                        DiskInodeType::Directory,
+                    ) {
                         Ok(_) => SUCCESS,
                         Err(errno) => errno,
                     }
@@ -964,7 +970,9 @@ fn __openat(dirfd: usize, path: &str) -> Result<Arc<crate::fs::OSInode>, isize> 
             }
             let file_descriptor = inner.fd_table[dirfd].as_ref().unwrap();
             match &file_descriptor.file {
-                FileLike::Regular(inode) => inode.open_by_relative_path(path, OpenFlags::O_RDONLY, DiskInodeType::File)?,
+                FileLike::Regular(inode) => {
+                    inode.open_by_relative_path(path, OpenFlags::O_RDONLY, DiskInodeType::File)?
+                }
                 FileLike::Abstract(_) => return Err(ENOTDIR),
             }
         }

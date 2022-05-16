@@ -467,7 +467,7 @@ bitflags! {
 /// Else if there is a child process but it is still running, return -2.
 pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> isize {
     let option = WaitOption::from_bits(option).unwrap();
-    info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
+    // info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
     let task = current_task().unwrap();
     loop {
         // find a child process
