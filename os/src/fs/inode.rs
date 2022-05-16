@@ -229,9 +229,9 @@ impl OSInode {
                 d_type,
                 name.as_str(),
             ));
-            if off == inner.offset {
-                return None;
-            }
+            /* if off == inner.offset {
+             *     return None;
+             * } */
             inner.offset = off as usize;
             Some(dirent)
         } else {
