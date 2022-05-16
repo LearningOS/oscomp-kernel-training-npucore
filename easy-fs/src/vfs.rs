@@ -23,9 +23,14 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
 
+/// DirFilterer, the struct is not intended for individual use.
+/// Use it along with Inode::ls(&self)
 pub enum DirFilter {
+    /// Name mode, search for files with the same name.
     Name(String),
+    /// FstClus mode, search for a file with a certain first cluster
     FstClus(u64),
+    ///
     DirentBegOffset(u32),
     None,
 }
@@ -485,17 +490,25 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         buf: &[u8],
     ) -> usize {
         let mut start = offset;
-        let size = lock.size as usize;
-        let diff_len = buf.len() as isize + offset as isize - size as isize;
+        let old_size = lock.size as usize;
+        let diff_len = buf.len() as isize + offset as isize - old_size as isize;
+        log::info!("[wr_at_blk_cache] diff{},size{}", diff_len, old_size);
         if diff_len > 0 as isize {
             // allocate as many blocks as possible.
+            log::info!("[wr_at_blk_cache] trying to modify size...");
+            log::info!("[wr_at_blk_cache] diff{},size{}", diff_len, old_size);
             self.modify_size(lock, diff_len);
+            log::info!("[wr_at_blk_cache] \"file.size\":{}", lock.size);
         }
-        let end = (offset + buf.len()).min(size);
+        let end = (offset + buf.len()).min(lock.size as usize);
 
         assert!(start <= end);
         let mut start_cache = start / T::CACHE_SZ;
         let mut write_size = 0;
+        log::info!(
+            "[wr_at_blk_cache] st,end,st_ch,wr_sz, buf.len:{:?}",
+            (start, end, start_cache, write_size, buf.len())
+        );
         loop {
             // calculate end of current block
             let mut end_current_block = (start / T::CACHE_SZ + 1) * T::CACHE_SZ;
@@ -518,6 +531,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     dst.copy_from_slice(src);
                 });
             write_size += block_write_size;
+            log::info!(
+                "[wr_at_blk_cache] end_cur_blk blk_wr_sz,blk_id,wr_sz:{:?}",
+                (end_current_block, block_write_size, block_id, write_size)
+            );
             // move to next block
             if end_current_block == end {
                 break;
@@ -867,11 +884,30 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     ////
     #[inline(always)]
+    /// ls - General Purose file filterer
+    /// # Argument/Modes
+    /// Apart from `None` mode, all modes will quit IMMEDIATELY returning a vector of one after the first successful match.
+    /// Modes are conveyed through enum `DirFilter`. Four modes are provided, namely:
+    /// * `Name(String)`: Used for exact match of names.
+    /// * `FstClus(u64)`: First Cluster matching. Note that this shouldn't be used for zero-sized files for they MAY contain NO by specification.
+    /// For this mode, it returns an Err(()) for the next of reaching the last item.
+    /// * `DirentBegOffset(u32)`: Search should begin with the
+    /// * `None`: List all files in `self`.
+    ///
+    /// # WARNING
+    /// The definition of OFFSET is CHANGED for this item.
+    /// It should point to the NEXT USED entry whether it as a long entry whenever possible or a short entry if no long ones exist.
+    /// # Return value
+    /// On success, the function returns `Ok(_)`. On failure, multiple chances exist: either the Vec is empty, or the Result is `Err(())`.
+    /// # Implementation Information
+    /// The iterator stops at the last available item when it reaches the end,
+    /// returning `None` from then on,
+    /// so relying on the offset of the last item to decide whether it has reached an end is not recommended.
     pub fn ls(&self, cond: DirFilter) -> Result<Vec<(String, FATDirShortEnt, u32)>, ()> {
         if !self.is_dir() {
             return Err(());
         }
-        let mut v = Vec::with_capacity(30);
+        let mut v = Vec::with_capacity(if cond.is_none() { 30 } else { 1 });
         let mut name = Vec::with_capacity(3);
         let lock = self.file_content.lock();
         let mut iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD);
@@ -924,11 +960,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 }
             }
         }
-        /* if iter.next().is_none() && cond.is_dirent_beg_offset() {
-         *     if let Some((_, _, offset)) = v.last_mut() {
-         *         (*offset) = ;
-         *     }
-         * } */
+        if iter.next().is_none() && cond.is_dirent_beg_offset() {
+            return Err(());
+        }
         return Ok(v);
     }
     /// Return the `stat` structure to `self` file.
@@ -950,10 +984,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         if self.is_file() {
             return None;
         }
-        self.ls(DirFilter::DirentBegOffset(offset))
-            .unwrap()
-            .pop()
-            .map(|(filename, short_ent, offset)| {
+        if let Ok(mut vec) = self.ls(DirFilter::DirentBegOffset(offset)) {
+            vec.pop().map(|(filename, short_ent, offset)| {
                 (
                     filename,
                     offset as usize,
@@ -961,5 +993,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     short_ent.attr,
                 )
             })
+        } else {
+            None
+        }
     }
 }
