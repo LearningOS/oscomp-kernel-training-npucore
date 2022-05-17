@@ -31,8 +31,6 @@ pub enum DirFilter {
     Name(String),
     /// FstClus mode, search for a file with a certain first cluster
     FstClus(u64),
-    ///
-    DirentBegOffset(u32),
     None,
 }
 
@@ -42,21 +40,6 @@ impl DirFilter {
     /// [`None`]: DirFilter::None
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
-    }
-
-    pub fn as_dirent_beg_offset(&self) -> Option<&u32> {
-        if let Self::DirentBegOffset(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    /// Returns `true` if the dir filter is [`DirentBegOffset`].
-    ///
-    /// [`DirentBegOffset`]: DirFilter::DirentBegOffset
-    pub fn is_dirent_beg_offset(&self) -> bool {
-        matches!(self, Self::DirentBegOffset(..))
     }
 }
 
@@ -919,9 +902,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut name = Vec::with_capacity(3);
         let lock = self.file_content.lock();
         let mut iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD);
-        if cond.is_dirent_beg_offset() {
-            iter.set_iter_offset(*cond.as_dirent_beg_offset().unwrap());
-        }
         let mut should_be_ord = usize::MAX;
         while let Some(dir_ent) = iter.next() {
             if dir_ent.is_long() {
@@ -951,26 +931,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     //todo
                 };
                 if match cond {
-                    DirFilter::DirentBegOffset(_) | DirFilter::None => true,
+                    DirFilter::None => true,
                     DirFilter::Name(ref req_name) => *req_name == filename,
                     DirFilter::FstClus(inum) => {
                         inum as u32 == dir_ent.get_short_ent().unwrap().get_first_clus()
                     }
                 } {
-                    v.push((filename, dir_ent.get_short_ent().unwrap().clone(), {
-                        if cond.is_dirent_beg_offset() {
-                            iter.next();
-                        }
-                        iter.get_offset().unwrap()
-                    }));
+                    v.push((filename, dir_ent.get_short_ent().unwrap().clone(), iter.get_offset().unwrap()));
                     if !cond.is_none() {
                         break;
                     }
                 }
             }
-        }
-        if iter.next().is_none() && cond.is_dirent_beg_offset() {
-            return Err(());
         }
         return Ok(v);
     }
@@ -993,17 +965,55 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         if self.is_file() {
             return None;
         }
-        if let Ok(mut vec) = self.ls(DirFilter::DirentBegOffset(offset)) {
-            vec.pop().map(|(filename, short_ent, offset)| {
-                (
-                    filename,
-                    offset as usize,
-                    self.get_inode_num().unwrap_or(0) as u64,
-                    short_ent.attr,
-                )
-            })
-        } else {
-            None
+        let mut name = Vec::with_capacity(3);
+        let lock = self.file_content.lock();
+        if lock.size == offset {
+            return None;
         }
+        let mut iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD);
+        iter.set_iter_offset(offset);
+        let mut should_be_ord = usize::MAX;
+
+        while let Some(dir_ent) = iter.next() {
+            if dir_ent.is_long() {
+                if dir_ent.is_last_long_dir_ent() {
+                    if !name.is_empty() {
+                        //be warn future
+                        panic!("why name isn't empty???");
+                    }
+                    name.push(dir_ent.get_name());
+                    should_be_ord = dir_ent.ord() - 1;
+                } else if dir_ent.ord() == should_be_ord {
+                    name.push(dir_ent.get_name());
+                    should_be_ord -= 1;
+                } else {
+                    unreachable!()
+                }
+            } else if dir_ent.is_short() {
+                let filename: String;
+                if name.is_empty() {
+                    filename = dir_ent.get_name();
+                } else {
+                    name.reverse();
+                    filename = name.concat();
+                    name.clear();
+                    //then match the name to see if it's correct.
+                    //todo
+                };
+                let next_offset: usize;
+                if iter.next().is_none() {
+                    next_offset = iter.lock.size as usize;
+                } else {
+                    next_offset = iter.get_offset().unwrap() as usize;
+                }
+                return Some((
+                    filename,
+                    next_offset,
+                    dir_ent.get_fst_clus() as u64,
+                    dir_ent.get_short_ent().unwrap().attr
+                ))
+            }
+        }
+        None
     }
 }
