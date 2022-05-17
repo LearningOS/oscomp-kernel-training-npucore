@@ -165,16 +165,19 @@ impl OSInode {
                     if !current_inode.is_dir() {
                         return Err(ENOTDIR);
                     } else {
-                        return Ok(Arc::new(OSInode::new(
-                            readable,
-                            writable,
-                            Inode::<DataCacheMgrWrapper, InfoCacheMgrWrapper>::create(
+                        return Ok(Arc::new(OSInode::new(readable, writable, {
+                            let arc = Inode::<DataCacheMgrWrapper, InfoCacheMgrWrapper>::create(
                                 &current_inode,
                                 component.to_string(),
                                 type_,
                             )
-                            .unwrap(),
-                        )));
+                            .unwrap();
+                            println!(
+                                "[create]result:{:?}",
+                                Inode::ls(&current_inode, DirFilter::Name(component.to_string()))
+                            );
+                            arc
+                        })));
                     }
                 } else {
                     return Err(ENOENT);
