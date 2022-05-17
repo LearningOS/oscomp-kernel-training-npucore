@@ -150,35 +150,30 @@ impl OSInode {
         let (readable, writable) = flags.read_write();
 
         let mut current_inode = inner.inode.clone();
-        if !current_inode.is_dir() {
-            return Err(ENOTDIR);
-        }
         while let Some(component) = components.pop_front() {
-            if let Some((_, short_ent, offset)) = current_inode
-                .ls(DirFilter::Name(component.to_string()))
-                .unwrap()
-                .first()
+            if !current_inode.is_dir() {
+                return Err(ENOTDIR);
+            }
+            if let Some((_, short_ent, offset)) =
+                current_inode.find_local(component.to_string()).unwrap()
             {
-                current_inode = Inode::from_ent(&current_inode, short_ent, *offset)
+                current_inode = Inode::from_ent(&current_inode, &short_ent, offset)
             } else {
                 if components.is_empty() && flags.contains(OpenFlags::O_CREAT) {
-                    if !current_inode.is_dir() {
-                        return Err(ENOTDIR);
-                    } else {
-                        return Ok(Arc::new(OSInode::new(readable, writable, {
-                            let arc = Inode::<DataCacheMgrWrapper, InfoCacheMgrWrapper>::create(
-                                &current_inode,
-                                component.to_string(),
-                                type_,
-                            )
-                            .unwrap();
-                            println!(
-                                "[create]result:{:?}",
-                                Inode::ls(&current_inode, DirFilter::Name(component.to_string()))
-                            );
-                            arc
-                        })));
-                    }
+                    return Ok(Arc::new(OSInode::new(readable, writable, {
+                        log::error!("create: {}", component);
+                        let arc = Inode::<DataCacheMgrWrapper, InfoCacheMgrWrapper>::create(
+                            &current_inode,
+                            component.to_string(),
+                            type_,
+                        )
+                        .unwrap();
+                        println!(
+                            "[create] result: {:?}",
+                            current_inode.find_local(component.to_string())
+                        );
+                        arc
+                    })));
                 } else {
                     return Err(ENOENT);
                 }
@@ -200,47 +195,69 @@ impl OSInode {
         Ok(os_inode)
     }
 
-    pub fn get_dirent(&self) -> Option<Box<Dirent>> {
+    pub fn get_dirent(&self, count: usize) -> Vec<Dirent> {
         const DT_UNKNOWN: u8 = 0;
         const DT_DIR: u8 = 4;
         const DT_REG: u8 = 8;
 
         let mut inner = self.inner.lock();
+        assert!(inner.inode.is_dir());
         let offset = inner.offset as u32;
         log::debug!(
-            "[get_dirent]tot size{},offset {}",
+            "[get_dirent] tot size: {}, offset: {}, count: {}",
             inner.inode.get_file_size(),
-            offset
+            offset,
+            count
         );
-        if let Some((name, off, first_clu, attri)) = inner.inode.dirent_info(offset) {
-            let d_type: u8 = if [
-                FATDiskInodeType::AttrDirectory,
-                FATDiskInodeType::AttrVolumeID,
-            ]
-            .contains(&attri)
-            {
-                DT_DIR
-            } else if attri == (FATDiskInodeType::AttrArchive) {
-                DT_REG
-            } else {
-                DT_UNKNOWN
-            };
 
-            let dirent = Box::new(Dirent::new(
-                first_clu as usize,
-                (off - offset as usize) as isize,
-                d_type,
-                name.as_str(),
-            ));
-            /* if off == inner.offset {
-             *     return None;
-             * } */
-            inner.offset = off as usize;
-            Some(dirent)
-        } else {
-            None
+        let vec = inner
+            .inode
+            .dirent_info(offset, count / core::mem::size_of::<Dirent>())
+            .unwrap();
+        if let Some((_, offset, _, _)) = vec.last() {
+            inner.offset = *offset;
         }
+        vec.iter()
+            .map(|(name, offset, first_clus, type_)| {
+                let d_type = match type_ {
+                    FATDiskInodeType::AttrDirectory | FATDiskInodeType::AttrVolumeID => DT_DIR,
+                    FATDiskInodeType::AttrArchive => DT_REG,
+                    _ => DT_UNKNOWN,
+                };
+                Dirent::new(
+                    *first_clus as usize,
+                    *offset as isize,
+                    d_type,
+                    name.as_str(),
+                )
+            })
+            .collect()
     }
+    // let d_type: u8 = if [
+    //     FATDiskInodeType::AttrDirectory,
+    //     FATDiskInodeType::AttrVolumeID,
+    // ]
+    // .contains(&attri)
+    // {
+    //     DT_DIR
+    // } else if attri == (FATDiskInodeType::AttrArchive) {
+    //     DT_REG
+    // } else {
+    //     DT_UNKNOWN
+    // };
+
+    // let dirent = Box::new(Dirent::new(
+    //     first_clu as usize,
+    //     off as isize,
+    //     d_type,
+    //     name.as_str(),
+    // ));
+    // /* if off == inner.offset {
+    //  *     return None;
+    //  * } */
+    // } else {
+    //     None
+    // }
 
     pub fn get_ino(&self) -> usize {
         self.stat().get_ino()
@@ -342,7 +359,7 @@ lazy_static! {
 
 pub fn list_apps() {
     println!("/**** APPS ****");
-    for (name, short_ent, _) in ROOT_INODE.inner.lock().inode.ls(DirFilter::None).unwrap() {
+    for (name, short_ent) in ROOT_INODE.inner.lock().inode.ls().unwrap() {
         if !short_ent.is_dir() {
             println!("{}", name);
         }

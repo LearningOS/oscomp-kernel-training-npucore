@@ -400,23 +400,16 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
     let inner = task.acquire_inner_lock();
     let token = inner.get_user_token();
 
-    let mut offset: usize = 0;
-
     if fd == AT_FDCWD {
-        loop {
-            if offset + size_of::<Dirent>() > count {
-                break;
-            }
-            if let Some(dirent) = inner.working_inode.get_dirent() {
-                copy_to_user(token, dirent.as_ref(), unsafe { dirp.add(offset) }
-                    as *mut Dirent);
-                offset += size_of::<Dirent>();
-            } else {
-                break;
-            }
-        }
+        let dirent_vec = inner.working_inode.get_dirent(count);
+        copy_to_user_array(
+            token,
+            dirent_vec.as_ptr(),
+            dirp as *mut Dirent,
+            dirent_vec.len(),
+        );
         info!("[sys_getdents64] fd: AT_FDCWD, count: {}", count);
-        offset as isize
+        (dirent_vec.len() * size_of::<Dirent>()) as isize
     } else {
         if fd >= inner.fd_table.len() || inner.fd_table[fd].is_none() {
             return EBADF;
@@ -424,21 +417,16 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
         let file_descriptor = inner.fd_table[fd].as_ref().unwrap();
         match &file_descriptor.file {
             FileLike::Regular(file) => {
-                loop {
-                    if offset + size_of::<Dirent>() > count {
-                        break;
-                    }
-                    if let Some(dirent) = file.get_dirent() {
-                        copy_to_user(token, dirent.as_ref(), unsafe { dirp.add(offset) }
-                            as *mut Dirent);
-                        offset += size_of::<Dirent>();
-                    } else {
-                        break;
-                    }
+                    let dirent_vec = file.get_dirent(count);
+                    copy_to_user_array(
+                        token,
+                        dirent_vec.as_ptr(),
+                        dirp as *mut Dirent,
+                        dirent_vec.len(),
+                    );
+                    info!("[sys_getdents64] fd: {}, count: {}", fd, count);
+                    (dirent_vec.len() * size_of::<Dirent>()) as isize
                 }
-                info!("[sys_getdents64] fd: {}, count: {}", fd, count);
-                offset as isize
-            }
             _ => ENOTDIR,
         }
     }

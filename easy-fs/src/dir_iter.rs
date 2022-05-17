@@ -1,6 +1,7 @@
-use crate::layout::FATDirEnt;
+use crate::layout::{FATDirEnt, FATDirShortEnt};
 use crate::vfs::FileContent;
 use crate::{CacheManager, Inode};
+use alloc::string::{String, ToString};
 use spin::MutexGuard;
 
 pub enum DirIterMode {
@@ -53,7 +54,7 @@ pub struct DirIter<'a, T: CacheManager, F: CacheManager> {
     pub inode: &'a Inode<T, F>,
 }
 
-impl<T: CacheManager, F: CacheManager> DirIter<'_, T, F> {
+impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
     #[allow(unused)]
     #[inline(always)]
     fn file_size(&self) -> u32 {
@@ -63,11 +64,6 @@ impl<T: CacheManager, F: CacheManager> DirIter<'_, T, F> {
     #[inline(always)]
     pub fn get_offset(&self) -> Option<u32> {
         self.offset
-    }
-    #[allow(unused)]
-    #[inline(always)]
-    pub fn set_offset(&mut self, offset: u32) {
-        self.offset = Some(offset);
     }
     #[allow(unused)]
     #[inline(always)]
@@ -200,6 +196,11 @@ impl<T: CacheManager, F: CacheManager> DirIter<'_, T, F> {
         // println!("offset {:?}, unused: {:?}, {:?}", self.offset, dir_ent.unused(), dir_ent);
         Some(dir_ent)
     }
+    pub fn walk(self) -> DirWalker<'a, T, F> {
+        DirWalker {
+            iter: self,
+        }
+    }
 }
 impl<T: CacheManager, F: CacheManager> Iterator for DirIter<'_, T, F> {
     type Item = FATDirEnt;
@@ -217,6 +218,37 @@ impl<T: CacheManager, F: CacheManager> Iterator for DirIter<'_, T, F> {
             }
             if check_dir_ent_legality(&self.mode, &dir_ent) {
                 return Some(dir_ent);
+            }
+        }
+        None
+    }
+}
+
+pub struct DirWalker<'a, T: CacheManager, F: CacheManager> {
+    pub iter: DirIter<'a, T, F>,
+}
+
+impl<T: CacheManager, F: CacheManager> Iterator for DirWalker<'_, T, F> {
+    type Item = (String, FATDirShortEnt);
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut name = String::new();
+        let mut should_be_ord = usize::MAX;
+        while let Some(dir_ent) = self.iter.next() {
+            if dir_ent.is_long() {
+                if dir_ent.is_last_long_dir_ent() {
+                    name = dir_ent.get_name() + &name;
+                    should_be_ord = dir_ent.ord() - 1;
+                } else if dir_ent.ord() == should_be_ord {
+                    name = dir_ent.get_name() + &name;
+                    should_be_ord -= 1;
+                } else {
+                    unreachable!()
+                }
+            } else if dir_ent.is_short() {
+                if name.is_empty() {
+                    name = dir_ent.get_name();
+                }
+                return Some((name, dir_ent.get_short_ent().unwrap().clone()));
             }
         }
         None
