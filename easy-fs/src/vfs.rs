@@ -583,9 +583,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         log::info!("[alloc_dir_ent]alloc no:{:?}", alloc_num);
         let offset = lock.hint;
         let mut iter = parent_dir.dir_iter(lock, Some(offset), DirIterMode::Enum, FORWARD);
+        iter.set_iter_offset(offset);
         let mut found_free_dir_ent = 0;
         loop {
-            let dir_ent = iter.current_clone();
+            let dir_ent = iter.next();
             if dir_ent.is_none() {
                 if parent_dir.expand_dir_size(&mut iter.lock).is_err() {
                     return Err(());
@@ -605,7 +606,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 log::info!("[alloc_dir_ent]NO! That was wrong.");
                 found_free_dir_ent = 0;
             }
-            iter.next();
         }
     }
 }
