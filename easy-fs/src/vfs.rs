@@ -565,7 +565,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     ) -> Result<(u32, MutexGuard<'a, FileContent<T>>), ()> {
         log::info!("[alloc_dir_ent]alloc no:{:?}", alloc_num);
         let offset = lock.hint;
-        let mut iter = parent_dir.dir_iter(lock, Some(offset), DirIterMode::Enum, FORWARD);
+        let mut iter = parent_dir.dir_iter(lock, None, DirIterMode::Enum, FORWARD);
         iter.set_iter_offset(offset);
         let mut found_free_dir_ent = 0;
         loop {
@@ -648,12 +648,12 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn delete_from_disk(trash: Arc<Self>) -> Result<(), ()> {
         if trash.is_dir() {
             // See if the dir is empty
-            let v = trash.ls(DirFilter::None).unwrap();
+            let v = trash.ls().unwrap();
             if v.len() > 2 {
                 return Err(());
             }
-            for item in v {
-                if ![".", ".."].contains(&item.0.as_str()) {
+            for (name, _) in v {
+                if ![".", ".."].contains(&name.as_str()) {
                     return Err(());
                 }
             }
@@ -685,10 +685,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         if parent_dir.is_file()
             || name.len() >= 256
             || parent_dir
-                .ls(DirFilter::None)
+                .ls()
                 .unwrap()
                 .iter()
-                .find(|(existed_name, _, _)| existed_name.to_uppercase() == name.to_uppercase())
+                .find(|(existed_name, _)| existed_name.to_uppercase() == name.to_uppercase())
                 .is_some()
         {
             Err(())
@@ -723,6 +723,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 0
             };
             // Generate short entry
+            log::error!("short_name_slice: {:?}", short_name_slice);
             let short_ent = FATDirShortEnt::from_name(short_name_slice, fst_clus, file_type);
             // Generate long entries
             let mut long_ents = Vec::<FATLongDirEnt>::new();
@@ -821,10 +822,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         //so we use Enum mode
         let mut iter =
             parent_dir.dir_iter(lock, Some(short_ent_offset), DirIterMode::Enum, BACKWARD);
-        log::info!("[wr_back_dir_ent]{:?}", iter.current_clone());
         iter.write_to_current_ent(&FATDirEnt {
             short_entry: short_ent,
         });
+        log::info!("[wr_back_dir_ent]{:?}", iter.current_clone());
         for long_ent in long_ents {
             iter.next();
             let n = iter.current_clone();
@@ -894,58 +895,49 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// The iterator stops at the last available item when it reaches the end,
     /// returning `None` from then on,
     /// so relying on the offset of the last item to decide whether it has reached an end is not recommended.
-    pub fn ls(&self, cond: DirFilter) -> Result<Vec<(String, FATDirShortEnt, u32)>, ()> {
+    pub fn ls(&self) -> Result<Vec<(String, FATDirShortEnt)>, ()> {
         if !self.is_dir() {
             return Err(());
         }
-        let mut v = Vec::with_capacity(if cond.is_none() { 30 } else { 1 });
-        let mut name = Vec::with_capacity(3);
         let lock = self.file_content.lock();
-        let mut iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD);
-        let mut should_be_ord = usize::MAX;
-        while let Some(dir_ent) = iter.next() {
-            if dir_ent.is_long() {
-                if dir_ent.is_last_long_dir_ent() {
-                    if !name.is_empty() {
-                        //be warn future
-                        info!("[ls]name:{:?},v:{:?}", name, v);
-                        panic!("why name isn't empty???");
-                    }
-                    name.push(dir_ent.get_name());
-                    should_be_ord = dir_ent.ord() - 1;
-                } else if dir_ent.ord() == should_be_ord {
-                    name.push(dir_ent.get_name());
-                    should_be_ord -= 1;
-                } else {
-                    unreachable!()
-                }
-            } else if dir_ent.is_short() {
-                let filename: String;
-                if name.is_empty() {
-                    filename = dir_ent.get_name();
-                } else {
-                    name.reverse();
-                    filename = name.concat();
-                    name.clear();
-                    //then match the name to see if it's correct.
-                    //todo
-                };
-                if match cond {
-                    DirFilter::None => true,
-                    DirFilter::Name(ref req_name) => *req_name == filename,
-                    DirFilter::FstClus(inum) => {
-                        inum as u32 == dir_ent.get_short_ent().unwrap().get_first_clus()
-                    }
-                } {
-                    v.push((filename, dir_ent.get_short_ent().unwrap().clone(), iter.get_offset().unwrap()));
-                    if !cond.is_none() {
-                        break;
-                    }
-                }
-            }
-        }
-        return Ok(v);
+        Ok(self
+            .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
+            .walk()
+            .collect())
     }
+    pub fn find_local(
+        &self,
+        req_name: String,
+    ) -> Result<Option<(String, FATDirShortEnt, u32)>, ()> {
+        if !self.is_dir() {
+            return Err(());
+        }
+        let lock = self.file_content.lock();
+        let mut walker = self
+            .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
+            .walk();
+        match walker.find(|(name, _)| {
+            log::error!("found name: {}, req: {}", name, req_name);
+            name.as_str() == req_name.as_str()
+        }) {
+            Some((name, short_ent)) => {
+                Ok(Some((name, short_ent, walker.iter.get_offset().unwrap())))
+            }
+            None => Ok(None),
+        }
+    }
+    // if match cond {
+    //     DirFilter::None => true,
+    //     DirFilter::Name(ref req_name) => *req_name == filename,
+    //     DirFilter::FstClus(inum) => {
+    //         inum as u32 == dir_ent.get_short_ent().unwrap().get_first_clus()
+    //     }
+    // } {
+    //     v.push((filename, dir_ent.get_short_ent().unwrap().clone(), iter.get_offset().unwrap()));
+    //     if !cond.is_none() {
+    //         break;
+    //     }
+    // }
     /// Return the `stat` structure to `self` file.
     pub fn stat(&self) -> (i64, i64, i64, i64, u64) {
         (
@@ -961,59 +953,50 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Return `None` if `self` is not a directory.
     /// # Argument
     /// `offset`: u32, the offset within the `self` directory.
-    pub fn dirent_info(&self, offset: u32) -> Option<(String, usize, u64, FATDiskInodeType)> {
-        if self.is_file() {
-            return None;
+    pub fn dirent_info(
+        &self,
+        offset: u32,
+        length: usize,
+    ) -> Result<Vec<(String, usize, u64, FATDiskInodeType)>, ()> {
+        if !self.is_dir() {
+            return Err(());
         }
-        let mut name = Vec::with_capacity(3);
         let lock = self.file_content.lock();
-        if lock.size == offset {
-            return None;
-        }
-        let mut iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD);
-        iter.set_iter_offset(offset);
-        let mut should_be_ord = usize::MAX;
+        let size = lock.size;
+        let mut walker = self
+            .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
+            .walk();
+        walker.iter.set_iter_offset(offset);
+        let mut v = Vec::with_capacity(length);
 
-        while let Some(dir_ent) = iter.next() {
-            if dir_ent.is_long() {
-                if dir_ent.is_last_long_dir_ent() {
-                    if !name.is_empty() {
-                        //be warn future
-                        panic!("why name isn't empty???");
-                    }
-                    name.push(dir_ent.get_name());
-                    should_be_ord = dir_ent.ord() - 1;
-                } else if dir_ent.ord() == should_be_ord {
-                    name.push(dir_ent.get_name());
-                    should_be_ord -= 1;
-                } else {
-                    unreachable!()
+        let (mut last_name, mut last_short_ent) = match walker.next() {
+            Some(tuple) => tuple,
+            None => return Ok(v),
+        };
+        for _ in 0..length {
+            let next_dirent_offset = walker.iter.get_offset().unwrap() as usize + core::mem::size_of::<FATDirEnt>();
+            let (name, short_ent) = match walker.next() {
+                Some(tuple) => tuple,
+                None => {
+                    v.push((
+                        last_name,
+                        size as usize,
+                        last_short_ent.get_first_clus() as u64,
+                        last_short_ent.attr,
+                    ));
+                    return Ok(v);
                 }
-            } else if dir_ent.is_short() {
-                let filename: String;
-                if name.is_empty() {
-                    filename = dir_ent.get_name();
-                } else {
-                    name.reverse();
-                    filename = name.concat();
-                    name.clear();
-                    //then match the name to see if it's correct.
-                    //todo
-                };
-                let next_offset: usize;
-                if iter.next().is_none() {
-                    next_offset = iter.lock.size as usize;
-                } else {
-                    next_offset = iter.get_offset().unwrap() as usize;
-                }
-                return Some((
-                    filename,
-                    next_offset,
-                    dir_ent.get_fst_clus() as u64,
-                    dir_ent.get_short_ent().unwrap().attr
-                ))
-            }
+            };
+            log::error!("{}, offset: {}", last_name, walker.iter.get_offset().unwrap() as usize);
+            v.push((
+                last_name,
+                next_dirent_offset,
+                last_short_ent.get_first_clus() as u64,
+                last_short_ent.attr,
+            ));
+            last_name = name;
+            last_short_ent = short_ent;
         }
-        None
+        Ok(v)
     }
 }
