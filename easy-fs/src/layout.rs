@@ -434,7 +434,7 @@ impl FATDirEnt {
             if self.is_long() {
                 self.long_entry.name()
             } else {
-                self.short_entry.name().to_string()
+                self.short_entry.name()
             }
         }
     }
@@ -518,11 +518,26 @@ impl FATDirShortEnt {
     }
 }
 impl FATDirShortEnt {
-    pub fn name(&self) -> &str {
-        let len = (0..self.name.len())
-            .find(|i| self.name[*i] == ' ' as u8)
-            .unwrap_or(self.name.len());
-        core::str::from_utf8(&self.name[..len]).unwrap()
+    pub fn name(&self) -> String {
+        let basic_name_len = (0..8).find(|i| self.name[*i] == ' ' as u8).unwrap_or(8);
+        let ext_name_len = (0..3).find(|i| self.name[8 + *i] == ' ' as u8).unwrap_or(3);
+        macro_rules! as_u8str {
+            ($a:expr) => {
+                core::str::from_utf8(&$a).unwrap()
+            };
+        }
+        {
+            if ext_name_len != 0 {
+                [
+                    as_u8str!(self.name[..basic_name_len]),
+                    as_u8str!(['.' as u8][..]),
+                    as_u8str!(self.name[8..8 + ext_name_len]),
+                ]
+                .concat()
+            } else {
+                as_u8str!(self.name[0..basic_name_len]).to_string()
+            }
+        }
     }
 }
 

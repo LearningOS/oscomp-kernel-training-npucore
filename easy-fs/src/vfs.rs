@@ -1,5 +1,6 @@
 use alloc::collections::BTreeMap;
 use core::convert::TryInto;
+use log::info;
 //use ();
 use core::mem;
 use volatile::ReadOnly;
@@ -569,6 +570,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
     }
     fn expand_dir_size(&self, lock: &mut MutexGuard<FileContent<T>>) -> core::fmt::Result {
+        // HOW DARE YOU!
         self.modify_size(lock, 0x1000);
         Ok(())
     }
@@ -578,6 +580,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         lock: MutexGuard<'a, FileContent<T>>,
         alloc_num: usize,
     ) -> Result<(u32, MutexGuard<'a, FileContent<T>>), ()> {
+        log::info!("[alloc_dir_ent]alloc no:{:?}", alloc_num);
         let offset = lock.hint;
         let mut iter = parent_dir.dir_iter(lock, Some(offset), DirIterMode::Enum, FORWARD);
         let mut found_free_dir_ent = 0;
@@ -592,13 +595,14 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             let dir_ent = dir_ent.unwrap();
             if dir_ent.unused() {
                 found_free_dir_ent += 1;
+                log::info!("[alloc_dir_ent]{:?}", iter.get_offset());
                 if found_free_dir_ent >= alloc_num {
-                    //println!("found {:?}", iter.get_offset());
                     let offset = iter.get_offset().unwrap();
                     let lock = iter.lock;
                     return Ok((offset, lock));
                 }
             } else {
+                log::info!("[alloc_dir_ent]NO! That was wrong.");
                 found_free_dir_ent = 0;
             }
             iter.next();
@@ -834,11 +838,15 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         //so we use Enum mode
         let mut iter =
             parent_dir.dir_iter(lock, Some(short_ent_offset), DirIterMode::Enum, BACKWARD);
+        log::info!("[wr_back_dir_ent]{:?}", iter.current_clone());
         iter.write_to_current_ent(&FATDirEnt {
             short_entry: short_ent,
         });
         for long_ent in long_ents {
             iter.next();
+            let n = iter.current_clone();
+            log::info!("[wr_back_dir_ent]{:?}", iter.get_offset());
+            assert!(n.is_some() && n.unwrap().unused());
             iter.write_to_current_ent(&FATDirEnt {
                 long_entry: long_ent,
             });
@@ -920,6 +928,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 if dir_ent.is_last_long_dir_ent() {
                     if !name.is_empty() {
                         //be warn future
+                        info!("[ls]name:{:?},v:{:?}", name, v);
                         panic!("why name isn't empty???");
                     }
                     name.push(dir_ent.get_name());
