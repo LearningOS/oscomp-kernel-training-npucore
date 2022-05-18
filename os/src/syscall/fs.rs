@@ -1,4 +1,4 @@
-use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode, ROOT_INODE};
+use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode, open_root_inode};
 use crate::fs::{ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Null, Stat, Zero, TTY};
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
@@ -584,7 +584,7 @@ pub fn sys_chdir(path: *const u8) -> isize {
 
     if path.starts_with("/") {
         match open(
-            &ROOT_INODE,
+            &open_root_inode(),
             path.as_str(),
             OpenFlags::O_RDONLY,
             DiskInodeType::Directory,
@@ -657,7 +657,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         return fd as isize;
     }
     let result = if path.starts_with("/") {
-        open(&ROOT_INODE, path.as_str(), flags, DiskInodeType::File)
+        open(&open_root_inode(), path.as_str(), flags, DiskInodeType::File)
     } else {
         if dirfd == AT_FDCWD {
             open(
@@ -736,7 +736,7 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
     );
     if path.starts_with("/") {
         match open(
-            &ROOT_INODE,
+            &open_root_inode(),
             path.as_str(),
             OpenFlags::O_CREAT | OpenFlags::O_EXCL,
             DiskInodeType::Directory,
@@ -935,7 +935,7 @@ fn __openat(dirfd: usize, path: &str) -> Result<Arc<crate::fs::OSInode>, isize> 
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
     let inode = if path.starts_with("/") {
-        if let Ok(inode) = open(&ROOT_INODE, path, OpenFlags::O_RDONLY, DiskInodeType::File) {
+        if let Ok(inode) = open(&open_root_inode(), path, OpenFlags::O_RDONLY, DiskInodeType::File) {
             inode
         } else {
             return Err(ENOENT);
