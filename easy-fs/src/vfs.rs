@@ -1,6 +1,6 @@
 use alloc::collections::BTreeMap;
 use core::convert::TryInto;
-use log::info;
+use alloc::vec;
 //use ();
 use core::mem;
 use volatile::ReadOnly;
@@ -21,7 +21,7 @@ use crate::layout::{
 use crate::DataBlock;
 
 use alloc::sync::Arc;
-use alloc::vec::Vec;
+use alloc::vec::{Vec};
 use spin::{Mutex, MutexGuard};
 
 /// DirFilterer, the struct is not intended for individual use.
@@ -553,8 +553,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
     }
     fn expand_dir_size(&self, lock: &mut MutexGuard<FileContent<T>>) -> core::fmt::Result {
-        // HOW DARE YOU!
-        self.modify_size(lock, 0x1000);
+        let size = self.fs.clus_size();
+        self.modify_size(lock, size as isize);
+        let buf = vec![0u8;size as usize];
+        self.write_at_block_cache(lock, (lock.size - size) as usize, buf.as_ref());
         Ok(())
     }
     /// return the offset of last free entry
@@ -740,10 +742,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             let current_dir = Inode::from_ent(&parent_dir, &short_ent, short_ent_offset);
             //if file_type is Directory, set first 3 directory entry
             if file_type == DiskInodeType::Directory {
-                let mut lock = current_dir.file_content.lock();
-                //set size
-                lock.size = 3 * core::mem::size_of::<FATDirEnt>() as u32;
-
+                let lock = current_dir.file_content.lock();
                 //fill content
                 Self::fill_empty_dir(&parent_dir, &current_dir, lock, fst_clus);
             }
@@ -841,9 +840,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     fn fill_empty_dir(
         parent_dir: &Arc<Inode<T, F>>,
         current_dir: &Arc<Inode<T, F>>,
-        current_lock: MutexGuard<FileContent<T>>,
+        mut current_lock: MutexGuard<FileContent<T>>,
         fst_clus: u32,
     ) {
+        let buf = vec![0;current_lock.size as usize];
+        current_dir.write_at_block_cache(&mut current_lock, 0, buf.as_ref());
         let mut iter = current_dir.dir_iter(current_lock, None, DirIterMode::Enum, FORWARD);
         let mut short_name: [u8; 11] = [' ' as u8; 11];
         //.
