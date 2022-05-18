@@ -5,8 +5,7 @@ use super::AuxvEntry;
 use super::AuxvType;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::fs::ROOT_INODE;
-use crate::fs::{open, DiskInodeType, File, FileDescriptor, FileLike, OSInode, OpenFlags, TTY};
+use crate::fs::{open, DiskInodeType, File, FileDescriptor, FileLike, OSInode, OpenFlags, TTY, open_root_inode};
 use crate::mm::PageTable;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::*;
@@ -249,7 +248,7 @@ impl TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
             inner: Mutex::new(TaskControlBlockInner {
-                working_inode: ROOT_INODE.clone(),
+                working_inode: open_root_inode(),
                 working_dir: "/".to_string(),
                 trap_cx_ppn,
                 pgid,

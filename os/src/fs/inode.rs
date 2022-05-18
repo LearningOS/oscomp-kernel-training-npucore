@@ -348,18 +348,22 @@ lazy_static! {
         BLOCK_DEVICE.clone(),
             Arc::new(Mutex::new(InfoCacheMgrWrapper::new()))
         );
-    pub static ref ROOT_INODE: Arc<OSInode> = Arc::new(OSInode::new(true,true,Inode::new(
+    pub static ref ROOT_INODE: Arc<InodeImpl> = Inode::new(
         FILE_SYSTEM.root_clus,
         DiskInodeType::Directory,
         None,
         None,
         FILE_SYSTEM.clone(),
-    )));
+    );
+}
+
+pub fn open_root_inode() -> Arc<OSInode> {
+    Arc::new(OSInode::new(true,true,ROOT_INODE.clone()))
 }
 
 pub fn list_apps() {
     println!("/**** APPS ****");
-    for (name, short_ent) in ROOT_INODE.inner.lock().inode.ls().unwrap() {
+    for (name, short_ent) in ROOT_INODE.ls().unwrap() {
         if !short_ent.is_dir() {
             println!("{}", name);
         }
@@ -381,7 +385,7 @@ pub fn open(
         path
     };
     if path.starts_with("/") {
-        ROOT_INODE.open_by_relative_path(path, flags, type_)
+        open_root_inode().open_by_relative_path(path, flags, type_)
     } else {
         working_inode.open_by_relative_path(path, flags, type_)
     }
