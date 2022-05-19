@@ -16,8 +16,8 @@ else
 endif
 
 
-
-SDCARD := /dev/sdb
+SDDEV := $(shell lsblk -do NAME | grep sd | tail -1)
+SDCARD := /dev/$(SDDEV)
 APPS := ../user/src/bin/*
 TOP := ../../k210.bin
 
@@ -80,7 +80,7 @@ rust-user:
 # dev/zero永远输出0
 sdcard:
     ifeq ($(findstring WSL, $(shell uname -a)), )
-		@echo "Are you sure write to $(SDCARD) ? [y/N] " && read ans && [ $${ans:-N} = y ]
+		@echo "Are you sure write to $(SDCARD) ? \nYou may also specify another drive with the option \`SDCARD=/dev/<drive>\` [y/N] " && read ans && [ $${ans:-N} = y ]
 		./buildfs.sh "$(SDCARD)"
     else
 		@echo "Are you sure write to E:/ ? [y/N] " && read ans && [ $${ans:-N} = y ]
