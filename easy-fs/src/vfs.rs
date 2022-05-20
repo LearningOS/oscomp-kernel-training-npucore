@@ -124,15 +124,16 @@ impl InodeTime {
         &self.access_time
     }
 
+    /// Set the inode time's modify time.
+    pub fn set_modify_time(&mut self, modify_time: u64) {
+        self.modify_time = modify_time;
+    }
+
     /// Get a reference to the inode time's modify time.
     pub fn modify_time(&self) -> &u64 {
         &self.modify_time
     }
 
-    /// Set the inode time's modify time.
-    pub fn set_modify_time(&mut self, modify_time: u64) {
-        self.modify_time = modify_time;
-    }
 }
 
 /* *ClusLi was DiskInode*
@@ -151,7 +152,7 @@ pub struct Inode<T: CacheManager, F: CacheManager> {
     /// file system
     pub fs: Arc<EasyFileSystem<T, F>>,
     /// Struct to hold time related information
-    pub time: InodeTime,
+    pub time: Mutex<InodeTime>,
 }
 
 impl<T: CacheManager, F: CacheManager> Drop for Inode<T, F> {
@@ -201,7 +202,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             file_type: ReadOnly::new(file_type),
             parent_dir,
             fs,
-            time,
+            time: Mutex::new(time),
         })
     }
 }
@@ -930,25 +931,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             }
         }
     }
-    // if match cond {
-    //     DirFilter::None => true,
-    //     DirFilter::Name(ref req_name) => *req_name == filename,
-    //     DirFilter::FstClus(inum) => {
-    //         inum as u32 == dir_ent.get_short_ent().unwrap().get_first_clus()
-    //     }
-    // } {
-    //     v.push((filename, dir_ent.get_short_ent().unwrap().clone(), iter.get_offset().unwrap()));
-    //     if !cond.is_none() {
-    //         break;
-    //     }
-    // }
+}
+
+// metadata
+impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Return the `stat` structure to `self` file.
     pub fn stat(&self) -> (i64, i64, i64, i64, u64) {
+        let time = self.time.lock();
         (
             self.get_file_size() as i64,
-            self.time.access_time as i64,
-            self.time.modify_time as i64,
-            self.time.create_time as i64,
+            time.access_time as i64,
+            time.modify_time as i64,
+            time.create_time as i64,
             self.get_inode_num().unwrap_or(0) as u64,
         )
     }
