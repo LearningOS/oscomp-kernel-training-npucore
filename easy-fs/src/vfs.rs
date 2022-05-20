@@ -918,13 +918,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
             .walk();
         match walker.find(|(name, _)| {
-            log::error!("found name: {}, req: {}", name, req_name);
             name.as_str() == req_name.as_str()
         }) {
             Some((name, short_ent)) => {
+                log::trace!("[easy-fs: find_local] Query name: {} found", req_name);
                 Ok(Some((name, short_ent, walker.iter.get_offset().unwrap())))
             }
-            None => Ok(None),
+            None => {
+                log::trace!("[easy-fs: find_local] Query name: {} not found", req_name);
+                Ok(None)
+            }
         }
     }
     // if match cond {
@@ -988,7 +991,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     return Ok(v);
                 }
             };
-            log::error!("{}, offset: {}", last_name, walker.iter.get_offset().unwrap() as usize);
+            log::trace!("{}, offset: {}", last_name, walker.iter.get_offset().unwrap() as usize);
             v.push((
                 last_name,
                 next_dirent_offset,

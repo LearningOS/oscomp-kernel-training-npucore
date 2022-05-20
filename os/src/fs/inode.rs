@@ -168,7 +168,7 @@ impl OSInode {
                             type_,
                         )
                         .unwrap();
-                        println!(
+                        log::debug!(
                             "[create] result: {:?}",
                             current_inode.find_local(component.to_string())
                         );
