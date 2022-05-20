@@ -1113,10 +1113,10 @@ pub fn sys_pselect(
 /// mask & 0777 (i.e., only the file permission bits of mask are used),
 /// and returns the previous value of the mask.
 /// # WARNING
-/// Fake implementation
-pub fn sys_umask(mask: usize) -> isize {
+/// In current implementation, umask is always 0. This syscall won't do anything.
+pub fn sys_umask(mask: u32) -> isize {
     info!("[sys_umask] mask: {:o}", mask);
-    warn!("[sys_umask] fake implementation! Do nothing and return 0.");
+    warn!("[sys_umask] In current implementation, umask is always 0. This syscall won't do anything.");
     0
 }
 
