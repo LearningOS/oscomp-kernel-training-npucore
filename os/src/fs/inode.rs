@@ -7,15 +7,15 @@ use crate::syscall::fs::SeekWhence;
 use crate::{drivers::BLOCK_DEVICE, println};
 
 use alloc::boxed::Box;
-use alloc::collections::VecDeque;
-use alloc::string::{ToString};
-use alloc::sync::Arc;
+use alloc::collections::{VecDeque, BTreeMap};
+use alloc::string::{String, ToString};
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use easy_fs::layout::FATDiskInodeType;
 pub use easy_fs::DiskInodeType;
 use easy_fs::{CacheManager, EasyFileSystem, Inode};
 use lazy_static::*;
-use spin::Mutex;
+use spin::{Mutex, RwLock};
 
 type InodeImpl =
     Inode<crate::fs::cache_mgr::DataCacheMgrWrapper, crate::fs::cache_mgr::InfoCacheMgrWrapper>;
@@ -23,12 +23,8 @@ type InodeImpl =
 pub struct OSInode {
     readable: bool,
     writable: bool,
-    inner: Mutex<OSInodeInner>,
-}
-
-pub struct OSInodeInner {
-    offset: usize,
-    inode: Arc<InodeImpl>,
+    inner: Arc<InodeImpl>,
+    offset: Mutex<usize>,
 }
 
 impl OSInode {
@@ -36,13 +32,13 @@ impl OSInode {
         Self {
             readable,
             writable,
-            inner: Mutex::new(OSInodeInner { offset: 0, inode }),
+            inner: inode,
+            offset: Mutex::new(0),
         }
     }
 
     pub fn is_dir(&self) -> bool {
-        let inner = self.inner.lock();
-        inner.inode.is_dir()
+        self.inner.is_dir()
     }
 
     // /* this func will not influence the file offset
@@ -126,7 +122,6 @@ impl OSInode {
         flags: OpenFlags,
         type_: DiskInodeType,
     ) -> Result<Arc<OSInode>, isize> {
-        let inner = self.inner.lock();
         let mut components: VecDeque<&str> = path.split('/').fold(VecDeque::new(), |mut v, s| {
             if !s.is_empty() {
                 match s {
@@ -143,7 +138,7 @@ impl OSInode {
         });
         let (readable, writable) = flags.read_write();
 
-        let mut current_inode = inner.inode.clone();
+        let mut current_inode = self.inner.clone();
         while let Some(component) = components.pop_front() {
             if !current_inode.is_dir() {
                 return Err(ENOTDIR);
@@ -194,22 +189,20 @@ impl OSInode {
         const DT_DIR: u8 = 4;
         const DT_REG: u8 = 8;
 
-        let mut inner = self.inner.lock();
-        assert!(inner.inode.is_dir());
-        let offset = inner.offset as u32;
+        assert!(self.inner.is_dir());
+        let mut offset = self.offset.lock();
         log::debug!(
             "[get_dirent] tot size: {}, offset: {}, count: {}",
-            inner.inode.get_file_size(),
+            self.inner.get_file_size(),
             offset,
             count
         );
 
-        let vec = inner
-            .inode
-            .dirent_info(offset, count / core::mem::size_of::<Dirent>())
+        let vec = self.inner
+            .dirent_info(*offset as u32, count / core::mem::size_of::<Dirent>())
             .unwrap();
-        if let Some((_, offset, _, _)) = vec.last() {
-            inner.offset = *offset;
+        if let Some((_, next_offset, _, _)) = vec.last() {
+            *offset = *next_offset;
         }
         vec.iter()
             .map(|(name, offset, first_clus, type_)| {
@@ -258,77 +251,72 @@ impl OSInode {
     }
 
     pub fn size(&self) -> usize {
-        let inner = self.inner.lock();
-        let (size, _, _, _, _) = inner.inode.stat();
+        let (size, _, _, _, _) = self.inner.stat();
         return size as usize;
     }
 
     pub fn clear(&self) {
-        let inner = self.inner.lock();
-        let mut file_content_lock = inner.inode.file_content.lock();
-        let sz = inner.inode.get_file_size();
-        inner
-            .inode
+        let mut file_content_lock = self.inner.file_content.lock();
+        let sz = self.inner.get_file_size();
+        self.inner
             .modify_size(&mut file_content_lock, -(sz as i64) as isize);
     }
 
     pub fn delete(&self) {
-        let inner = self.inner.lock();
-        Inode::delete_from_disk(inner.inode.clone()).unwrap();
+        Inode::delete_from_disk(self.inner.clone()).unwrap();
     }
 
     pub fn get_head_cluster(&self) -> u32 {
-        let inner = self.inner.lock();
-        inner.inode.get_file_clus()
+        self.inner.get_file_clus()
     }
 
     pub fn set_offset(&self, off: usize) {
-        let mut inner = self.inner.lock();
-        inner.offset = off;
+        *self.offset.lock() = off;
     }
 
     pub fn lseek(&self, offset: isize, whence: SeekWhence) -> isize {
-        let mut inner = self.inner.lock();
-        let old_offset = inner.offset;
-        match whence {
+        let old_offset = *self.offset.lock();
+        let new_offset = match whence {
             SeekWhence::SEEK_SET => {
                 if offset < 0 {
                     return EINVAL;
                 }
-                inner.offset = offset as usize;
+                offset
             }
             SeekWhence::SEEK_CUR => {
-                let new_offset = inner.offset as isize + offset;
+                let new_offset = old_offset as isize + offset;
                 if new_offset >= 0 {
-                    inner.offset = new_offset as usize;
+                    new_offset
                 } else {
                     return EINVAL;
                 }
             }
             SeekWhence::SEEK_END => {
-                let new_offset = inner.inode.get_file_size() as isize + offset;
+                let new_offset = self.inner.get_file_size() as isize + offset;
                 if new_offset >= 0 {
-                    inner.offset = new_offset as usize;
+                    new_offset
                 } else {
                     return EINVAL;
                 }
             }
             // whence is duplicated
             _ => return EINVAL,
-        }
+        };
+        
         log::info!(
             "[lseek] old offset: {}, new offset: {}, file size: {}",
             old_offset,
-            inner.offset,
-            inner.inode.get_file_size()
+            new_offset,
+            self.inner.get_file_size()
         );
-        inner.offset as isize
+
+        *self.offset.lock() = new_offset as usize;
+        new_offset as isize
     }
 
     pub fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) {
         log::trace!("[set_timestamp] ctime: {:?}, atime: {:?}, mtime: {:?}", ctime, atime, mtime);
-        let inner = self.inner.lock();
-        let mut inode_time = inner.inode.time.lock();
+        let mut inode_time = self.inner.time.lock();
         if let Some(ctime) = ctime {
             inode_time.set_create_time(ctime as u64);
         }
@@ -397,41 +385,33 @@ impl File for OSInode {
         self.writable
     }
     fn read(&self, mut buf: UserBuffer) -> usize {
-        let mut inner = self.inner.lock();
         let mut total_read_size = 0usize;
 
-        let mut offset = inner.offset;
-        let mut file_cont_lock = inner.inode.file_content.lock();
+        let mut offset = self.offset.lock();
+        let mut file_cont_lock = self.inner.file_content.lock();
         for slice in buf.buffers.iter_mut() {
-            let read_size = inner
-                .inode
-                .read_at_block_cache(&mut file_cont_lock, offset, *slice);
+            let read_size = self.inner
+                .read_at_block_cache(&mut file_cont_lock, *offset, *slice);
             if read_size == 0 {
                 break;
             }
-            offset += read_size;
+            *offset += read_size;
             total_read_size += read_size;
         }
-        drop(file_cont_lock);
-        inner.offset = offset;
         total_read_size
     }
     fn write(&self, buf: UserBuffer) -> usize {
-        let mut inner = self.inner.lock();
         let mut total_write_size = 0usize;
 
-        let mut offset = inner.offset;
-        let mut file_cont_lock = inner.inode.file_content.lock();
+        let mut offset = self.offset.lock();
+        let mut file_cont_lock = self.inner.file_content.lock();
         for slice in buf.buffers.iter() {
-            let write_size = inner
-                .inode
-                .write_at_block_cache(&mut file_cont_lock, offset, *slice);
+            let write_size = self.inner
+                .write_at_block_cache(&mut file_cont_lock, *offset, *slice);
             assert_eq!(write_size, slice.len());
-            offset += write_size;
+            *offset += write_size;
             total_write_size += write_size;
         }
-        drop(file_cont_lock);
-        inner.offset = offset;
         total_write_size
     }
     /// If offset is not `None`, `kread()` will start reading file from `*offset`,
@@ -442,23 +422,21 @@ impl File for OSInode {
     /// # Warning
     /// Buffer must be in kernel space
     fn kread(&self, offset: Option<&mut usize>, buffer: &mut [u8]) -> usize {
-        let mut inner = self.inner.lock();
-        let mut file_cont_lock = inner.inode.file_content.lock();
+        let mut file_cont_lock = self.inner.file_content.lock();
         match offset {
             Some(offset) => {
-                let len = inner
-                    .inode
+                let len = self.inner
                     .read_at_block_cache(&mut file_cont_lock, *offset, buffer);
+                drop(file_cont_lock);
                 *offset += len;
                 len
             }
             None => {
-                let len =
-                    inner
-                        .inode
-                        .read_at_block_cache(&mut file_cont_lock, inner.offset, buffer);
+                let mut offset = self.offset.lock();
+                let len = self.inner
+                    .read_at_block_cache(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
-                inner.offset += len;
+                *offset += len;
                 len
             }
         }
@@ -471,32 +449,29 @@ impl File for OSInode {
     /// # Warning
     /// Buffer must be in kernel space
     fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
-        let mut inner = self.inner.lock();
-        let mut file_cont_lock = inner.inode.file_content.lock();
+        let mut file_cont_lock = self.inner.file_content.lock();
         match offset {
             Some(offset) => {
-                let len = inner
-                    .inode
+                let len = self.inner
                     .write_at_block_cache(&mut file_cont_lock, *offset, buffer);
+                drop(file_cont_lock);
                 *offset += len;
                 len
             }
             None => {
-                let len =
-                    inner
-                        .inode
-                        .write_at_block_cache(&mut file_cont_lock, inner.offset, buffer);
+                let mut offset = self.offset.lock();
+                let len = self.inner
+                    .write_at_block_cache(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
-                inner.offset += len;
+                *offset += len;
                 len
             }
         }
     }
     fn stat(&self) -> Box<Stat> {
-        let inner = self.inner.lock();
-        let (size, atime, mtime, ctime, ino) = inner.inode.stat();
+        let (size, atime, mtime, ctime, ino) = self.inner.stat();
         let st_mod: u32 = {
-            if inner.inode.is_dir() {
+            if self.inner.is_dir() {
                 (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
                     .bits()
             } else {
