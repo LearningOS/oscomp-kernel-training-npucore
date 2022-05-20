@@ -1121,18 +1121,28 @@ pub fn sys_umask(mask: usize) -> isize {
 }
 
 bitflags! {
+    pub struct FaccessatMode: u32 {
+        const F_OK = 0;
+        const R_OK = 4;
+        const W_OK = 2;
+        const X_OK = 1;
+    }
     pub struct FaccessatFlags: u32 {
         const AT_SYMLINK_NOFOLLOW = 0x100;
         const AT_EACCESS = 0x200;
     }
 }
 
-pub fn sys_faccessat2(dirfd: u32, pathname: *const u8, mode: u32, flags: u32) -> isize {
-    let task = current_task().unwrap();
-    let inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
+pub fn sys_faccessat2(dirfd: usize, pathname: *const u8, mode: u32, flags: u32) -> isize {
+    let token = current_user_token();
     let pathname = translated_str(token, pathname);
-    let mode = StatMode::from_bits(mode);
+    let mode = match FaccessatMode::from_bits(mode) {
+        Some(mode) => mode,
+        None => {
+            warn!("[sys_faccessat2] unknown mode");
+            return EINVAL;
+        }
+    };
     let flags = match FaccessatFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -1140,10 +1150,16 @@ pub fn sys_faccessat2(dirfd: u32, pathname: *const u8, mode: u32, flags: u32) ->
             return EINVAL;
         }
     };
+
     info!(
         "[sys_faccessat2] dirfd: {}, pathname: {}, mode: {:?}, flags: {:?}",
         dirfd, pathname, mode, flags
     );
-    warn!("[sys_faccessat2] fake implementation! Do nothing and return 0.");
-    SUCCESS
+
+    // Do not check user's authority, because user group is not implemented yet.
+    // All existing files can be accessed.
+    match __openat(dirfd, pathname.as_str()) {
+        Ok(_) => SUCCESS,
+        Err(errno) => errno
+    }
 }
