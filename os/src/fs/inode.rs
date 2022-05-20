@@ -4,27 +4,22 @@ use crate::fs::cache_mgr::InfoCacheMgrWrapper;
 use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
-use crate::timer::TimeSpec;
 use crate::{drivers::BLOCK_DEVICE, println};
 
-use _core::usize;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
-use alloc::string::{String, ToString};
+use alloc::string::{ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use bitflags::*;
-//use easy_fs::block_cache::BlockCacheManagerWrapper;
 use easy_fs::layout::FATDiskInodeType;
 pub use easy_fs::DiskInodeType;
-use easy_fs::{CacheManager, DirFilter, EasyFileSystem, Inode};
+use easy_fs::{CacheManager, EasyFileSystem, Inode};
 use lazy_static::*;
 use spin::Mutex;
 
 type InodeImpl =
     Inode<crate::fs::cache_mgr::DataCacheMgrWrapper, crate::fs::cache_mgr::InfoCacheMgrWrapper>;
 
-// 此inode实际被当作文件
 pub struct OSInode {
     readable: bool,
     writable: bool,
@@ -32,8 +27,8 @@ pub struct OSInode {
 }
 
 pub struct OSInodeInner {
-    offset: usize,         // 当前读写的位置
-    inode: Arc<InodeImpl>, // inode引用
+    offset: usize,
+    inode: Arc<InodeImpl>,
 }
 
 impl OSInode {
@@ -41,7 +36,6 @@ impl OSInode {
         Self {
             readable,
             writable,
-            //fd_cloexec:false,
             inner: Mutex::new(OSInodeInner { offset: 0, inode }),
         }
     }
@@ -280,7 +274,7 @@ impl OSInode {
 
     pub fn delete(&self) {
         let inner = self.inner.lock();
-        Inode::delete_from_disk(inner.inode.clone());
+        Inode::delete_from_disk(inner.inode.clone()).unwrap();
     }
 
     pub fn get_head_cluster(&self) -> u32 {
@@ -348,9 +342,6 @@ impl OSInode {
 }
 
 lazy_static! {
-    // 通过ROOT_INODE可以实现对efs的操作
-
-        // 此处载入文件系统
     pub static ref FILE_SYSTEM: Arc<EasyFileSystem<crate::fs::cache_mgr::DataCacheMgrWrapper, crate::fs::cache_mgr::InfoCacheMgrWrapper>> =
         EasyFileSystem::open(
         BLOCK_DEVICE.clone(),
@@ -384,7 +375,6 @@ pub fn open(
     flags: OpenFlags,
     type_: DiskInodeType,
 ) -> Result<Arc<OSInode>, isize> {
-    // DEBUG: 相对路径
     const BUSYBOX_PATH: &str = "/busybox";
     const REDIRECT_TO_BUSYBOX: [&str; 3] = ["/touch", "/rm", "/ls"];
     let path = if REDIRECT_TO_BUSYBOX.contains(&path) {
