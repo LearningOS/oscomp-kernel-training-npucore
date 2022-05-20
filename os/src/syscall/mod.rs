@@ -266,7 +266,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_GET_TIME => sys_get_time(),
         SYSCALL_GETRUSAGE => sys_getrusage(args[0] as isize, args[1] as *mut Rusage),
-        SYSCALL_UMASK => sys_umask(args[0]),
+        SYSCALL_UMASK => sys_umask(args[0] as u32),
         SYSCALL_GET_TIME_OF_DAY => sys_get_time_of_day(
             args[0] as *mut crate::timer::TimeVal,
             args[1] as *mut crate::timer::TimeZone,
