@@ -1072,10 +1072,9 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
         }
         Command::GETFL => {
             match &file_descriptor.file {
-                // for regular file, we don't check access permission now
+                // Access control is not fully implemented
                 FileLike::Regular(_) => OpenFlags::O_RDWR.bits() as isize,
-                FileLike::Abstract(file) => {
-                    // I think for most abstract file, they are either readable or writable
+                FileLike::Abstract(_) => {
                     OpenFlags::O_RDWR.bits() as isize
                 }
             }
