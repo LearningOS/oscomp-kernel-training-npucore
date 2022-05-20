@@ -528,7 +528,6 @@ bitflags! {
 pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
     let token = current_user_token();
     let path = translated_str(token, path);
-
     let flags = match FstatatFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -536,6 +535,7 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
             return EINVAL;
         }
     };
+
     info!(
         "[sys_fstatat] dirfd = {}, path = {:?}, flags: {:?}",
         dirfd, path, flags,
@@ -899,6 +899,12 @@ pub fn sys_mount(
     SUCCESS
 }
 
+bitflags! {
+    pub struct UtimensatFlags: u32 {
+        const AT_SYMLINK_NOFOLLOW = 0x100;
+    }
+}
+
 pub fn sys_utimensat(
     dirfd: usize,
     pathname: *const u8,
@@ -907,8 +913,16 @@ pub fn sys_utimensat(
 ) -> isize {
     const UTIME_NOW: usize = 0x3fffffff;
     const UTIME_OMIT: usize = 0x3ffffffe;
+
     let token = current_user_token();
     let path = translated_str(token, pathname);
+    let flags = match UtimensatFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => {
+            warn!("[sys_utimensat] unknown flags");
+            return EINVAL;
+        }
+    };
 
     info!(
         "[sys_utimensat] dirfd: {}, path: {}, times: {:?}, flags: {:?}",
@@ -920,12 +934,25 @@ pub fn sys_utimensat(
         Err(errno) => return errno,
     };
 
-    let timespec = &mut [TimeSpec::now(); 2];
+    let now = TimeSpec::now();
+    let timespec = &mut [now; 2];
+    let mut atime = Some(now.tv_sec);
+    let mut mtime = Some(now.tv_sec);
     if !times.is_null() {
         copy_from_user(token, times, timespec);
-        // todo: check if timespecs have valid value
+        match timespec[0].tv_nsec {
+            UTIME_NOW => (),
+            UTIME_OMIT => atime = None,
+            _ => atime = Some(timespec[0].tv_sec),
+        }
+        match timespec[1].tv_nsec {
+            UTIME_NOW => (),
+            UTIME_OMIT => mtime = None,
+            _ => mtime = Some(timespec[1].tv_sec),
+        }
     }
-    inode.set_timestamp(timespec);
+
+    inode.set_timestamp(None, atime, mtime);
     SUCCESS
 }
 

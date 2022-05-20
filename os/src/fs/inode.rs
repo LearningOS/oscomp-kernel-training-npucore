@@ -285,8 +285,7 @@ impl OSInode {
 
     pub fn get_head_cluster(&self) -> u32 {
         let inner = self.inner.lock();
-        let vfile = &inner.inode;
-        vfile.get_file_clus()
+        inner.inode.get_file_clus()
     }
 
     pub fn set_offset(&self, off: usize) {
@@ -332,10 +331,19 @@ impl OSInode {
         inner.offset as isize
     }
 
-    /// todo
-    pub fn set_timestamp(&self, times: &[TimeSpec; 2]) {
-        log::trace!("[set_timestamp] times: {:?}", times);
-        log::warn!("[set_timestamp] not implemented yet!");
+    pub fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) {
+        log::trace!("[set_timestamp] ctime: {:?}, atime: {:?}, mtime: {:?}", ctime, atime, mtime);
+        let inner = self.inner.lock();
+        let mut inode_time = inner.inode.time.lock();
+        if let Some(ctime) = ctime {
+            inode_time.set_create_time(ctime as u64);
+        }
+        if let Some(atime) = atime {
+            inode_time.set_access_time(atime as u64);
+        }
+        if let Some(mtime) = mtime {
+            inode_time.set_modify_time(mtime as u64);
+        }
     }
 }
 
@@ -496,10 +504,9 @@ impl File for OSInode {
     }
     fn stat(&self) -> Box<Stat> {
         let inner = self.inner.lock();
-        let vfile = inner.inode.clone();
-        let (size, atime, mtime, ctime, ino) = vfile.stat();
+        let (size, atime, mtime, ctime, ino) = inner.inode.stat();
         let st_mod: u32 = {
-            if vfile.is_dir() {
+            if inner.inode.is_dir() {
                 (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
                     .bits()
             } else {
