@@ -213,7 +213,7 @@ pub enum FATDiskInodeType {
     AttrLongName = 0x0F,
 }
 pub union FATDirEnt {
-    pub short_entry: FATDirShortEnt,
+    pub short_entry: FATShortDirEnt,
     pub long_entry: FATLongDirEnt,
 }
 
@@ -340,7 +340,7 @@ impl FATDirEnt {
     }
     pub fn empty() -> Self {
         Self {
-            short_entry: FATDirShortEnt::empty(),
+            short_entry: FATShortDirEnt::empty(),
         }
     }
     pub fn unused_not_last_entry() -> Self {
@@ -415,7 +415,7 @@ impl FATDirEnt {
         //unsafe { self.short_entry.attr == FATDiskInodeType::AttrLongName }
         !self.is_long()
     }
-    pub fn get_short_ent(&self) -> Option<&FATDirShortEnt> {
+    pub fn get_short_ent(&self) -> Option<&FATShortDirEnt> {
         if !self.is_long() {
             unsafe { Some(&(self.short_entry)) }
         } else {
@@ -455,7 +455,7 @@ impl FATDirEnt {
 #[derive(Debug, Clone, Copy)]
 #[repr(packed)]
 /// On-disk & in-file data structure for FAT32 directory.
-pub struct FATDirShortEnt {
+pub struct FATShortDirEnt {
     /// name, offset
     pub name: [u8; 11],
     pub attr: FATDiskInodeType, //?
@@ -471,7 +471,7 @@ pub struct FATDirShortEnt {
     pub file_size: u32,
 }
 
-impl FATDirShortEnt {
+impl FATShortDirEnt {
     pub fn from_name(name: [u8; 11], fst_clus: u32, file_type: DiskInodeType) -> Self {
         let mut short_ent = Self::empty();
         short_ent.set_fst_clus(fst_clus);
@@ -517,7 +517,7 @@ impl FATDirShortEnt {
             || self.attr == FATDiskInodeType::AttrReadOnly
     }
 }
-impl FATDirShortEnt {
+impl FATShortDirEnt {
     pub fn name(&self) -> String {
         let basic_name_len = (0..8).find(|i| self.name[*i] == ' ' as u8).unwrap_or(8);
         let ext_name_len = (0..3).find(|i| self.name[8 + *i] == ' ' as u8).unwrap_or(3);
