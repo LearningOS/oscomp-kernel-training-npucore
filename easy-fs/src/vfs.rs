@@ -1,6 +1,6 @@
 use alloc::collections::BTreeMap;
-use core::convert::TryInto;
 use alloc::vec;
+use core::convert::TryInto;
 //use ();
 use core::mem;
 use volatile::ReadOnly;
@@ -16,12 +16,12 @@ use alloc::string::String;
 use crate::block_cache::{Cache, CacheManager};
 use crate::dir_iter::*;
 use crate::layout::{
-    FATDirEnt, FATDirShortEnt, FATDiskInodeType, FATLongDirEnt, LONG_DIR_ENT_NAME_CAPACITY,
+    FATDirEnt, FATDiskInodeType, FATLongDirEnt, FATShortDirEnt, LONG_DIR_ENT_NAME_CAPACITY,
 };
 use crate::DataBlock;
 
 use alloc::sync::Arc;
-use alloc::vec::{Vec};
+use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
 
 /// DirFilterer, the struct is not intended for individual use.
@@ -133,7 +133,6 @@ impl InodeTime {
     pub fn modify_time(&self) -> &u64 {
         &self.modify_time
     }
-
 }
 
 /* *ClusLi was DiskInode*
@@ -556,7 +555,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     fn expand_dir_size(&self, lock: &mut MutexGuard<FileContent<T>>) -> core::fmt::Result {
         let size = self.fs.clus_size();
         self.modify_size(lock, size as isize);
-        let buf = vec![0u8;size as usize];
+        let buf = vec![0u8; size as usize];
         self.write_at_block_cache(lock, (lock.size - size) as usize, buf.as_ref());
         Ok(())
     }
@@ -727,7 +726,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             };
             // Generate short entry
             log::error!("short_name_slice: {:?}", short_name_slice);
-            let short_ent = FATDirShortEnt::from_name(short_name_slice, fst_clus, file_type);
+            let short_ent = FATShortDirEnt::from_name(short_name_slice, fst_clus, file_type);
             // Generate long entries
             let mut long_ents = Vec::<FATLongDirEnt>::new();
             for i in 1..=long_ent_num {
@@ -791,7 +790,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// `parent_dir`: the parent directory inode pointer
     /// `ent`: the short entry as the source of information
     /// `offset`: the offset of the short directory entry in the `parent_dir`
-    pub fn from_ent(parent_dir: &Arc<Self>, ent: &FATDirShortEnt, offset: u32) -> Arc<Self> {
+    pub fn from_ent(parent_dir: &Arc<Self>, ent: &FATShortDirEnt, offset: u32) -> Arc<Self> {
         Self::new(
             ent.get_first_clus(),
             if ent.is_dir() {
@@ -815,7 +814,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         parent_dir: &Arc<Self>,
         short_ent_offset: u32,
         lock: MutexGuard<FileContent<T>>,
-        short_ent: FATDirShortEnt,
+        short_ent: FATShortDirEnt,
         long_ents: Vec<FATLongDirEnt>,
     ) {
         //we have graranteed we have alloc enough entries
@@ -844,7 +843,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         mut current_lock: MutexGuard<FileContent<T>>,
         fst_clus: u32,
     ) {
-        let buf = vec![0;current_lock.size as usize];
+        let buf = vec![0; current_lock.size as usize];
         current_dir.write_at_block_cache(&mut current_lock, 0, buf.as_ref());
         let mut iter = current_dir.dir_iter(current_lock, None, DirIterMode::Enum, FORWARD);
         let mut short_name: [u8; 11] = [' ' as u8; 11];
@@ -852,7 +851,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         iter.next();
         short_name[0] = '.' as u8;
         iter.write_to_current_ent(&FATDirEnt {
-            short_entry: FATDirShortEnt::from_name(
+            short_entry: FATShortDirEnt::from_name(
                 short_name,
                 fst_clus as u32,
                 DiskInodeType::Directory,
@@ -862,7 +861,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         iter.next();
         short_name[1] = '.' as u8;
         iter.write_to_current_ent(&FATDirEnt {
-            short_entry: FATDirShortEnt::from_name(
+            short_entry: FATShortDirEnt::from_name(
                 short_name,
                 parent_dir.get_file_clus(),
                 DiskInodeType::Directory,
@@ -897,7 +896,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// The iterator stops at the last available item when it reaches the end,
     /// returning `None` from then on,
     /// so relying on the offset of the last item to decide whether it has reached an end is not recommended.
-    pub fn ls(&self) -> Result<Vec<(String, FATDirShortEnt)>, ()> {
+    pub fn ls(&self) -> Result<Vec<(String, FATShortDirEnt)>, ()> {
         if !self.is_dir() {
             return Err(());
         }
@@ -910,7 +909,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn find_local(
         &self,
         req_name: String,
-    ) -> Result<Option<(String, FATDirShortEnt, u32)>, ()> {
+    ) -> Result<Option<(String, FATShortDirEnt, u32)>, ()> {
         if !self.is_dir() {
             return Err(());
         }
@@ -918,9 +917,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut walker = self
             .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
             .walk();
-        match walker.find(|(name, _)| {
-            name.as_str() == req_name.as_str()
-        }) {
+        match walker.find(|(name, _)| name.as_str() == req_name.as_str()) {
             Some((name, short_ent)) => {
                 log::trace!("[easy-fs: find_local] Query name: {} found", req_name);
                 Ok(Some((name, short_ent, walker.iter.get_offset().unwrap())))
@@ -972,7 +969,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             None => return Ok(v),
         };
         for _ in 0..length {
-            let next_dirent_offset = walker.iter.get_offset().unwrap() as usize + core::mem::size_of::<FATDirEnt>();
+            let next_dirent_offset =
+                walker.iter.get_offset().unwrap() as usize + core::mem::size_of::<FATDirEnt>();
             let (name, short_ent) = match walker.next() {
                 Some(tuple) => tuple,
                 None => {
@@ -985,7 +983,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     return Ok(v);
                 }
             };
-            log::trace!("{}, offset: {}", last_name, walker.iter.get_offset().unwrap() as usize);
+            log::trace!(
+                "{}, offset: {}",
+                last_name,
+                walker.iter.get_offset().unwrap() as usize
+            );
             v.push((
                 last_name,
                 next_dirent_offset,

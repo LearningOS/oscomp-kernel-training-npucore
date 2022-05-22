@@ -1,4 +1,4 @@
-use crate::layout::{FATDirEnt, FATDirShortEnt};
+use crate::layout::{FATDirEnt, FATShortDirEnt};
 use crate::vfs::FileContent;
 use crate::{CacheManager, Inode};
 use alloc::string::{String, ToString};
@@ -197,9 +197,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         Some(dir_ent)
     }
     pub fn walk(self) -> DirWalker<'a, T, F> {
-        DirWalker {
-            iter: self,
-        }
+        DirWalker { iter: self }
     }
 }
 impl<T: CacheManager, F: CacheManager> Iterator for DirIter<'_, T, F> {
@@ -213,7 +211,7 @@ impl<T: CacheManager, F: CacheManager> Iterator for DirIter<'_, T, F> {
                     DirIterMode::LongIter => !dir_ent.unused() && dir_ent.is_long(),
                     DirIterMode::ShortIter => !dir_ent.unused() && dir_ent.is_short(),
                     DirIterMode::Enum => true,
-                    DirIterMode::Dirent => !dir_ent.unused() || dir_ent.last_and_unused()
+                    DirIterMode::Dirent => !dir_ent.unused() || dir_ent.last_and_unused(),
                 }
             }
             if check_dir_ent_legality(&self.mode, &dir_ent) {
@@ -229,7 +227,7 @@ pub struct DirWalker<'a, T: CacheManager, F: CacheManager> {
 }
 
 impl<T: CacheManager, F: CacheManager> Iterator for DirWalker<'_, T, F> {
-    type Item = (String, FATDirShortEnt);
+    type Item = (String, FATShortDirEnt);
     fn next(&mut self) -> Option<Self::Item> {
         let mut name = String::new();
         let mut should_be_ord = usize::MAX;
