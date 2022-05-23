@@ -11,6 +11,7 @@ pub fn handle_alloc_error(layout: core::alloc::Layout) -> ! {
 
 static mut HEAP_SPACE: [u8; KERNEL_HEAP_SIZE] = [0; KERNEL_HEAP_SIZE];
 
+/// Initialize the heap for use at the beginning of kernel loading.
 pub fn init_heap() {
     unsafe {
         HEAP_ALLOCATOR

@@ -51,8 +51,13 @@ pub fn set_next_trigger() {
 }
 
 #[derive(Clone, Copy, Debug)]
+/// Traditional UNIX timespec structures represent elapsed time, measured by the system clock
+/// # *CAUTION*
+/// tv_sec & tv_usec should be usize.
 pub struct TimeSpec {
+    /// The tv_sec member represents the elapsed time, in whole seconds.
     pub tv_sec: usize,
+    /// The tv_usec member captures rest of the elapsed time, represented as the number of microseconds.
     pub tv_nsec: usize,
 }
 
@@ -133,12 +138,14 @@ impl TimeSpec {
     }
 }
 
-/// *CAUTION* tv_sec & tv_usec should be usize.
+/// Traditional UNIX timeval structures represent elapsed time, measured by the system clock
+/// # *CAUTION*
+/// tv_sec & tv_usec should be usize.
 #[derive(Clone, Copy, Debug)]
 pub struct TimeVal {
-    /// seconds
+    /// The `tv_sec` member represents the elapsed time, in whole seconds
     pub tv_sec: usize,
-    /// microseconds
+    /// The `tv_nsec` member represents the rest of the elapsed time in nanoseconds.
     pub tv_usec: usize,
 }
 impl TimeVal {
@@ -236,9 +243,14 @@ impl ITimerVal {
 }
 
 #[derive(Clone, Copy)]
+/// Store the current process times used in the `time()`.
 pub struct Times {
-    pub tms_utime: usize,  /* user time */
-    pub tms_stime: usize,  /* system time */
-    pub tms_cutime: usize, /* user time of children */
-    pub tms_cstime: usize, /* system time of children */
+    /// user time
+    pub tms_utime: usize,
+    /// system time
+    pub tms_stime: usize,
+    /// user time of children
+    pub tms_cutime: usize,
+    /// system time of children
+    pub tms_cstime: usize,
 }

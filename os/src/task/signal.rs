@@ -15,36 +15,65 @@ use super::current_task;
 bitflags! {
     /// Signal
     pub struct Signals: usize{
+        /// Hangup.
         const	SIGHUP		= 1 << ( 0);
+        /// Interactive attention signal.
         const	SIGINT		= 1 << ( 1);
+        /// Quit.
         const	SIGQUIT		= 1 << ( 2);
+        /// Illegal instruction.
         const	SIGILL		= 1 << ( 3);
+        /// Trace/breakpoint trap.
         const	SIGTRAP		= 1 << ( 4);
+        /// IOT instruction, abort() on a PDP-11.
         const	SIGABRT		= 1 << ( 5);
+        /// Bus error.
         const	SIGBUS		= 1 << ( 6);
+        /// Erroneous arithmetic operation.
         const	SIGFPE		= 1 << ( 7);
+        /// Killed.
         const	SIGKILL		= 1 << ( 8);
+        /// User-defined signal 1.
         const	SIGUSR1		= 1 << ( 9);
+        /// Invalid access to storage.
         const	SIGSEGV		= 1 << (10);
+        /// User-defined signal 2.
         const	SIGUSR2		= 1 << (11);
+        /// Broken pipe.
         const	SIGPIPE		= 1 << (12);
+        /// Alarm clock.
         const	SIGALRM		= 1 << (13);
+        /// Termination request.
         const	SIGTERM		= 1 << (14);
         const	SIGSTKFLT	= 1 << (15);
+        /// Child terminated or stopped.
         const	SIGCHLD		= 1 << (16);
+        /// Continue.
         const	SIGCONT		= 1 << (17);
+        /// Stop, unblockable.
         const	SIGSTOP		= 1 << (18);
+        /// Keyboard stop.
         const	SIGTSTP		= 1 << (19);
+        /// Background read from control terminal.
         const	SIGTTIN		= 1 << (20);
+        /// Background write to control terminal.
         const	SIGTTOU		= 1 << (21);
+        /// Urgent data is available at a socket.
         const	SIGURG		= 1 << (22);
+        /// CPU time limit exceeded.
         const	SIGXCPU		= 1 << (23);
+        /// File size limit exceeded.
         const	SIGXFSZ		= 1 << (24);
+        /// Virtual timer expired.
         const	SIGVTALRM	= 1 << (25);
+        /// Profiling timer expired.
         const	SIGPROF		= 1 << (26);
+        /// Window size change (4.3 BSD, Sun).
         const	SIGWINCH	= 1 << (27);
+        /// I/O now possible (4.2 BSD).
         const	SIGIO		= 1 << (28);
         const   SIGPWR      = 1 << (29);
+        /// Bad system call.
         const   SIGSYS      = 1 << (30);
     }
 }

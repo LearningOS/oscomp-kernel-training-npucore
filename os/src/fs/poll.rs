@@ -73,6 +73,7 @@ bitflags! {
 impl PollFd {
     /* fn get_inode(&self) -> OSInode {} */
 }
+#[allow(unused)]
 pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
     ppoll(poll_fd, nfds, time_spec, null::<Signals>())
 }
@@ -173,6 +174,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
         0
     }
 }
+
 // This may be unsafe since the size of bits is undefined.
 #[derive(Debug)]
 #[repr(C)]
