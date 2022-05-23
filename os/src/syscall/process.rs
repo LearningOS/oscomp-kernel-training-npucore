@@ -723,6 +723,7 @@ pub fn sys_sigreturn() -> isize {
     return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
 }
 
+/// Get process times
 pub fn sys_times(buf: *mut Times) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();

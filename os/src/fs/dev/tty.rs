@@ -210,63 +210,67 @@ impl File for Teletype {
 #[repr(u32)]
 pub enum TeletypeCommand {
     // For struct termios
-    // Gets the current serial port settings.
+    /// Gets the current serial port settings.
     TCGETS = 0x5401,
-    // Sets the serial port settings immediately.
+    /// Sets the serial port settings immediately.
     TCSETS = 0x5402,
-    // Sets the serial port settings after allowing the input and output buffers to drain/empty.
+    /// Sets the serial port settings after allowing the input and output buffers to drain/empty.
     TCSETSW = 0x5403,
-    // Sets the serial port settings after flushing the input and output buffers.
+    /// Sets the serial port settings after flushing the input and output buffers.
     TCSETSF = 0x5404,
 
-    // For struct termio
-    // Gets the current serial port settings.
+    /// For struct termio
+    /// Gets the current serial port settings.
     TCGETA = 0x5405,
-    // Sets the serial port settings immediately.
+    /// Sets the serial port settings immediately.
     TCSETA = 0x5406,
-    // Sets the serial port settings after allowing the input and output buffers to drain/empty.
+    /// Sets the serial port settings after allowing the input and output buffers to drain/empty.
     TCSETAW = 0x5407,
-    // Sets the serial port settings after flushing the input and output buffers.
+    /// Sets the serial port settings after flushing the input and output buffers.
     TCSETAF = 0x5408,
 
-    // Get the process group ID of the foreground process group on this terminal.
+    /// Get the process group ID of the foreground process group on this terminal.
     TIOCGPGRP = 0x540F,
-    // Set the foreground process group ID of this terminal.
+    /// Set the foreground process group ID of this terminal.
     TIOCSPGRP = 0x5410,
 
-    // Get window size.
+    /// Get window size.
     TIOCGWINSZ = 0x5413,
-    // Set window size.
+    /// Set window size.
     TIOCSWINSZ = 0x5414,
 
-    // Non-cloexec
+    /// Non-cloexec
     FIONCLEX = 0x5450,
-    // Cloexec
+    /// Cloexec
     FIOCLEX = 0x5451,
 
-    // rustc using pipe and ioctl pipe file with this request id
-    // for non-blocking/blocking IO control setting
+    /// rustc using pipe and ioctl pipe file with this request id
+    /// for non-blocking/blocking IO control setting
     FIONBIO = 0x5421,
 
-    // Read time
+    /// Read time
     RTC_RD_TIME = 0x80247009,
 
     #[num_enum(default)]
     ILLEAGAL,
 }
 
-/*  The termios functions describe a general terminal interface that
-    is provided to control asynchronous communications ports.
-*/
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// The termios functions describe a general terminal interface that
+/// is provided to control asynchronous communications ports.
 pub struct Termios {
-    pub iflag: u32, // input modes
-    pub oflag: u32, // ouput modes
-    pub cflag: u32, // control modes
-    pub lflag: u32, // local modes
+    /// input modes
+    pub iflag: u32,
+    /// ouput modes
+    pub oflag: u32,
+    /// control modes
+    pub cflag: u32,
+    /// local modes
+    pub lflag: u32,
     pub line: u8,
-    pub cc: [u8; 32], // terminal special characters.
+    /// terminal special characters.
+    pub cc: [u8; 32],
     pub ispeed: u32,
     pub ospeed: u32,
 }

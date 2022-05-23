@@ -24,25 +24,6 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
 
-/// DirFilterer, the struct is not intended for individual use.
-/// Use it along with Inode::ls(&self)
-pub enum DirFilter {
-    /// Name mode, search for files with the same name.
-    Name(String),
-    /// FstClus mode, search for a file with a certain first cluster
-    FstClus(u64),
-    None,
-}
-
-impl DirFilter {
-    /// Returns `true` if the dir filter is [`None`].
-    ///
-    /// [`None`]: DirFilter::None
-    pub fn is_none(&self) -> bool {
-        matches!(self, Self::None)
-    }
-}
-
 pub struct FileContent<T: CacheManager> {
     /// For FAT32, size is a value computed from FAT.
     /// You should iterate around the FAT32 to get the size.

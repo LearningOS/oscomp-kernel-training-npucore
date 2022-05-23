@@ -1,8 +1,5 @@
 use super::{elf_cache::try_remove_elf, PhysAddr, PhysPageNum};
-use crate::{
-    config::{MEMORY_END, PAGE_SIZE},
-
-};
+use crate::config::{MEMORY_END, PAGE_SIZE};
 // KISS
 use alloc::{sync::Arc, vec::Vec};
 use core::fmt::{self, Debug, Formatter};
@@ -12,7 +9,7 @@ use spin::RwLock;
 pub struct FrameTracker {
     pub ppn: PhysPageNum,
 }
-
+/// RAII phantom for physical pages
 impl FrameTracker {
     pub fn new(ppn: PhysPageNum) -> Self {
         // page cleaning
@@ -29,8 +26,8 @@ impl Debug for FrameTracker {
         f.write_fmt(format_args!("FrameTracker:PPN={:#x}", self.ppn.0))
     }
 }
-
 impl Drop for FrameTracker {
+    /// Automatically recycle the physical frame when
     fn drop(&mut self) {
         // println!("do drop at {}", self.ppn.0);
         frame_dealloc(self.ppn);
@@ -84,10 +81,13 @@ impl FrameAllocator for StackFrameAllocator {
             Some((self.current - 1).into())
         }
     }
+    /// Deallocate a physical page
     fn dealloc(&mut self, ppn: PhysPageNum) {
         let ppn = ppn.0;
-        // validity check
-        if option_env!("MODE") == Some("debug") && ppn >= self.current || self.recycled.iter().find(|&v| *v == ppn).is_some() {
+        // validity check, note that this should be unnecessary for RELEASE build and it may significantly draw the speed of recycle.
+        if option_env!("MODE") == Some("debug") && ppn >= self.current
+            || self.recycled.iter().find(|&v| *v == ppn).is_some()
+        {
             panic!("Frame ppn={:#x} has not been allocated!", ppn);
         }
         // recycle
@@ -159,6 +159,31 @@ pub fn free_space_size_rdlock() -> usize {
 }
 
 #[macro_export]
+/// # Usage Example
+///
+/// `show_frame_consumption!{$place, $before}` Format:
+///
+/// ````
+/// show_frame_consumption!("push_elf_area", previous_use)
+/// ````
+///
+/// `show_frame_consumption!{$place, $statement}` Format:
+///
+/// ````
+/// show_frame_consumption! {
+///        "push_elf_area";
+///        if crate::mm::push_elf_area(file.clone()).is_err() {
+///            file.kread(None, buffer);
+///        } else {
+///            info!("[elf_exec] Hit ELF cache, no alloc");
+///        };
+///    }
+/// ````
+///
+/// # Arguments
+/// * `$place`: the name tag for the promotion.
+/// * `statement`: the enclosed
+/// * `before`:
 macro_rules! show_frame_consumption {
     ($place:literal; $($statement:stmt); *;) => {
         let __frame_consumption_before = crate::mm::unallocated_frames();

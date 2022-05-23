@@ -433,6 +433,7 @@ impl IntoIterator for UserBuffer {
     }
 }
 
+/// Iterator to a UserBuffer returning u8
 pub struct UserBufferIterator {
     buffers: Vec<&'static mut [u8]>,
     current_buffer: usize,
