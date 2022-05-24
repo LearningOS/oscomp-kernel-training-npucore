@@ -27,3 +27,6 @@ os/src/link_app.S
 os/last-*
 tools/
 user/.ccls-cache/
+
+# Doc .org
+Doc/**/*.org
