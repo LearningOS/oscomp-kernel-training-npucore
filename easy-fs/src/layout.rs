@@ -322,7 +322,9 @@ impl FATDirEnt {
                 &base[i..]
             }
         };
-        let base = base.trim_matches('.');
+        // not sure if this should be a `trim_matches` or a `trim_start_matches`
+        let base = base.trim_start_matches('.');
+
         let base = if ext.len() != 0 || base.len() != 0 {
             format!("{: <8}", base.split_at(8.min(base.len())).0)
         } else {

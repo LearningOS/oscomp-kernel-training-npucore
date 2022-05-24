@@ -127,7 +127,7 @@ impl<T: CacheManager> Fat<T> {
     /// n is the ordinal number of the cluster
     pub fn this_fat_ent_offset(&self, n: u32) -> usize {
         let fat_offset = n * 4;
-        (fat_offset % (self.byts_per_sec as u32)) as usize
+        (fat_offset % (T::CACHE_SZ as u32)) as usize
     }
     /// Assign the cluster entry to `current` to `next`
     fn set_next_clus(&self, block_device: &Arc<dyn BlockDevice>, current: u32, next: u32) {
