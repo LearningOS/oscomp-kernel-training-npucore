@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["poll",""],["ppoll",""],["pselect","Poll each of the file discriptors until certain events"]],"struct":[["FdSet",""],["PollEvent",""],["PollFd","A scheduling  scheme  whereby  the  local  process  periodically  checks  until  the  pre-specified events (for example, read, write) have occurred. The PollFd struct in 32-bit style."]]});
