@@ -55,7 +55,6 @@ OBJCOPY := rust-objcopy --binary-architecture=riscv64
 
 # Disassembly
 DISASM ?= -x
-
 # build: env $(KERNEL_BIN) $(FS_IMG) fat32
 build: env $(KERNEL_BIN)
 
@@ -186,4 +185,13 @@ release: build
 	@dd if=$(KERNEL_BIN) of=$(BOOTLOADER).copy bs=$(K210_BOOTLOADER_SIZE) seek=1
 	@mv $(BOOTLOADER).copy $(TOP)
 
+
+easy-fs-doc:
+	cd ../easy-fs/ && cargo doc --no-deps --release --document-private-items
+	@cd ../os/
+	@./clear_doc.sh easy-fs
+
+os-doc:
+	cargo doc --no-deps --release --target riscv64gc-unknown-none-elf --document-private-items
+	@./clear_doc.sh os
 .PHONY: user
