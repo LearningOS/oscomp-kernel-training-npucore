@@ -143,7 +143,7 @@ impl<T: CacheManager> Fat<T> {
             .modify(
                 self.this_fat_ent_offset(current as u32),
                 |bitmap_block: &mut u32| {
-                    println!("[set_next_clus]bitmap_block:{}->{}", *bitmap_block, next);
+                    //println!("[set_next_clus]bitmap_block:{}->{}", *bitmap_block, next);
                     *bitmap_block = next;
                 },
             )
@@ -172,7 +172,7 @@ impl<T: CacheManager> Fat<T> {
         for _ in 0..alloc_num {
             last = self.alloc_one(block_device, last);
             if last.is_none() {
-                println!("why here?");
+                //println!("why here?");
                 break;
             }
             v.push(last.unwrap());

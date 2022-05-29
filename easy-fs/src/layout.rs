@@ -1,5 +1,9 @@
 use super::BLOCK_SZ;
-use alloc::string::{String, ToString};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use core::{convert::TryInto, fmt::Debug, mem};
 
 pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
@@ -393,9 +397,7 @@ impl FATDirEnt {
         if !self.is_short() {
             panic!("this cluster is not a short dir ent")
         }
-        unsafe {
-            self.short_entry.get_first_clus()
-        }
+        unsafe { self.short_entry.get_first_clus() }
     }
     pub fn set_fst_clus(&mut self, fst_clus: u32) {
         if !self.is_short() {

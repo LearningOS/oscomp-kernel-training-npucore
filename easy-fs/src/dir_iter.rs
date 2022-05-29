@@ -1,7 +1,7 @@
-use spin::MutexGuard;
-use crate::{CacheManager, Inode};
 use crate::layout::FATDirEnt;
 use crate::vfs::FileContent;
+use crate::{CacheManager, Inode};
+use spin::MutexGuard;
 
 pub enum DirIterMode {
     LongIter,
@@ -49,7 +49,7 @@ pub struct DirIter<'a, T: CacheManager, F: CacheManager> {
     pub offset: Option<u32>,
     pub mode: DirIterMode,
     pub forward: bool,
-    pub inode: &'a Inode<T,F>,
+    pub inode: &'a Inode<T, F>,
 }
 
 impl<T: CacheManager, F: CacheManager> DirIter<'_, T, F> {
@@ -74,24 +74,22 @@ impl<T: CacheManager, F: CacheManager> DirIter<'_, T, F> {
         if self.forward {
             if offset == 0 {
                 self.offset = None;
-            }
-            else {
+            } else {
                 self.offset = Some(offset - STEP_SIZE);
             }
-        }
-        else {
-            self.offset = Some(offset + STEP_SIZE);            
+        } else {
+            self.offset = Some(offset + STEP_SIZE);
         }
     }
     pub fn current_clone(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent = FATDirEnt::empty();
-        if  self.offset.is_some()
+        if self.offset.is_some()
             && self.offset.unwrap() < self.file_size()
             && self.inode.read_at_block_cache(
-                    &mut self.lock,
-                    self.offset.unwrap() as usize, 
-                    dir_ent.as_bytes_mut()) 
-                != 0
+                &mut self.lock,
+                self.offset.unwrap() as usize,
+                dir_ent.as_bytes_mut(),
+            ) != 0
         {
             Some(dir_ent)
         } else {
@@ -151,33 +149,28 @@ impl<T: CacheManager, F: CacheManager> DirIter<'_, T, F> {
         self.mode = DirIterMode::Unused;
         self
     }
-    pub fn write_to_current_ent(&mut self, ent: &FATDirEnt) { 
+    pub fn write_to_current_ent(&mut self, ent: &FATDirEnt) {
         if self.inode.write_at_block_cache(
-             &mut self.lock, 
-             self.offset.unwrap() as usize, 
-             ent.as_bytes()) 
-           != ent.as_bytes().len() {
+            &mut self.lock,
+            self.offset.unwrap() as usize,
+            ent.as_bytes(),
+        ) != ent.as_bytes().len()
+        {
             panic!("failed!");
         }
-        println!("[write_to_current_ent] offset:{}, content:{:?}", self.offset.unwrap(), ent.as_bytes());
+        //println!("[write_to_current_ent] offset:{}, content:{:?}", self.offset.unwrap(), ent.as_bytes());
     }
     pub fn step(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent: FATDirEnt = FATDirEnt::empty();
         if self.forward {
             // if offset is None => 0
             // if offset is non-negative => offset + STEP_SIZE
-            let offset = 
-                self.offset
-                .map(|offset| offset + STEP_SIZE)
-                .unwrap_or(0);
+            let offset = self.offset.map(|offset| offset + STEP_SIZE).unwrap_or(0);
             if offset >= self.file_size() {
                 return None;
-            } 
-            self.inode.read_at_block_cache(
-                &mut self.lock,
-                offset as usize,
-                dir_ent.as_bytes_mut()
-            );
+            }
+            self.inode
+                .read_at_block_cache(&mut self.lock, offset as usize, dir_ent.as_bytes_mut());
             match self.mode {
                 DirIterMode::Enum => (),
                 _ => {
@@ -200,7 +193,7 @@ impl<T: CacheManager, F: CacheManager> DirIter<'_, T, F> {
             self.inode.read_at_block_cache(
                 &mut self.lock,
                 self.offset.unwrap() as usize,
-                dir_ent.as_bytes_mut()
+                dir_ent.as_bytes_mut(),
             );
         }
         // println!("offset {:?}, unused: {:?}, {:?}", self.offset, dir_ent.unused(), dir_ent);
@@ -217,7 +210,7 @@ impl<T: CacheManager, F: CacheManager> Iterator for DirIter<'_, T, F> {
                     DirIterMode::UsedIter => !dir_ent.unused(),
                     DirIterMode::LongIter => !dir_ent.unused() && dir_ent.is_long(),
                     DirIterMode::ShortIter => !dir_ent.unused() && dir_ent.is_short(),
-                    DirIterMode::Enum => true
+                    DirIterMode::Enum => true,
                 }
             }
             if check_dir_ent_legality(&self.mode, &dir_ent) {

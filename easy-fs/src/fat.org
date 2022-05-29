@@ -71,6 +71,9 @@ Layout磁盘上的超级块、位图、索引节点、数据块、目录项等�
 ** Common: The Lowest 2 Layers
 Note: BlockCache should support direct mapping/copying without caching...
 * 面向FAT32的需求进行改造
+* Inode之争
+早期我的,也包括去年一些学校的设计,是将每个
+但我们经过对Linux的测试,发现其实
 * Short Name generation
 本来这个内容应当被归入Layout或者改名/创建文件夹,但考虑到他的难度,计划单列出一节.
 这个部分参考资料不多,部分常见的实现是不完整的,某些的生成的尾部数字扩展恒为1,且没有判断重复的能力;哈佛的pdf直接转发微软的技术规格[[fatgen103.pdf]],后者中的资料语焉不详,夏新手机厂中文版的翻译版和英文只是简单的翻译关系.本文献无意重复相关的资料和结果,但是我们可以使用Linux作为参考代码,分析相关内容.本文献的这部分呈现了笔者有关算法的理解和分析
@@ -380,5 +383,49 @@ int get_a(){return global_variable_a(0,0);}
   }
 #+end_src
 很遗憾,即使是这个失败的版本,Rust-analyzer就直接报错了,因为Rust不允许方法中的static有泛型.恐怕只能另辟蹊径
+** unsafe万岁
+在队友的建议下,用unsafe裸指针解引用的方式解决编译通过的问题.大致思路如下:
+#+begin_src rust
+pub fn open_tab(file: OpenTabCmd<T, F>) -> Option<Arc<Self>> {
+    static mut ORG_LI: usize = 0;
+    unsafe {
+        if ORG_LI == 0 {
+            *(ORG_LI as *mut Mutex<alloc::collections::
+                         BTreeMap<u64, Arc<Self>>>) =
+                Mutex::new(alloc::collections::BTreeMap::new());
+        }
+//...
+    None
+}
+#+end_src
+首先,函数是Inode<T,F>的关联函数,在其中使用静态变量`ORG_LI`保持文件打开表.
+但是要注意,Rust中由于默认不允许关联函数使用泛型,所有的Inode<T,F>会共用一个open_tab(). 所以如果严谨的方法是利用非静态变量的TypeId(请自行搜索)建立一个BTreeMap然后对各个类型一一对应,但比较麻烦且对我们的两种运行环境没有意义(系统和FUSE模拟),所以完全可以忽略.
+另外,初始化的时候,如为多核,理论上Rust不使用原子操作保证其一致性,所以需要先完成初始化再打开第二个核,否则会出现竞争.
+然后是之后的命令设计.我们注意到,为了方便处理,此函数使用了OpenTabCmd<T,F>进行文件打开表的命令,其定义为:
+#+begin_src rust
+pub enum OpenTabCmd<T: CacheManager, F: CacheManager> {
+    InsertFile(Arc<Inode<T, F>>),
+    GetFileByInode(u64),
+    DropFileByInode(u64),
+    AddInode(u64, u64),
+}
+#+end_src
+共计4种功能,增,删,查,改,按照顺序分别叙述.
+*** 增
+**** 使用场景
+**** 具体需求
+**** 代码
+*** 删
+**** 使用场景
+**** 具体需求
+**** 代码
+*** 查
+**** 使用场景
+**** 具体需求
+**** 代码
+*** 改
+**** 使用场景
+**** 具体需求
+**** 代码
 * 后续的思路
 事实上,由上述分析,EasyFS的代码中的文件系统可以继续抽象,将其Inode继续抽象出来,然后使用泛型

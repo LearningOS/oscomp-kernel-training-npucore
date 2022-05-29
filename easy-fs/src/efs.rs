@@ -28,6 +28,9 @@ pub struct EasyFileSystem<T: CacheManager, F: CacheManager> {
 
     /// Bytes per sector, 512 for SD card
     pub byts_per_sec: u16,
+
+    /// "New" inode number count
+    ino_cnt: spin::Mutex<u64>,
 }
 #[allow(unused)]
 type DataBlock = [u8; crate::BLOCK_SZ];
@@ -60,6 +63,11 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
 }
 
 impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
+    pub fn alloc_new_inode(&self) -> u64 {
+        let mut ino = self.ino_cnt.lock();
+        *ino += 1;
+        *ino - 1
+    }
     /// n is the ordinal number of the cluster.
     #[inline(always)]
     pub fn first_sector_of_cluster(&self, n: u32) -> u32 {
@@ -96,6 +104,10 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
                 let efs = Self {
                     used_marker: Default::default(),
                     block_device,
+                    ino_cnt: spin::Mutex::new(
+                        32 + (super_block.data_sector_count() / super_block.sec_per_clus as u32)
+                            as u64,
+                    ),
                     fat: Fat::new(
                         super_block.rsvd_sec_cnt as usize,
                         super_block.byts_per_sec as usize,
@@ -112,7 +124,7 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
             })
     }
     /// Open the root directory
-    pub fn root_inode(efs: &Arc<Self>) -> Inode<T, F> {
+    pub fn root_inode(efs: &Arc<Self>) -> Arc<Inode<T, F>> {
         let rt_clus = efs.root_clus;
         // release efs lock
         Inode::new(

@@ -10,7 +10,7 @@ use easy_fs::layout::DiskInodeType;
 use easy_fs::*;
 use lazy_static::*;
 use spin::{Mutex, RwLock};
-use std::ascii::AsciiExt;
+//use std::ascii::AsciiExt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -138,6 +138,7 @@ impl BlockCacheManager {
 impl CacheManager for BlockCacheManager {
     type CacheType = BlockCache;
     const CACHE_SZ: usize = 512;
+
     fn try_get_block_cache(
         &mut self,
         block_id: usize,
@@ -201,7 +202,7 @@ impl CacheManager for BlockCacheManager {
     }
 }
 
-const IMAGE_PATH: &str = "../../os_2021/fat32-fuse/fat32.img";
+const IMAGE_PATH: &str = "../../os_2021/easy-fs-fuse/fat32.img";
 
 lazy_static! {
     pub static ref BLOCK_CACHE_MANAGER: Arc<Mutex<BlockCacheManager>> =
@@ -217,14 +218,13 @@ lazy_static! {
             ))),
             BLOCK_CACHE_MANAGER.clone()
         );
-    pub static ref ROOT: Arc<easy_fs::Inode<BlockCacheManager, BlockCacheManager>> =
-        Arc::new(Inode::new(
-            FILE_SYSTEM.root_clus,
-            DiskInodeType::Directory,
-            None,
-            None,
-            FILE_SYSTEM.clone(),
-        ));
+    pub static ref ROOT: Arc<easy_fs::Inode<BlockCacheManager, BlockCacheManager>> = Inode::new(
+        FILE_SYSTEM.root_clus,
+        DiskInodeType::Directory,
+        None,
+        None,
+        FILE_SYSTEM.clone(),
+    );
 }
 
 use test::Bencher;
@@ -236,10 +236,10 @@ fn bench_create(b: &mut Bencher) {
         // if ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device) == 0 {
         //     Inode::delete_from_disk(find_local(&ROOT, "cat".to_string()).unwrap()).unwrap();
         // }
-        println!(
-            "============FREE FAT: {}===========",
-            ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
-        );
+        /* println!(
+         *     "============FREE FAT: {}===========",
+         *     ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+         * ); */
         (0..20).for_each(|i: i32| {
             println!("Working on {}th creation.", i);
             if Inode::create(ROOT.clone(), i.to_string(), DiskInodeType::File).is_ok() {
@@ -249,10 +249,10 @@ fn bench_create(b: &mut Bencher) {
                 println!("Error on the {}th creation.", i);
             }
 
-            println!(
-                "============FREE FAT: {}===========",
-                ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
-            );
+            /* println!(
+             *     "============FREE FAT: {}===========",
+             *     ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+             * ); */
         });
         // panic!("wdnmd");
     })
@@ -311,7 +311,7 @@ fn bench_write_2(b: &mut Bencher) {
             .ls(DirFilter::None)
             .iter()
             .find(|i| i.0 == "cat")
-            .map(|i| Arc::new(Inode::from_ent(&ROOT, &i.1, i.2)))
+            .map(|i| (Inode::from_ent(&ROOT, &i.1, i.2)))
         {
             Inode::delete_from_disk(i);
             for i in ROOT.ls(DirFilter::None) {
@@ -330,10 +330,10 @@ fn bench_write_2(b: &mut Bencher) {
         if let Some(test) = find_local(&ROOT, "test".to_string()) {
             let mut lock = test.file_content.lock();
             (0..5).for_each(|i| {
-                println!(
-                    "============FREE FAT: {}===========",
-                    ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
-                );
+                /* println!(
+                 *     "============FREE FAT: {}===========",
+                 *     ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+                 * ); */
                 test.write_at_block_cache(&mut lock, i * BUFFER_SIZE, &ZERO);
             });
         } else {
@@ -341,10 +341,10 @@ fn bench_write_2(b: &mut Bencher) {
                 Inode::create(ROOT.clone(), "test".to_string(), DiskInodeType::File).unwrap();
             let mut lock = test.file_content.lock();
             (0..5).for_each(|i| {
-                println!(
-                    "============FREE FAT: {}===========",
-                    ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
-                );
+                /* println!(
+                 *     "============FREE FAT: {}===========",
+                 *     ROOT.fs.fat.cnt_all_fat(&ROOT.fs.block_device)
+                 * ); */
                 test.write_at_block_cache(&mut lock, i * BUFFER_SIZE, &ZERO);
             })
         }
