@@ -2,7 +2,7 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use clap::{App, Arg};
-use easy_fs::block_cache::{CacheManager, Cache};
+use easy_fs::block_cache::{Cache, CacheManager};
 use easy_fs::layout::{DiskInodeType, FATDirEnt};
 use easy_fs::{BlockDevice, EasyFileSystem, Inode};
 use lazy_static::*;
@@ -132,7 +132,12 @@ impl BlockCacheManager {
 impl CacheManager for BlockCacheManager {
     type CacheType = BlockCache;
 
-    fn try_get_block_cache(&self, block_id: usize) -> Option<Arc<Mutex<BlockCache>>> {
+    fn try_get_block_cache(
+        &self,
+        block_id: usize,
+        inner_blk_id: Option<usize>,
+        inode_id: Option<usize>,
+    ) -> Option<Arc<Mutex<BlockCache>>> {
         if let Some(pair) = self.queue.read().iter().find(|pair| pair.0 == block_id) {
             Some(Arc::clone(&pair.1))
         } else {
@@ -143,9 +148,11 @@ impl CacheManager for BlockCacheManager {
     fn get_block_cache(
         &self,
         block_id: usize,
+        inner_blk_id: Option<usize>,
+        inode_id: Option<usize>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Arc<Mutex<BlockCache>> {
-        if let Some(i) = self.try_get_block_cache(block_id) {
+        if let Some(i) = self.try_get_block_cache(block_id, inner_blk_id, inode_id) {
             i
         } else {
             // substitute
@@ -240,8 +247,8 @@ fn easy_fs_pack() -> std::io::Result<()> {
      *     );
      * } */
     let v = rt.ls();
-    for i in rt.iter() {
-        println!("{:?}", i.get_name());
+    for i in v {
+        println!("{}", i);
     }
     /*
     // 4MiB, at most 4095 files

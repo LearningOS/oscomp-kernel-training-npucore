@@ -1,6 +1,6 @@
 use super::{BlockDevice, Fat};
 use crate::{
-    block_cache::{CacheManager, Cache},
+    block_cache::{Cache, CacheManager},
     layout::{DiskInodeType, BPB},
     Inode,
 };
@@ -78,7 +78,7 @@ impl<T: CacheManager> EasyFileSystem<T> {
     pub fn open(block_device: Arc<dyn BlockDevice>, cache_mgr: Arc<T>) -> Arc<Self> {
         // read SuperBlock
         cache_mgr
-            .get_block_cache(0, Arc::clone(&block_device))
+            .get_block_cache(0, Some(0), Some(0), Arc::clone(&block_device))
             .lock()
             .read(0, |super_block: &BPB| {
                 assert!(super_block.is_valid(), "Error loading EFS!");

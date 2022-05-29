@@ -17,16 +17,27 @@ pub trait CacheManager {
     /// Try to get the block cache and return `None` if not found.
     /// # Argument
     /// `block_id`: The demanded block.
-    fn try_get_block_cache(&self, block_id: usize) -> Option<Arc<Mutex<Self::CacheType>>>;
+    /// `inner_blk_id`: The ordinal number of the block inside the block.
+    /// `inode_id`: The inode_id the block cache belongs to.
+    fn try_get_block_cache(
+        &self,
+        block_id: usize,
+        inner_blk_id: Option<usize>,
+        inode_id: Option<usize>,
+    ) -> Option<Arc<Mutex<Self::CacheType>>>;
 
-    /// Get a demanded block cache.
-    /// Replace one cache with the demanded one if it is not currently in the cache vector.
-    /// # Arguments
+    /// Attempt to get block cache from the cache.
+    /// If failed, the manager should try to copy the block from sdcard.
+    /// # Argument
     /// `block_id`: The demanded block.
-    /// `block_device`: The block to run on.
+    /// `inner_blk_id`: The ordinal number of the block inside the block.
+    /// `inode_id`: The inode_id the block cache belongs to.
+    /// `block_device`: The pointer to the block_device.
     fn get_block_cache(
         &self,
         block_id: usize,
+        inner_blk_id: Option<usize>,
+        inode_id: Option<usize>,
         block_device: Arc<dyn BlockDevice>,
     ) -> Arc<Mutex<Self::CacheType>>;
 }

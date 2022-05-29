@@ -4,13 +4,13 @@ use core::ops::{AddAssign, SubAssign};
 use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;
 
-use crate::block_cache::{CacheManager, Cache};
+use crate::block_cache::{Cache, CacheManager};
 use crate::layout::{FATDirEnt, FATDirShortEnt};
 use crate::{DataBlock, BLOCK_SZ};
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use spin::{Mutex, RwLock};
+use spin::Mutex;
 /// The functionality of ClusLi & Inode can be merged.
 /// The struct for file information
 /* *ClusLi was DiskInode*
@@ -30,12 +30,12 @@ pub struct Inode<T: CacheManager> {
 }
 
 impl<T: CacheManager> Inode<T> {
-    pub fn first_cluster(&self) -> u32 {
-        self.direct.lock()[0]
+    pub fn first_sector(&self) -> u32 {
+        self.fs.first_sector_of_cluster(self.direct.lock()[0])
     }
     #[inline(always)]
     pub fn get_inode_num(&self) -> u32 {
-        self.first_cluster()
+        self.first_sector()
     }
     pub fn from_ent(parent_dir: Arc<Self>, ent: &FATDirShortEnt) -> Self {
         Self::new(
@@ -124,6 +124,7 @@ impl<T: CacheManager> Inode<T> {
     /// (`cluster_id`, `nth_block_in_that_cluster`, `byts_offset_in_last_block`)
     /// to `byte`
     #[inline(always)]
+    #[allow(unused)]
     fn clus_offset(&self, byte: usize) -> (usize, usize, usize) {
         (
             byte / self.fs.clus_size() as usize,
@@ -154,7 +155,6 @@ impl<T: CacheManager> Inode<T> {
         }
         let mut start_block = start / BLOCK_SZ;
         let mut read_size = 0usize;
-        let mut is_fst_blk = false;
         loop {
             // calculate end of current block
             let mut end_current_block = (start / BLOCK_SZ + 1) * BLOCK_SZ;
@@ -166,6 +166,8 @@ impl<T: CacheManager> Inode<T> {
                 .cache_mgr
                 .get_block_cache(
                     self.get_block_id(start_block as u32) as usize,
+                    Some(start_block),
+                    Some(self.get_inode_num() as usize),
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -202,6 +204,8 @@ impl<T: CacheManager> Inode<T> {
                 .cache_mgr
                 .get_block_cache(
                     self.get_block_id(start_block as u32) as usize,
+                    Some(start_block),
+                    Some(self.get_inode_num() as usize),
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -316,6 +320,7 @@ pub enum DirIterMode {
     AllIter,
 }
 
+#[allow(unused)]
 impl DirIterMode {
     /// Returns `true` if the dir iter mode is [`LongIter`].
     ///

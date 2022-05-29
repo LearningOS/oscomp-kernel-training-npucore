@@ -13,7 +13,7 @@ pub trait BlockDevice: Send + Sync + Any {
     /// The function panics when the size of `buf` is not a multiple of BLOCK_SZ
     fn read_block(&self, block_id: usize, buf: &mut [u8]);
 
-    /// Write block from into
+    /// Write block into the file system.
     /// # Argument
     /// * `block_id`: the first sector(block) number to be written to
     /// * `buf`: the buffer to store the coming data

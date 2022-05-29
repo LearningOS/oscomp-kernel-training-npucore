@@ -1,7 +1,7 @@
 use core::marker::PhantomData;
 
 use crate::{
-    block_cache::{CacheManager, Cache},
+    block_cache::{Cache, CacheManager},
     layout::{BAD_BLOCK, EOC},
 };
 
@@ -24,6 +24,8 @@ pub struct Fat<T> {
     tot_ent: usize,
     /// The queue used to store known vacant clusters
     vacant_clus: spin::Mutex<VecDeque<u32>>,
+    /// The final unused clus id we found
+    hint: usize,
 }
 
 impl<T: CacheManager> Fat<T> {
@@ -37,6 +39,8 @@ impl<T: CacheManager> Fat<T> {
         cache_mgr
             .get_block_cache(
                 self.this_fat_sec_num(start) as usize,
+                None,
+                Some(self.start_block_id),
                 Arc::clone(block_device),
             )
             .lock()
@@ -86,6 +90,7 @@ impl<T: CacheManager> Fat<T> {
             byts_per_sec,
             tot_ent: clus,
             vacant_clus: spin::Mutex::new(VecDeque::new()),
+            hint: 0,
         }
     }
 
@@ -110,11 +115,31 @@ impl<T: CacheManager> Fat<T> {
     /// This function must be changed into a cluster-based one in the future.
     pub fn alloc(&mut self, block_device: &Arc<dyn BlockDevice>, cache_mgr: Arc<T>) -> Option<u32> {
         let mut lock = self.vacant_clus.lock();
-        if lock.is_empty() {
-            for clus_id in 0..self.tot_ent {
+        // get from vacant_clus
+        if let Some(clus_id) = lock.pop_back() {
+            // modify cached
+            cache_mgr
+                .get_block_cache(
+                    self.this_fat_sec_num(clus_id) as usize,
+                    None,
+                    Some(self.start_block_id),
+                    block_device.clone(),
+                )
+                .lock()
+                .modify(
+                    self.this_fat_ent_offset(clus_id as u32),
+                    |bitmap_block: &mut u32| {
+                        *bitmap_block = crate::layout::EOC;
+                    },
+                );
+            return Some(clus_id);
+        } else {
+            for clus_id in self.hint..self.tot_ent {
                 let pos = cache_mgr
                     .get_block_cache(
                         self.this_fat_sec_num(clus_id as u32) as usize,
+                        None,
+                        Some(self.start_block_id),
                         Arc::clone(block_device),
                     )
                     .lock()
@@ -129,28 +154,29 @@ impl<T: CacheManager> Fat<T> {
                             }
                         },
                     );
-                if pos.is_some() {
-                    if let Some(id) = pos {
-                        for clus_id in
-                            (id + 1) as usize..((id as usize % (BLOCK_SZ >> 2)) + BLOCK_SZ >> 2)
-                        {
-                            cache_mgr
-                                .get_block_cache(
-                                    self.this_fat_sec_num(id) as usize,
-                                    block_device.clone(),
-                                )
-                                .lock()
-                                .read(
-                                    self.this_fat_ent_offset(clus_id as u32),
-                                    |bitmap_block: &u32| {
-                                        if (*bitmap_block & EOC) == 0 {
-                                            lock.push_back(clus_id as u32);
-                                        }
-                                    },
-                                );
-                        }
+                if let Some(unused_id) = pos {
+                    self.hint = unused_id as usize + 1;
+                    for clus_id in (unused_id + 1) as usize
+                        ..((unused_id as usize % (BLOCK_SZ >> 2)) + BLOCK_SZ >> 2)
+                    {
+                        cache_mgr
+                            .get_block_cache(
+                                self.this_fat_sec_num(unused_id as u32) as usize,
+                                None,
+                                Some(self.start_block_id),
+                                block_device.clone(),
+                            )
+                            .lock()
+                            .read(
+                                self.this_fat_ent_offset(clus_id as u32),
+                                |bitmap_block: &u32| {
+                                    if (*bitmap_block & EOC) == 0 {
+                                        lock.push_back(clus_id as u32);
+                                    }
+                                },
+                            );
                     }
-                    return pos;
+                    return Some(unused_id);
                 }
             }
         }
@@ -159,7 +185,12 @@ impl<T: CacheManager> Fat<T> {
         if let Some(i) = lock.pop_back() {
             // modify cached
             cache_mgr
-                .get_block_cache(self.this_fat_sec_num(i) as usize, block_device.clone())
+                .get_block_cache(
+                    self.this_fat_sec_num(i) as usize,
+                    None,
+                    Some(self.start_block_id),
+                    block_device.clone(),
+                )
                 .lock()
                 .modify(
                     self.this_fat_ent_offset(i as u32),
@@ -179,6 +210,8 @@ impl<T: CacheManager> Fat<T> {
         cache_mgr
             .get_block_cache(
                 self.this_fat_sec_num(bit as u32) as usize,
+                None,
+                Some(self.start_block_id),
                 Arc::clone(block_device),
             )
             .lock()
