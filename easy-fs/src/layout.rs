@@ -1,6 +1,6 @@
 use super::BLOCK_SZ;
 use alloc::string::{String, ToString};
-use core::{fmt::Debug, mem};
+use core::{convert::TryInto, fmt::Debug, iter::empty, mem, ops::Add};
 
 pub const BAD_BLOCK: u32 = 0x0FFF_FFF7;
 pub const DIR_ENTRY_UNUSED: u8 = 0xe5;
@@ -240,6 +240,7 @@ pub type DataBlock = [u8; BLOCK_SZ];
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum FATDiskInodeType {
+    AttrClear = 0,
     AttrReadOnly = 0x01,
     AttrHidden = 0x02,
     AttrSystem = 0x04,
@@ -251,8 +252,8 @@ pub enum FATDiskInodeType {
     AttrLongName = 0x0F,
 }
 pub union FATDirEnt {
-    short_entry: FATDirShortEnt,
-    long_entry: FATLongDirEnt,
+    pub short_entry: FATDirShortEnt,
+    pub long_entry: FATLongDirEnt,
 }
 
 impl Debug for FATDirEnt {
@@ -270,6 +271,22 @@ impl Debug for FATDirEnt {
 }
 
 impl FATDirEnt {
+    /// Test whether `self` is a short entry
+    /// and whether the short entry name of `self` is the same type of `prefix`.
+    pub fn short_ent_name_match(&self, prefix: &String) -> bool {
+        let name = self.get_name();
+        if self.is_short() && {
+            if let Some(i) = name.split_once("~") {
+                i.0 == prefix
+            } else {
+                *prefix == name
+            }
+        } {
+            true
+        } else {
+            false
+        }
+    }
     pub fn is_8_3(s: String) -> bool {
         s.is_ascii() && s.to_ascii_uppercase() == s
     }
@@ -277,16 +294,17 @@ impl FATDirEnt {
     /// Leading and trailing spaces in a long name are ignored.
     /// Leading and embedded periods are allowed in a name and are stored in the long name.
     /// Trailing periods are ignored.
-    /// No '~' & trailing numbers
+    /// No '~' or trailing numbers
     pub fn gen_short_name_prefix(s: String) -> String {
-        let mut m = s;
-        m.to_uppercase().retain(|c| !r#" "#.contains(c));
-        m = m.trim_start_matches(".").to_string();
-        if m.len() <= 8 {
-            m = m.split_off(8);
-        }
-
-        m
+        "TESTXT".to_string()
+        // let mut m = s;
+        // m.to_uppercase().retain(|c| !r#" "#.contains(c));
+        // m = m.trim_start_matches(".").to_string();
+        // if m.len() <= 8 {
+        //     m = m.split_off(8);
+        // }
+        // todo!();
+        // m
     }
     pub fn get_ord(&self) -> usize {
         self.ord()
@@ -304,6 +322,7 @@ impl FATDirEnt {
     pub fn unused_and_last_entry() -> Self {
         let mut i = Self::empty();
         i.as_bytes_mut()[0] = DIR_ENTRY_LAST_AND_UNUSED;
+        i.as_bytes_mut()[11] = 0u8;
         i
     }
     pub fn as_bytes(&self) -> &[u8] {
@@ -340,7 +359,11 @@ impl FATDirEnt {
             0
         }
     }
-
+    pub fn set_size(&mut self, size: u32) {
+        {
+            self.short_entry.file_size = size
+        };
+    }
     pub fn set_fst_clus(&mut self, fst_clus: u32) {
         if self.is_short() {
             unsafe {
@@ -410,6 +433,17 @@ pub struct FATDirShortEnt {
 }
 
 impl FATDirShortEnt {
+    pub fn from_name(name: [u8; 11], fst_clus: u32, file_type: DiskInodeType) -> Self {
+        let mut i = Self::empty();
+        i.set_fst_clus(fst_clus);
+        i.name.copy_from_slice(&name);
+        if file_type == DiskInodeType::Directory {
+            i.attr = FATDiskInodeType::AttrDirectory;
+        } else {
+            i.attr = FATDiskInodeType::AttrArchive;
+        }
+        return i;
+    }
     pub fn empty() -> Self {
         Self {
             name: [0; 11],
@@ -459,6 +493,7 @@ impl FATDirShortEnt {
     }
 }
 
+pub const LONG_DIR_ENT_NAME_CAPACITY: usize = 13;
 #[derive(Debug, PartialEq, Clone, Copy)]
 #[repr(packed)]
 /// *On-disk* data structure for partition information.
@@ -492,8 +527,39 @@ pub struct FATLongDirEnt {
 }
 
 impl FATLongDirEnt {
+    pub fn empty() -> Self {
+        Self {
+            ord: 0u8,
+            name1: [0u16; 5],
+            attr: FATDiskInodeType::AttrLongName,
+            ldir_type: 0u8,
+            chk_sum: 0u8,
+            name2: [0u16; 6],
+            fst_clus_lo: 0u16,
+            name3: [0u16; 2],
+        }
+    }
+    pub fn from_name_slice(is_last_ent: bool, order: usize, partial_name: [u16; 13]) -> Self {
+        let mut i = Self::empty();
+
+        unsafe {
+            core::ptr::addr_of_mut!(i.name1)
+                .write_unaligned(partial_name[..5].try_into().expect("Failed to cast!"));
+            core::ptr::addr_of_mut!(i.name2)
+                .write_unaligned(partial_name[5..11].try_into().expect("Failed to cast!"));
+            core::ptr::addr_of_mut!(i.name3)
+                .write_unaligned(partial_name[11..].try_into().expect("Failed to cast!"));
+        }
+        assert!(order < 0x47);
+        i.ord = order as u8;
+        if is_last_ent {
+            i.ord |= LAST_LONG_ENTRY;
+        }
+
+        i
+    }
     pub fn name(&self) -> String {
-        let mut name_all: [u16; 13] = [0u16; 13];
+        let mut name_all: [u16; LONG_DIR_ENT_NAME_CAPACITY] = [0u16; LONG_DIR_ENT_NAME_CAPACITY];
 
         name_all[..5].copy_from_slice(unsafe { &core::ptr::addr_of!(self.name1).read_unaligned() });
         name_all[5..11]
@@ -508,7 +574,7 @@ impl FATLongDirEnt {
             {
                 i
             } else {
-                13
+                LONG_DIR_ENT_NAME_CAPACITY
             }],
         )
     }

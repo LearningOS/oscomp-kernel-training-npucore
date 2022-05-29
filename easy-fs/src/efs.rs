@@ -64,12 +64,10 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
     #[inline(always)]
     pub fn first_sector_of_cluster(&self, n: u32) -> u32 {
         assert_eq!(self.sec_per_clus.count_ones(), 1);
-        (if n > 2 {
-            (n - 2) << (self.sec_per_clus as u32).trailing_zeros()
-        } else {
-            0
-        }) as u32
-            + self.data_area_start_block as u32
+        assert!(n >= 2);
+        let start_block = self.data_area_start_block;
+        let offset_blocks = (n - 2) * self.sec_per_clus as u32;
+        start_block + offset_blocks
     }
     #[inline(always)]
     pub fn in_cluster(&self, block_id: u32) -> u32 {

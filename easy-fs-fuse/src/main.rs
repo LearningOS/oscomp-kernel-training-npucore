@@ -101,6 +101,7 @@ impl Cache for BlockCache {
     /// The mutable mapper to the block cache    
     fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V {
         let ret = f(self.get_mut(offset));
+        println!("offset:{}", offset);
         return ret;
     }
 }
@@ -109,6 +110,11 @@ impl BlockCache {
     fn sync(&mut self) {
         if self.modified {
             self.modified = false;
+            if self.block_id == 32 {
+                println!("ent of 66:{}", self.read(264, |i: &u32| *i));
+            } else {
+                println!("block_id:{} is written back.", self.block_id);
+            }
             self.block_device.write_block(self.block_id, &self.cache);
         }
     }
@@ -204,6 +210,10 @@ lazy_static! {
 
 fn main() {
     easy_fs_pack().expect("Error when packing easy-fs!");
+    for i in (*(BLOCK_CACHE_MANAGER.lock().queue.write())).iter() {
+        // println!("no{},refc:{}", i.0, Arc::strong_count(&i.1));
+        i.1.lock().sync();
+    }
 }
 
 fn easy_fs_pack() -> std::io::Result<()> {
@@ -245,50 +255,45 @@ fn easy_fs_pack() -> std::io::Result<()> {
     ));
     println!("size:{:?}", rt.size);
     println!("clus:{:?}", rt.direct.lock());
+    let mut res: [u8; 30] = [0u8; 30];
+    let file_li = rt.ls();
 
-    let mut ent = FATDirEnt::empty();
+    for i in &file_li {
+        println!("{}: {}", i.0, i.1.get_first_clus());
+    }
 
-    let print_iter = || {
-        let mut iter = rt.iter().enumerate();
-        for i in rt.iter().enumerate() {
-            println!(
-                "{}, ord: {}, last_ent: {}",
-                if !i.unused_not_last() && !i.last_and_unused() {
-                    i.get_name()
-                } else {
-                    if i.last_and_unused() {
-                        "last unused".to_string()
-                    } else {
-                        "unused not last".to_string()
-                    }
-                },
-                i.get_ord(),
-                i.is_last_long_dir_ent()
-            );
-        }
-        iter.set_offset(4608);
-        println!("last: {:?}", iter.current_clone());
-        println!("rt_sz: {}", *rt.size.read());
-    };
+    println!(
+        "sec&offset{},{}",
+        rt.fs.fat.this_fat_sec_num(66),
+        rt.fs.fat.this_fat_ent_offset(66)
+    );
 
-    let rm = || {
-        println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
-        let v = rt.ls();
-        let (_, ent, offset) = v.iter().find(|&i| i.0 == "cat").unwrap();
-        println!("{:?}", ent);
-        let cat = Arc::new(Inode::from_ent(rt.clone(), ent, *offset));
+    rm_test(rt.clone());
+    println!(
+        "free clus no:{}",
+        rt.fs.fat.cnt_all_fat(&rt.fs.block_device)
+    );
+    ls_test(rt.clone());
+    println!("ls_test1 done");
+    create_test(rt.clone());
+    println!("create_test done");
+    ls_test(rt.clone());
 
-        println!("direct:{:?}", cat.direct);
-        assert!(Inode::delete_from_disk(cat).is_ok());
-        println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
-    };
-
-    print_iter();
-
-    rm();
-
-    print_iter();
-    let mut text: [u8; 4096] = [0; 4096];
+    let arc_2 = find_local(rt.clone(), "testxt".to_string()).unwrap();
+    println!(
+        "size{},read:{},{:?},lock:{:?}",
+        *arc_2.size.read(),
+        arc_2.read_at_block_cache(0, &mut res),
+        res,
+        *arc_2.direct.lock()
+    );
+    println!(
+        "get_all_clus{:?}",
+        rt.fs.fat.get_all_clus_num(66, &rt.fs.block_device)
+    );
+    for i in rt.ls() {
+        println!("{}: {}", i.0, i.1.get_first_clus());
+    }
     /*let i = easy_fs::find_local(rt.clone(), "lua_testcode.sh".to_string())
         .unwrap()
         .read_at_block_cache(0, &mut text);
@@ -394,3 +399,106 @@ fn efs_test() -> std::io::Result<()> {
     Ok(())
 }
 */
+fn ls_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
+    for i in rt.ls() {
+        println!("{}", i.0);
+        if i.1.is_dir() {
+            let dir = Arc::new(Inode::from_ent(&rt, &i.1, i.2));
+            println!("{} is a directory made up of:", i.0);
+            println!(
+                "next:{}",
+                rt.fs
+                    .fat
+                    .get_next_clus_num(dir.direct.lock()[0], &rt.fs.block_device)
+            );
+            for j in dir.iter().everything() {
+                println!("{:?}", j);
+            }
+            println!("(end of it)");
+            println!("total_size: {}", dir.file_size());
+        }
+    }
+}
+fn rm_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
+    let print_iter = || {
+        let mut iter = rt.iter().everything();
+        for i in rt.iter().everything() {
+            println!(
+                "{}, ord: {}, last_ent: {}",
+                if !i.unused_not_last() && !i.last_and_unused() {
+                    i.get_name()
+                } else {
+                    if i.last_and_unused() {
+                        "last unused".to_string()
+                    } else {
+                        "unused not last".to_string()
+                    }
+                },
+                i.get_ord(),
+                i.is_last_long_dir_ent()
+            );
+        }
+        iter.set_offset(4608);
+        println!("last: {:?}", iter.current_clone());
+        println!("rt_sz: {}", *rt.size.read());
+    };
+
+    let rm = || {
+        println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
+        let v = rt.ls();
+        let (_, ent, offset) = v.iter().find(|&i| i.0 == "cat").unwrap();
+        println!("{:?}", ent);
+        let cat = Arc::new(Inode::from_ent(&rt.clone(), ent, *offset));
+
+        println!("direct:{:?}", cat.direct);
+        assert!(Inode::delete_from_disk(cat).is_ok());
+        println!("fat_num:{}", rt.fs.fat.cnt_all_fat(&rt.fs.block_device));
+    };
+    rm();
+    if rt.ls().iter().find(|&i| i.0 == "cat").is_none() {
+        println!("succeed!");
+    } else {
+        println!("failed!");
+    }
+}
+fn create_test(rt: Arc<Inode<BlockCacheManager, BlockCacheManager>>) {
+    let rt_ls = rt.ls();
+    let result = Inode::create(rt.clone(), "testxt".to_string(), DiskInodeType::File);
+    if let Ok(arc) = result {
+        let lock = arc.direct.lock();
+        println!("{:?}", *lock);
+        drop(lock);
+        let wr_byts = arc.write_at_block_cache(0, "aloha! Vcem privet!".as_bytes());
+        println!("direct:{},wr_byts:{}", arc.direct.lock()[0], wr_byts);
+        let mut res: [u8; 30] = [0u8; 30];
+        arc.read_at_block_cache(0, &mut res);
+        println!("read_out:{:?}", res);
+        //let j = 268435455;
+        println!("arc_cnt:{}", Arc::strong_count(&arc));
+        let i = arc.direct.lock()[0];
+
+        println!(
+            "get_all_clus:{:?}",
+            arc.fs.fat.get_all_clus_num(i, &arc.fs.block_device)
+        );
+    } else {
+        println!("Error: test_dir not created.");
+    }
+
+    if rt.ls().iter().find(|i| i.0 == "test_dir").is_some() {
+        for i in rt.iter().everything() {
+            if !i.unused() {
+                println!("{}", i.get_name());
+            } else {
+                println!("{:?}", i);
+            }
+        }
+        println!("done.");
+    } else {
+        println!("failed.");
+    }
+    println!(
+        "free_fat_num:{}",
+        rt.fs.fat.cnt_all_fat(&rt.fs.block_device),
+    );
+}

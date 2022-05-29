@@ -5,7 +5,7 @@ use crate::{
 
 use super::{BlockDevice, BLOCK_SZ};
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
-use spin::{Mutex, MutexGuard};
+use spin::Mutex;
 
 const BLOCK_BITS: usize = BLOCK_SZ * 8;
 const VACANT_CLUS_CACHE_SIZE: usize = 64;
@@ -25,7 +25,7 @@ pub struct Fat<T> {
     /// The total number of FAT entries
     tot_ent: usize,
     /// The queue used to store known vacant clusters
-    vacant_clus: spin::Mutex<VecDeque<u32>>,
+    vacant_clus: Mutex<VecDeque<u32>>,
     /// The final unused clus id we found
     hint: Mutex<usize>,
 }
@@ -143,6 +143,7 @@ impl<T: CacheManager> Fat<T> {
             .modify(
                 self.this_fat_ent_offset(current as u32),
                 |bitmap_block: &mut u32| {
+                    println!("[set_next_clus]bitmap_block:{}->{}", *bitmap_block, next);
                     *bitmap_block = next;
                 },
             )
@@ -150,7 +151,7 @@ impl<T: CacheManager> Fat<T> {
 
     pub fn cnt_all_fat(&self, block_device: &Arc<dyn BlockDevice>) -> usize {
         let mut sum = 0;
-        println!("[cnt_all_fat] self.clus{:?}", self.vacant_clus);
+        /* println!("[cnt_all_fat] self.clus{:?}", self.vacant_clus); */
         for i in 0..self.tot_ent as u32 {
             if self.get_next_clus_num(i, block_device) == FAT_ENTRY_FREE {
                 sum += 1;
@@ -171,6 +172,7 @@ impl<T: CacheManager> Fat<T> {
         for _ in 0..alloc_num {
             last = self.alloc_one(block_device, last);
             if last.is_none() {
+                println!("why here?");
                 break;
             }
             v.push(last.unwrap());
@@ -187,93 +189,76 @@ impl<T: CacheManager> Fat<T> {
         block_device: &Arc<dyn BlockDevice>,
         attach: Option<u32>,
     ) -> Option<u32> {
-        if attach.is_none()
-            || self.get_next_clus_num(attach.unwrap(), block_device) >= FAT_ENTRY_RESERVED_TO_END
+        if attach.is_some()
+            && self.get_next_clus_num(attach.unwrap(), block_device) < FAT_ENTRY_RESERVED_TO_END
         {
-            if let Some(i) = self.alloc_one_no_attach_locked(block_device) {
-                if attach.is_some() {
-                    self.set_next_clus(block_device, attach.unwrap(), i);
-                }
-                Some(i)
-            } else {
-                None
-            }
-        } else {
-            None
+            return None;
         }
+        // now we can alloc freely
+        if let Some(next_clus_id) = self.alloc_one_no_attach_locked(block_device) {
+            if attach.is_some() {
+                self.set_next_clus(block_device, attach.unwrap(), next_clus_id);
+            }
+            return Some(next_clus_id);
+        }
+        None
     }
     fn alloc_one_no_attach_locked(&self, block_device: &Arc<dyn BlockDevice>) -> Option<u32> {
-        let vacant_lock = self.vacant_clus.lock();
-        self.alloc_one_no_attach(block_device, vacant_lock)
-    }
-    fn alloc_one_no_attach(
-        &self,
-        block_device: &Arc<dyn BlockDevice>,
-        mut vacant_lock: MutexGuard<VecDeque<u32>>,
-    ) -> Option<u32> {
         // get from vacant_clus
-        if let Some(clus_id) = vacant_lock.pop_back() {
+        if let Some(clus_id) = self.vacant_clus.lock().pop_back() {
             // modify cached
             self.set_next_clus(block_device, clus_id, EOC);
             return Some(clus_id);
-        } else {
-            let hlock = self.hint.lock();
-            let start: usize = *hlock;
-            drop(hlock);
-            for clus_id in start..self.tot_ent {
-                let pos = self
-                    .fat_cache_mgr
-                    .lock()
-                    .get_block_cache(
-                        self.this_fat_sec_num(clus_id as u32) as usize,
-                        self.this_fat_inner_cache_num(clus_id as u32),
-                        || -> Vec<usize> { self.get_eight_blk(clus_id as u32) },
-                        Arc::clone(block_device),
-                    )
-                    .lock()
-                    .modify(
-                        self.this_fat_ent_offset(clus_id as u32) as usize,
-                        |bitmap_block: &mut u32| {
-                            if (*bitmap_block & EOC) == FAT_ENTRY_FREE {
-                                *bitmap_block = EOC;
-                                Some(clus_id as u32)
-                            } else {
-                                None
-                            }
-                        },
-                    );
-                if let Some(unused_id) = pos {
-                    let mut hlock = self.hint.lock();
-                    *hlock = unused_id as usize + 1;
-                    drop(hlock);
-                    for clus_id in (unused_id + 1) as usize
-                        ..((unused_id as usize % (BLOCK_SZ >> 2)) + BLOCK_SZ >> 2)
-                    {
-                        if FAT_ENTRY_FREE == self.get_next_clus_num(clus_id as u32, block_device) {
-                            vacant_lock.push_back(clus_id as u32)
-                        };
-                    }
-                    return Some(unused_id);
-                }
-            }
         }
 
-        // get from vacant_clus
-        if let Some(i) = vacant_lock.pop_back() {
-            // modify cached
-            self.set_next_clus(block_device, i, EOC);
-            return Some(i);
-        } else {
-            None
+        let mut hlock = self.hint.lock();
+        let start = *hlock;
+        let free_clus_id = self.get_next_free_clus(start as u32, block_device);
+        if free_clus_id.is_none() {
+            return None;
         }
+        let free_clus_id = free_clus_id.unwrap();
+        *hlock = (free_clus_id + 1) as usize % self.tot_ent;
+        drop(hlock);
+
+        self.fat_cache_mgr
+            .lock()
+            .get_block_cache(
+                self.this_fat_sec_num(free_clus_id as u32) as usize,
+                self.this_fat_inner_cache_num(free_clus_id as u32),
+                || -> Vec<usize> { self.get_eight_blk(free_clus_id as u32) },
+                Arc::clone(block_device),
+            )
+            .lock()
+            .modify(
+                self.this_fat_ent_offset(free_clus_id as u32) as usize,
+                |bitmap_block: &mut u32| {
+                    assert_eq!((*bitmap_block & EOC), FAT_ENTRY_FREE);
+                    println!("[alloc_one]bitmap_block:{}->{}", *bitmap_block, EOC);
+                    *bitmap_block = EOC;
+                    Some(free_clus_id)
+                },
+            )
+    }
+
+    fn get_next_free_clus(&self, start: u32, block_device: &Arc<dyn BlockDevice>) -> Option<u32> {
+        for clus_id in start..self.tot_ent as u32 {
+            if FAT_ENTRY_FREE == self.get_next_clus_num(clus_id, block_device) {
+                return Some(clus_id);
+            }
+        }
+        for clus_id in 0..start {
+            if FAT_ENTRY_FREE == self.get_next_clus_num(clus_id, block_device) {
+                return Some(clus_id);
+            }
+        }
+        None
     }
 
     /// Find and allocate an empty block from data area.
     /// This function must be changed into a cluster-based one in the future.
     pub fn dealloc(&self, block_device: &Arc<dyn BlockDevice>, bit: u32) {
-        std::println!("hi1");
         self.set_next_clus(block_device, bit as u32, FAT_ENTRY_FREE);
-        std::println!("hi2");
         let mut lock = self.vacant_clus.lock();
         if lock.len() < VACANT_CLUS_CACHE_SIZE {
             lock.push_back(bit as u32);
