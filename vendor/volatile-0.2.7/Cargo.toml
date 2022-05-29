@@ -12,7 +12,7 @@
 
 [package]
 name = "volatile"
-version = "0.3.0"
+version = "0.2.7"
 authors = ["Philipp Oppermann <dev@phil-opp.com>"]
 description = "A simple volatile wrapper type"
 documentation = "https://docs.rs/volatile"
