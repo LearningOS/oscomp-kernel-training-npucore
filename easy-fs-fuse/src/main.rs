@@ -1,12 +1,16 @@
+extern crate alloc;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use clap::{App, Arg};
+use easy_fs::block_cache::{CacheManager, FileCache};
 use easy_fs::layout::{DiskInodeType, FATDirEnt};
 use easy_fs::{BlockDevice, EasyFileSystem, Inode};
-use std::fs::{read_dir, File, OpenOptions};
+use lazy_static::*;
+use spin::{Mutex, RwLock};
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::mem::uninitialized;
-use std::string;
-use std::sync::Arc;
-use std::sync::Mutex;
+
+//use std::sync::Mutex;
 const BLOCK_SZ: usize = 512;
 
 struct BlockFile(Mutex<File>);
@@ -14,7 +18,7 @@ struct BlockFile(Mutex<File>);
 impl BlockDevice for BlockFile {
     fn read_block(&self, block_id: usize, buf: &mut [u8]) {
         assert_eq!(buf.len() % BLOCK_SZ, 0);
-        let mut file = self.0.lock().unwrap();
+        let mut file = self.0.lock();
         file.seek(SeekFrom::Start((block_id * BLOCK_SZ) as u64))
             .expect("Error when seeking!");
         assert_eq!(file.read(buf).unwrap(), BLOCK_SZ, "Not a complete block!");
@@ -22,11 +26,156 @@ impl BlockDevice for BlockFile {
 
     fn write_block(&self, block_id: usize, buf: &[u8]) {
         assert_eq!(buf.len() % BLOCK_SZ, 0);
-        let mut file = self.0.lock().unwrap();
+        let mut file = self.0.lock();
         file.seek(SeekFrom::Start((block_id * BLOCK_SZ) as u64))
             .expect("Error when seeking!");
         assert_eq!(file.write(buf).unwrap(), BLOCK_SZ, "Not a complete block!");
     }
+}
+
+pub struct BlockCache {
+    cache: [u8; BLOCK_SZ],
+    block_id: usize,
+    block_device: Arc<dyn BlockDevice>,
+    modified: bool,
+}
+
+impl Drop for BlockCache {
+    fn drop(&mut self) {
+        self.sync()
+    }
+}
+
+impl BlockCache {
+    /// Private function.
+    /// Get the address at the `offset` in the cache to the cache for later access.
+    /// # Argument
+    /// * `offset`: The offset from the beginning of the block
+    fn addr_of_offset(&self, offset: usize) -> usize {
+        &self.cache[offset] as *const _ as usize
+    }
+
+    /// Get a reference to the block at required `offset`, casting the in the coming area as an instance of type `&T`
+    /// # Argument
+    /// * `offset`: The offset from the beginning of the block
+    fn get_ref<T>(&self, offset: usize) -> &T
+    where
+        T: Sized,
+    {
+        let type_size = core::mem::size_of::<T>();
+        assert!(offset + type_size <= BLOCK_SZ);
+        let addr = self.addr_of_offset(offset);
+        unsafe { &*(addr as *const T) }
+    }
+
+    /// The mutable version of `get_ref()`
+    fn get_mut<T>(&mut self, offset: usize) -> &mut T
+    where
+        T: Sized,
+    {
+        let type_size = core::mem::size_of::<T>();
+        assert!(offset + type_size <= BLOCK_SZ);
+        self.modified = true;
+        let addr = self.addr_of_offset(offset);
+        unsafe { &mut *(addr as *mut T) }
+    }
+    /// Load a new BlockCache from disk.
+    fn new(block_id: usize, block_device: Arc<dyn BlockDevice>) -> Self {
+        let mut cache = [0u8; BLOCK_SZ];
+        block_device.read_block(block_id, &mut cache);
+        Self {
+            cache,
+            block_id,
+            block_device,
+            modified: false,
+        }
+    }
+}
+impl FileCache for BlockCache {
+    /// The read-only mapper to the block cache
+    fn read<T, V>(&self, offset: usize, f: impl FnOnce(&T) -> V) -> V {
+        f(self.get_ref(offset))
+    }
+
+    /// The mutable mapper to the block cache    
+    fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V {
+        f(self.get_mut(offset))
+    }
+
+    /// Synchronize the cache with the external storage, i.e. write it back to the disk.
+    fn sync(&mut self) {
+        if self.modified {
+            self.modified = false;
+            self.block_device.write_block(self.block_id, &self.cache);
+        }
+    }
+}
+
+const BLOCK_CACHE_SIZE: usize = 16;
+
+pub struct BlockCacheManager {
+    /// # Fields
+    /// * `0`: `usize`, the Corresponding `block_id`
+    /// * `1`: `Arc<Mutex<BlockCache>>`, the Pointer to BlockCache
+    /// # Impl. Info
+    /// Using RwLock for concurrent access.
+    queue: RwLock<VecDeque<(usize, Arc<Mutex<BlockCache>>)>>,
+}
+
+impl CacheManager for BlockCacheManager {
+    type CacheType = BlockCache;
+    fn new() -> Self {
+        Self {
+            queue: RwLock::new(VecDeque::with_capacity(BLOCK_CACHE_SIZE)),
+        }
+    }
+
+    fn try_get_block_cache(&self, block_id: usize) -> Option<Arc<Mutex<BlockCache>>> {
+        if let Some(pair) = self.queue.read().iter().find(|pair| pair.0 == block_id) {
+            Some(Arc::clone(&pair.1))
+        } else {
+            None
+        }
+    }
+
+    fn get_block_cache(
+        &self,
+        block_id: usize,
+        block_device: Arc<dyn BlockDevice>,
+    ) -> Arc<Mutex<BlockCache>> {
+        if let Some(i) = self.try_get_block_cache(block_id) {
+            i
+        } else {
+            // substitute
+            if self.queue.read().len() == BLOCK_CACHE_SIZE {
+                // from front to tail
+                if let Some((idx, _)) = self
+                    .queue
+                    .read()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, pair)| Arc::strong_count(&pair.1) == 1)
+                {
+                    self.queue.write().drain(idx..=idx);
+                } else {
+                    panic!("Run out of BlockCache!");
+                }
+            }
+            // load block into mem and push back
+            let block_cache = Arc::new(Mutex::new(BlockCache::new(
+                block_id,
+                Arc::clone(&block_device),
+            )));
+            self.queue
+                .write()
+                .push_back((block_id, Arc::clone(&block_cache)));
+            block_cache
+        }
+    }
+}
+
+lazy_static! {
+    pub static ref BLOCK_CACHE_MANAGER: Arc<BlockCacheManager> = Arc::new(BlockCacheManager::new());
 }
 
 fn main() {
@@ -56,7 +205,7 @@ fn easy_fs_pack() -> std::io::Result<()> {
         .open(image_path)
         .unwrap();
     let block_file = Arc::new(BlockFile(Mutex::new(f)));
-    let i = EasyFileSystem::open(block_file);
+    let i = EasyFileSystem::open(block_file, BLOCK_CACHE_MANAGER.clone());
     println!(
         "data_area_start_block: {}, \nsec_per_clus: {}, \nbyts_per_clus: {}, \nroot_clus:{}",
         i.data_area_start_block, i.sec_per_clus, i.byts_per_clus, i.root_clus

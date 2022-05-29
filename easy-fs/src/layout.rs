@@ -1,10 +1,5 @@
-use crate::block_cache::FileCache;
-
-use super::{BlockDevice, BLOCK_SZ};
-use alloc::{
-    string::{String, ToString},
-    sync::Arc,
-};
+use super::BLOCK_SZ;
+use alloc::string::{String, ToString};
 use core::{fmt::Debug, mem};
 
 pub const EOC: u32 = 0x0FFF_FFFF;
@@ -223,13 +218,13 @@ pub struct FSInfo {
 }
 impl FSInfo {
     #[allow(unused)]
-    fn new(block_offset: usize, bpb: &BPB, block_device: Arc<dyn BlockDevice>) -> Self {
-        let mut ret: Self = unsafe { mem::zeroed() };
-        crate::block_cache::get_block_cache(bpb.fs_info.into(), block_device)
-            .lock()
-            .read(block_offset, |get: &FSInfo| ret = get.clone());
-        ret
-    }
+    /* fn new(block_offset: usize, bpb: &BPB, block_device: Arc<dyn BlockDevice>) -> Self {
+     *     let mut ret: Self = unsafe { mem::zeroed() };
+     *     get_block_cache(bpb.fs_info.into(), block_device)
+     *         .lock()
+     *         .read(block_offset, |get: &FSInfo| ret = get.clone());
+     *     ret
+     * } */
     /// Free a cluster if it is marked used.
     #[allow(unused)]
     fn free_clus(clus_num: usize) {}
@@ -263,10 +258,8 @@ pub union FATDirEnt {
 }
 impl FATDirEnt {
     pub fn empty() -> Self {
-        unsafe {
-            Self {
-                short_entry: FATDirShortEnt::empty(),
-            }
+        Self {
+            short_entry: FATDirShortEnt::empty(),
         }
     }
     pub fn as_bytes(&self) -> &[u8] {

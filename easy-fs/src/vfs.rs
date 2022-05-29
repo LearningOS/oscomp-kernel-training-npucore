@@ -1,11 +1,12 @@
-use core::fmt::Result;
 use core::mem;
-use core::ops::{AddAssign, DerefMut, SubAssign};
+use core::ops::{AddAssign, SubAssign};
 
 use super::{DiskInodeType, EasyFileSystem};
-use crate::block_cache::FileCache;
-use crate::{get_block_cache, DataBlock, BLOCK_SZ};
 use alloc::string::String;
+
+use crate::block_cache::{CacheManager, FileCache};
+use crate::{DataBlock, BLOCK_SZ};
+
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -16,7 +17,7 @@ use spin::Mutex;
  * Even old New York, was New Amsterdam...
  * Why they changed it I can't say.
  * People just like it better that way.*/
-pub struct Inode {
+pub struct Inode<T: CacheManager> {
     /// For FAT32, size is a value computed from FAT.
     /// You should iterate around the FAT32 to get the size.
     pub size: Mutex<u32>,
@@ -24,11 +25,11 @@ pub struct Inode {
     pub direct: Mutex<Vec<u32>>,
     pub type_: DiskInodeType,
     pub parent_dir: Option<Arc<Self>>,
-    fs: Arc<EasyFileSystem>,
+    fs: Arc<EasyFileSystem<T>>,
     //    block_device: Arc<dyn BlockDevice>,
 }
 
-impl Inode {
+impl<T: CacheManager> Inode<T> {
     /// Constructor for Inodes
     /// # Arguments
     /// `fst_clus`: The first cluster of the file
@@ -41,14 +42,15 @@ impl Inode {
         type_: DiskInodeType,
         size: Option<usize>,
         parent_dir: Option<Arc<Self>>,
-        fs: Arc<EasyFileSystem>,
+        fs: Arc<EasyFileSystem<T>>,
     ) -> Self {
         let mut clus_size_as_size = false;
         let i = Inode {
-            direct: Mutex::new(
-                fs.fat
-                    .get_all_clus_num(fst_clus as u32, fs.block_device.clone()),
-            ),
+            direct: Mutex::new(fs.fat.get_all_clus_num(
+                fst_clus as u32,
+                fs.block_device.clone(),
+                fs.cache_mgr.clone(),
+            )),
             type_,
             size: if let Some(size) = size {
                 clus_size_as_size = true;
@@ -144,15 +146,17 @@ impl Inode {
             // read and update read size
             let block_read_size = end_current_block - start;
             let dst = &mut buf[read_size..read_size + block_read_size];
-            get_block_cache(
-                self.get_block_id(start_block as u32) as usize,
-                Arc::clone(&self.fs.block_device),
-            )
-            .lock()
-            .read(0, |data_block: &DataBlock| {
-                let src = &data_block[start % BLOCK_SZ..start % BLOCK_SZ + block_read_size];
-                dst.copy_from_slice(src);
-            });
+            self.fs
+                .cache_mgr
+                .get_block_cache(
+                    self.get_block_id(start_block as u32) as usize,
+                    Arc::clone(&self.fs.block_device),
+                )
+                .lock()
+                .read(0, |data_block: &DataBlock| {
+                    let src = &data_block[start % BLOCK_SZ..start % BLOCK_SZ + block_read_size];
+                    dst.copy_from_slice(src);
+                });
             read_size += block_read_size;
             // move to next block
             if end_current_block == end {
@@ -178,16 +182,19 @@ impl Inode {
             end_current_block = end_current_block.min(end);
             // write and update write size
             let block_write_size = end_current_block - start;
-            get_block_cache(
-                self.get_block_id(start_block as u32) as usize,
-                Arc::clone(&self.fs.block_device),
-            )
-            .lock()
-            .modify(0, |data_block: &mut DataBlock| {
-                let src = &buf[write_size..write_size + block_write_size];
-                let dst = &mut data_block[start % BLOCK_SZ..start % BLOCK_SZ + block_write_size];
-                dst.copy_from_slice(src);
-            });
+            self.fs
+                .cache_mgr
+                .get_block_cache(
+                    self.get_block_id(start_block as u32) as usize,
+                    Arc::clone(&self.fs.block_device),
+                )
+                .lock()
+                .modify(0, |data_block: &mut DataBlock| {
+                    let src = &buf[write_size..write_size + block_write_size];
+                    let dst =
+                        &mut data_block[start % BLOCK_SZ..start % BLOCK_SZ + block_write_size];
+                    dst.copy_from_slice(src);
+                });
             write_size += block_write_size;
             // move to next block
             if end_current_block == end {
