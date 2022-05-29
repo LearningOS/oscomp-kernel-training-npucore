@@ -1,6 +1,6 @@
 use alloc::collections::BTreeMap;
 use core::convert::TryInto;
-//use core::fmt::Error;
+//use ();
 use core::mem;
 use volatile::ReadOnly;
 
@@ -561,7 +561,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         parent_dir: &'a Arc<Self>,
         lock: MutexGuard<'a, FileContent<T>>,
         alloc_num: usize,
-    ) -> Result<(u32, MutexGuard<'a, FileContent<T>>), core::fmt::Error> {
+    ) -> Result<(u32, MutexGuard<'a, FileContent<T>>), ()> {
         let offset = lock.hint;
         let mut iter = parent_dir.dir_iter(lock, Some(offset), DirIterMode::Enum, FORWARD);
         let mut found_free_dir_ent = 0;
@@ -569,7 +569,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             let dir_ent = iter.current_clone();
             if dir_ent.is_none() {
                 if parent_dir.expand_dir_size(&mut iter.lock).is_err() {
-                    return Err(core::fmt::Error);
+                    return Err(());
                 }
                 continue;
             }
@@ -642,16 +642,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Delete the file from the disk,
     /// deallocating both the directory entries (whether long or short),
     /// and the occupied clusters.
-    pub fn delete_from_disk(trash: Arc<Self>) -> core::fmt::Result {
+    pub fn delete_from_disk(trash: Arc<Self>) -> Result<(), ()> {
         if trash.is_dir() {
             // See if the dir is empty
-            let v = trash.ls(DirFilter::None);
+            let v = trash.ls(DirFilter::None).unwrap();
             if v.len() > 2 {
-                return Err(core::fmt::Error);
+                return Err(());
             }
             for item in v {
                 if ![".", ".."].contains(&item.0.as_str()) {
-                    return Err(core::fmt::Error);
+                    return Err(());
                 }
             }
         }
@@ -675,24 +675,25 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Create a file or a directory from the parent.
     pub fn create(
-        parent_dir: Arc<Self>,
+        parent_dir: &Arc<Self>,
         name: String,
         file_type: DiskInodeType,
-    ) -> Result<Arc<Inode<T, F>>, core::fmt::Error> {
+    ) -> Result<Arc<Inode<T, F>>, ()> {
         if parent_dir.is_file()
             || name.len() >= 256
             || parent_dir
                 .ls(DirFilter::None)
+                .unwrap()
                 .iter()
-                .find(|s| s.0.to_uppercase() == name.to_uppercase())
+                .find(|(existed_name, _, _)| existed_name.to_uppercase() == name.to_uppercase())
                 .is_some()
         {
-            Err(core::fmt::Error)
+            Err(())
         } else {
             //get short name slice
             let mut short_name_slice: [u8; 11] = [' ' as u8; 11];
             if Self::gen_short_name_slice(&parent_dir, &name, &mut short_name_slice).is_err() {
-                return Err(core::fmt::Error);
+                return Err(());
             }
             //alloc parent's directory entries
             let lock = parent_dir.file_content.lock();
@@ -702,7 +703,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 Self::alloc_dir_ent(&parent_dir, lock, long_ent_num + short_ent_num);
 
             if short_ent_offset.is_err() {
-                return Err(core::fmt::Error);
+                return Err(());
             }
             let (short_ent_offset, lock) = short_ent_offset.unwrap();
             //if file_type is Directory, alloc first cluster
@@ -712,7 +713,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     .fat
                     .alloc_one(&parent_dir.fs.block_device, None);
                 if fst_clus.is_none() {
-                    return Err(core::fmt::Error);
+                    return Err(());
                 }
                 fst_clus.unwrap()
             } else {
@@ -768,10 +769,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         parent_dir: &Arc<Self>,
         name: &String,
         short_name_slice: &mut [u8; 11],
-    ) -> core::fmt::Result {
+    ) -> Result<(), ()> {
         let short_name = FATDirEnt::gen_short_name_prefix(name.clone());
         if short_name.len() == 0 || short_name.find(' ').unwrap_or(8) == 0 {
-            return Err(core::fmt::Error);
+            return Err(());
         }
         short_name_slice.copy_from_slice(&short_name.as_bytes()[0..11]);
 
@@ -865,9 +866,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
 // ls and find local
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
-    pub fn ls(&self, cond: DirFilter) -> Vec<(String, FATDirShortEnt, u32)> {
+    pub fn ls(&self, cond: DirFilter) -> Result<Vec<(String, FATDirShortEnt, u32)>, ()> {
         if !self.is_dir() {
-            return Vec::new();
+            return Err(());
         }
         let mut v = Vec::with_capacity(30);
         let mut name = Vec::with_capacity(3);
@@ -919,7 +920,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 }
             }
         }
-        return v;
+        return Ok(v);
     }
     pub fn stat(&self) -> (i64, i64, i64, i64, u64) {
         (
@@ -931,27 +932,19 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         )
     }
     pub fn dirent_info(&self, offset: u32) -> Option<(String, usize, u64, FATDiskInodeType)> {
-        let mut v = self.ls(DirFilter::DirOffset(offset));
-        v.pop().map(|i| {
-            (
-                i.0,
-                self.get_inode_num().unwrap_or(0) as usize,
-                i.2 as u64,
-                i.1.attr,
-            )
-        })
-    }
-}
-
-#[allow(unused)]
-pub fn find_local<T: CacheManager, F: CacheManager>(
-    inode: &Arc<Inode<T, F>>,
-    target_name: String,
-) -> Option<Arc<Inode<T, F>>> {
-    let v = inode.ls(DirFilter::Name(target_name));
-    if v.is_empty() {
-        None
-    } else {
-        Some(Inode::from_ent(inode, &v[0].1, v[0].2))
+        if self.is_file() {
+            return None;
+        }
+        self.ls(DirFilter::DirOffset(offset))
+            .unwrap()
+            .pop()
+            .map(|(filename, short_ent, offset)| {
+                (
+                    filename,
+                    self.get_inode_num().unwrap_or(0) as usize,
+                    offset as u64,
+                    short_ent.attr,
+                )
+            })
     }
 }

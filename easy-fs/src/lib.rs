@@ -21,7 +21,5 @@ pub use block_dev::BlockDevice;
 pub use efs::EasyFileSystem;
 pub use layout::DataBlock;
 pub use layout::DiskInodeType;
-use layout::*;
-pub use vfs::find_local;
 pub use vfs::DirFilter;
 pub use vfs::Inode;
