@@ -753,6 +753,8 @@
 <span id="750">750</span>
 <span id="751">751</span>
 <span id="752">752</span>
+<span id="753">753</span>
+<span id="754">754</span>
 </pre><pre class="rust"><code><span class="kw">use</span> <span class="ident"><span class="kw">crate</span>::config</span>::{<span class="ident">CLOCK_FREQ</span>, <span class="ident">MMAP_BASE</span>, <span class="ident">PAGE_SIZE</span>};
 <span class="kw">use</span> <span class="ident"><span class="kw">crate</span>::mm</span>::{
     <span class="ident">copy_from_user</span>, <span class="ident">copy_to_user</span>, <span class="ident">copy_to_user_string</span>, <span class="ident">mmap</span>, <span class="ident">munmap</span>, <span class="ident">sbrk</span>, <span class="ident">translated_byte_buffer</span>,
@@ -1372,7 +1374,9 @@
     }
     <span class="ident">SUCCESS</span>
 }
-
+<span class="doccomment">/// set pointer to thread ID</span>
+<span class="doccomment">/// This feature is currently NOT supported and is implemented as a stub,</span>
+<span class="doccomment">/// since threads are not supported.</span>
 <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">sys_set_tid_address</span>(<span class="ident">tidptr</span>: <span class="ident">usize</span>) -&gt; <span class="ident">isize</span> {
     <span class="ident">current_task</span>()
         .<span class="ident">unwrap</span>()

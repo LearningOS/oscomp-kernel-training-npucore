@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["PhysAddr","Definitions"],["PhysPageNum",""],["SimpleRange",""],["SimpleRangeIterator",""],["VirtAddr",""],["VirtPageNum",""]],"trait":[["StepByOne",""]],"type":[["VPNRange",""]]});

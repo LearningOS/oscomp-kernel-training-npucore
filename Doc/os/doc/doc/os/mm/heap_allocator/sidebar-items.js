@@ -1,1 +1,0 @@
-initSidebarItems({"fn":[["handle_alloc_error",""],["heap_test",""],["init_heap","Initialize the heap for use at the beginning of kernel loading."]],"static":[["HEAP_ALLOCATOR",""],["HEAP_SPACE",""]]});

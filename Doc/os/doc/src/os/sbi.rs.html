@@ -46,6 +46,7 @@
 <span id="43">43</span>
 <span id="44">44</span>
 <span id="45">45</span>
+<span id="46">46</span>
 </pre><pre class="rust"><code><span class="attribute">#![<span class="ident">allow</span>(<span class="ident">unused</span>)]</span>
 
 <span class="kw">use</span> <span class="ident">core::arch::asm</span>;
@@ -61,6 +62,7 @@
 <span class="kw">const</span> <span class="ident">SBI_SHUTDOWN</span>: <span class="ident">usize</span> <span class="op">=</span> <span class="number">8</span>;
 
 <span class="attribute">#[<span class="ident">inline</span>(<span class="ident">always</span>)]</span>
+<span class="doccomment">/// `ecall` wrapper to switch trap into S level.</span>
 <span class="kw">fn</span> <span class="ident">sbi_call</span>(<span class="ident">which</span>: <span class="ident">usize</span>, <span class="ident">arg0</span>: <span class="ident">usize</span>, <span class="ident">arg1</span>: <span class="ident">usize</span>, <span class="ident">arg2</span>: <span class="ident">usize</span>) -&gt; <span class="ident">usize</span> {
     <span class="kw">let</span> <span class="kw-2">mut</span> <span class="ident">ret</span>;
     <span class="kw">unsafe</span> {

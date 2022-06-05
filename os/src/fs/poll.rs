@@ -25,10 +25,12 @@ pub struct PollFd {
 }
 
 bitflags! {
+    /// Event types that can be polled for.
+    ///
+    /// These bits may be set in `events`(see `ppoll()`) to indicate the interesting event types;
+    ///
+    /// they will appear in `revents` to indicate the status of the file descriptor.
     struct PollEvent:u16 {
-    /* Event types that can be polled for.  These bits may be set in `events'
-    to indicate the interesting event types; they will appear in `revents'
-    to indicate the status of the file descriptor.  */
     /// There is data to read.
     const POLLIN = 0x001;
     /// There is urgent data to read.
@@ -74,10 +76,37 @@ impl PollFd {
     /* fn get_inode(&self) -> OSInode {} */
 }
 #[allow(unused)]
+/// `ppoll()` witout `sigmask`. See `ppoll` for more information.
 pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
     ppoll(poll_fd, nfds, time_spec, null::<Signals>())
 }
-///
+/// Wait for one of the events in `poll_fd_p` to happen, or the time limit to run out if any.
+/// Unlike the function family of `select()` which are basically AND'S,
+/// `poll()`'s act like OR's for polling the files.
+/// # Arguments
+/// * `poll_fd`: The USER pointer to the array of file descriptors to be polled
+/// * `nfds`: The number stored in the previous array.
+/// * `time_spec`: The time, see `timer::TimeSpec` for information. NOT SUPPORTED and will be ignored!
+/// * `sigmask`: The pointer to the sigmask in use during the poll.
+/// # Note
+/// * `POLLHUP`, `POLLNVAL` and `POLLERR` are ALWAYS polled for all given files,
+///   regardless of whether it is set in the array.
+/// # Unsupported Features
+/// * Timeout is not yet supported.
+/// * Other implementations are supported by specific files and may not be used by
+/// * Currently only user space structs are supported.
+/// # Return Conditions
+/// The call will block until either:
+/// * a file descriptor becomes ready;
+/// * the call is interrupted by a signal handler; or
+/// * the timeout expires.
+/// # Return Values and Side-effects
+/// * On success, a positive number is returned; this is the number of structures
+///   which have nonzero revents fields (in other words, those descriptors
+///   with events or errors reported).
+/// * A value of 0 indicates that the call timed out and no file descriptors were ready.
+/// * On error, -1 is returned, and errno is set appropriately.
+/// * The observed event is written back to the array, with others cleared.
 pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Signals) -> isize {
     /*support only POLLIN for currently*/
     let oldsig = &mut Signals::empty();
@@ -178,25 +207,31 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
 // This may be unsafe since the size of bits is undefined.
 #[derive(Debug)]
 #[repr(C)]
+/// Bitmap used by `pselect()` and `select` to indicate the event to wait for.
 pub struct FdSet {
     bits: [u64; 16],
 }
 use crate::lang_items::Bytes;
 impl FdSet {
+    /// Return an empty bitmap for further manipulation
     pub fn empty() -> Self {
         Self { bits: [0; 16] }
     }
+    /// Divide `d` by 64 to decide the `u64` in `bits` to visit.
     fn fd_elt(d: usize) -> usize {
         d >> 6
     }
+    /// Mod `d` by 64 for the position of `d` in the `fd_elt()` bitmap.
     fn fd_mask(d: usize) -> u64 {
         1 << (d & 0x3F)
     }
+    /// Clear the current struct.
     pub fn clr_all(&mut self) {
         for i in 0..16 {
             self.bits[i] = 0;
         }
     }
+    /// Collect all fds with their bits set.
     pub fn get_fd_vec(&self) -> Vec<usize> {
         let mut v = Vec::new();
         for i in 0..1024 {
@@ -206,6 +241,7 @@ impl FdSet {
         }
         v
     }
+    /// The total number of set bits.
     pub fn set_num(&self) -> u32 {
         let mut sum: u32 = 0;
         for i in self.bits.iter() {
@@ -216,9 +252,11 @@ impl FdSet {
     pub fn set(&mut self, d: usize) {
         self.bits[Self::fd_elt(d)] |= Self::fd_mask(d);
     }
+    /// Clear a certain bit `d` to stop waiting for the event of the correspond fd.
     pub fn clr(&mut self, d: usize) {
         self.bits[Self::fd_elt(d)] &= !Self::fd_mask(d);
     }
+    /// Predicate for whether the bit is set for the `d`
     pub fn is_set(&self, d: usize) -> bool {
         (Self::fd_mask(d) & self.bits[Self::fd_elt(d)]) != 0
     }
@@ -241,7 +279,8 @@ impl Bytes<FdSet> for FdSet {
         }
     }
 }
-/// Poll each of the file discriptors until certain events
+/// Poll each of the file discriptors
+/// until certain events.
 ///
 /// # Arguments
 ///
@@ -263,17 +302,19 @@ impl Bytes<FdSet> for FdSet {
 /// * On success, select() and pselect() return the number of file descriptors  contained in the three returned descriptor sets (that is, the total number of bits that are set in  readfds, writefds,  exceptfds)  which  may be zero if the timeout expires before anything interesting happens.  
 ///
 /// * On error, -1  is returned,  the file descriptor sets are unmodified, and  timeout  becomes  undefined.
+///  
+/// * If both fields of the timeval structure are zero,
+///    then select() returns immediately.
+///    (This is useful for  polling.)
+///    If timeout is NULL (no timeout), select() can block indefinitely.
 pub fn pselect(
     nfds: usize,
     read_fds: Option<&mut FdSet>,
     write_fds: Option<&mut FdSet>,
     exception_fds: Option<&mut FdSet>,
     /*
-    If both fields of the timeval structure are zero,
-    then select() returns immediately.
-    (This is useful for  polling.)
-    If timeout is NULL (no timeout), select() can block indefinitely.
-     */
+
+    */
     timeout: Option<&TimeSpec>,
     sigmask: *const Signals,
 ) -> isize {
@@ -411,21 +452,3 @@ pub fn pselect(
     // look up according to TimeVal
     ret as isize
 }
-
-/*
-[DEBUG] args[0]: 6 nfds
-[DEBUG] args[1]: FFFFFFFFFFFFC948 read_fds
-[DEBUG] args[2]: 0 write_fds
-[DEBUG] args[3]: 0 except_fds
-[DEBUG] args[4]: FFFFFFFFFFFFC8F8 timeout
-[DEBUG] args[5]: 0 sigmask
-*/
-
-/*
-The final argument of the pselect6() system call  is  not  a
-sigset_t * pointer, but is instead a structure of the form:
-
-struct {
-    const kernel_sigset_t *ss;   /* Pointer to signal set */
-    size_t ss_len;               /* Size (in bytes) of object pointed to by 'ss' */
- */
