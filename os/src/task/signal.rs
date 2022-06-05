@@ -1,7 +1,6 @@
 use alloc::collections::BTreeMap;
 use core::fmt::{self, Debug, Error, Formatter};
 use log::{debug, error, info, trace, warn};
-use num_enum::FromPrimitive;
 use riscv::register::{scause, stval};
 
 use crate::config::*;
@@ -133,21 +132,36 @@ bitflags! {
     }
 }
 
-#[allow(non_camel_case_types)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, FromPrimitive)]
-#[repr(usize)]
-pub enum SigActionHandler {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SigHandler(usize);
+
+impl SigHandler {
     /// Default action.
-    SIG_DFL = 0,
-    /// Ignore signal.  
-    SIG_IGN = 1,
-    #[num_enum(default)]
-    SIG_HANDLER,
+    const SIG_DFL: Self = Self(0);
+    /// Ignore signal.
+    const SIG_IGN: Self = Self(1);
+    fn addr(&self) -> Option<usize> {
+        match *self {
+            Self::SIG_DFL | Self::SIG_IGN => None,
+            sig_handler => Some(sig_handler.0),
+        }
+    }
 }
+
+impl Debug for SigHandler {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match *self {
+            SigHandler::SIG_DFL => f.write_fmt(format_args!("SIG_DFL")),
+            SigHandler::SIG_IGN => f.write_fmt(format_args!("SIG_IGN")),
+            sig_handler => f.write_fmt(format_args!("0x{:X}", sig_handler.0)),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct SigAction {
-    pub handler: SigActionHandler,
+    pub handler: SigHandler,
     pub flags: SigActionFlags,
     pub restorer: usize,
     pub mask: Signals,
@@ -156,7 +170,7 @@ pub struct SigAction {
 impl SigAction {
     pub fn new() -> Self {
         Self {
-            handler: SigActionHandler::SIG_DFL,
+            handler: SigHandler::SIG_DFL,
             flags: SigActionFlags::empty(),
             restorer: 0,
             mask: Signals::empty(),
@@ -190,7 +204,7 @@ impl Debug for SigInfo {
 impl Debug for SigAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.write_fmt(format_args!(
-            "[ sa_handler: 0x{:?}, sa_mask: ({:?}), sa_flags: ({:?}) ]",
+            "[ sa_handler: {:?}, sa_mask: ({:?}), sa_flags: ({:?}) ]",
             self.handler, self.mask, self.flags
         ))
     }
@@ -232,8 +246,7 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
                     Signals::SIGILL | Signals::SIGSEGV | Signals::SIGKILL | Signals::SIGSTOP,
                 );
                 // push to PCB, ignore mask and flags now
-                if !(sigact.handler == SigActionHandler::SIG_DFL
-                    || sigact.handler == SigActionHandler::SIG_IGN)
+                if !(sigact.handler == SigHandler::SIG_DFL || sigact.handler == SigHandler::SIG_IGN)
                 {
                     inner.siginfo.signal_handler.insert(signal, *sigact);
                 };
@@ -267,11 +280,11 @@ pub fn do_signal() {
                 if (sp as usize) < USER_STACK_TOP {
                     trap_cx.sepc = usize::MAX; // we don't have enough space on user stack, return a bad address to kill this program
                 } else {
-                    copy_to_user(inner.get_user_token(), trap_cx, sp as *mut TrapContext); // restore context on user stack
-                    trap_cx.set_sp(sp as usize); // update sp, because we pushed trapcontext into stack
+                    copy_to_user(inner.get_user_token(), trap_cx, sp as *mut TrapContext); // push trap context into user stack
+                    trap_cx.set_sp(sp as usize); // update sp, because we've pushed something into stack
                     trap_cx.x[10] = signal.to_signum().unwrap(); // a0 <- signum, parameter.
                     trap_cx.x[1] = SIGNAL_TRAMPOLINE; // ra <- __call_sigreturn, when handler ret, we will go to __call_sigreturn
-                    trap_cx.sepc = act.handler as usize; // recover pc with addr of handler
+                    trap_cx.sepc = act.handler.addr().unwrap(); // restore pc with addr of handler
                 }
                 trace!(
                     "[do_signal] signal: {:?}, signum: {:?}, handler: 0x{:?} (ra: 0x{:X}, sp: 0x{:X})",
