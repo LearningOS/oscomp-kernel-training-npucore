@@ -134,16 +134,8 @@ Ok. 这里是信号处理的重中之重,我们先介绍一下其基本原理和
 在讲系统调用之前需要先回过头讲一下`signal_handler`有关的数据结构，它维护的是一些`Signal`与`SigAction`的映射，根据手册，`SigAction`的定义如下：
 
 ```rust
-pub enum SigActionHandler {
-    /// Default action.
-    SIG_DFL = 0,
-    /// Ignore signal.  
-    SIG_IGN = 1,
-    #[num_enum(default)]
-    SIG_HANDLER,
-}
 pub struct SigAction {
-    pub handler: SigActionHandler,
+    pub handler: SigHandler,
     pub flags: SigActionFlags,
     pub restorer: usize,
     pub mask: Signals,
@@ -247,11 +239,11 @@ let sp = unsafe { (trap_cx.x[2] as *mut TrapContext).sub(1) };
 if (sp as usize) < USER_STACK_TOP {
     trap_cx.sepc = usize::MAX; // we don't have enough space on user stack, return a bad address to kill this program
 } else {
-    copy_to_user(inner.get_user_token(), trap_cx, sp as *mut TrapContext); // restore context on user stack
-    trap_cx.set_sp(sp as usize); // update sp, because we pushed trapcontext into stack
+    copy_to_user(inner.get_user_token(), trap_cx, sp as *mut TrapContext); // push trap context into user stack
+    trap_cx.set_sp(sp as usize); // update sp, because we've pushed something into stack
     trap_cx.x[10] = signal.to_signum().unwrap(); // a0 <- signum, parameter.
     trap_cx.x[1] = SIGNAL_TRAMPOLINE; // ra <- __call_sigreturn, when handler ret, we will go to __call_sigreturn
-    trap_cx.sepc = act.handler as usize; // recover pc with addr of handler
+    trap_cx.sepc = act.handler.addr().unwrap(); // restore pc with addr of handler
 }
 ```
 
