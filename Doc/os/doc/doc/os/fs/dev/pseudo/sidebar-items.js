@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["Null","Data Sink Data written to the `/dev/null` special files is discarded. Reads  from `/dev/null` always return end of file (i.e., read(2) returns 0)"],["Zero","Data Sink Data written to the `/dev/zero` special files is discarded. Reads from `/dev/zero` always return  bytes  containing  zero (`'\\0'` characters)."]]});

@@ -432,6 +432,29 @@
 <span id="429">429</span>
 <span id="430">430</span>
 <span id="431">431</span>
+<span id="432">432</span>
+<span id="433">433</span>
+<span id="434">434</span>
+<span id="435">435</span>
+<span id="436">436</span>
+<span id="437">437</span>
+<span id="438">438</span>
+<span id="439">439</span>
+<span id="440">440</span>
+<span id="441">441</span>
+<span id="442">442</span>
+<span id="443">443</span>
+<span id="444">444</span>
+<span id="445">445</span>
+<span id="446">446</span>
+<span id="447">447</span>
+<span id="448">448</span>
+<span id="449">449</span>
+<span id="450">450</span>
+<span id="451">451</span>
+<span id="452">452</span>
+<span id="453">453</span>
+<span id="454">454</span>
 </pre><pre class="rust"><code><span class="kw">use</span> <span class="kw">crate</span>::{
     <span class="ident">fs::File</span>,
     <span class="ident">task</span>::{<span class="ident">current_user_token</span>, <span class="ident">signal::Signals</span>},
@@ -459,10 +482,12 @@
 }
 
 <span class="macro">bitflags!</span> {
+    <span class="doccomment">/// Event types that can be polled for.</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// These bits may be set in `events`(see `ppoll()`) to indicate the interesting event types;</span>
+    <span class="doccomment">///</span>
+    <span class="doccomment">/// they will appear in `revents` to indicate the status of the file descriptor.</span>
     <span class="kw">struct</span> <span class="ident">PollEvent</span>:<span class="ident">u16</span> {
-    <span class="comment">/* Event types that can be polled for.  These bits may be set in `events&#39;
-    to indicate the interesting event types; they will appear in `revents&#39;
-    to indicate the status of the file descriptor.  */</span>
     <span class="doccomment">/// There is data to read.</span>
     <span class="kw">const</span> <span class="ident">POLLIN</span> <span class="op">=</span> <span class="number">0x001</span>;
     <span class="doccomment">/// There is urgent data to read.</span>
@@ -508,10 +533,37 @@
     <span class="comment">/* fn get_inode(&amp;self) -&gt; OSInode {} */</span>
 }
 <span class="attribute">#[<span class="ident">allow</span>(<span class="ident">unused</span>)]</span>
+<span class="doccomment">/// `ppoll()` witout `sigmask`. See `ppoll` for more information.</span>
 <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">poll</span>(<span class="ident">poll_fd</span>: <span class="ident">usize</span>, <span class="ident">nfds</span>: <span class="ident">usize</span>, <span class="ident">time_spec</span>: <span class="ident">usize</span>) -&gt; <span class="ident">isize</span> {
     <span class="ident">ppoll</span>(<span class="ident">poll_fd</span>, <span class="ident">nfds</span>, <span class="ident">time_spec</span>, <span class="ident">null</span>::<span class="op">&lt;</span><span class="ident">Signals</span><span class="op">&gt;</span>())
 }
-<span class="doccomment">///</span>
+<span class="doccomment">/// Wait for one of the events in `poll_fd_p` to happen, or the time limit to run out if any.</span>
+<span class="doccomment">/// Unlike the function family of `select()` which are basically AND&#39;S,</span>
+<span class="doccomment">/// `poll()`&#39;s act like OR&#39;s for polling the files.</span>
+<span class="doccomment">/// # Arguments</span>
+<span class="doccomment">/// * `poll_fd`: The USER pointer to the array of file descriptors to be polled</span>
+<span class="doccomment">/// * `nfds`: The number stored in the previous array.</span>
+<span class="doccomment">/// * `time_spec`: The time, see `timer::TimeSpec` for information. NOT SUPPORTED and will be ignored!</span>
+<span class="doccomment">/// * `sigmask`: The pointer to the sigmask in use during the poll.</span>
+<span class="doccomment">/// # Note</span>
+<span class="doccomment">/// * `POLLHUP`, `POLLNVAL` and `POLLERR` are ALWAYS polled for all given files,</span>
+<span class="doccomment">///   regardless of whether it is set in the array.</span>
+<span class="doccomment">/// # Unsupported Features</span>
+<span class="doccomment">/// * Timeout is not yet supported.</span>
+<span class="doccomment">/// * Other implementations are supported by specific files and may not be used by</span>
+<span class="doccomment">/// * Currently only user space structs are supported.</span>
+<span class="doccomment">/// # Return Conditions</span>
+<span class="doccomment">/// The call will block until either:</span>
+<span class="doccomment">/// * a file descriptor becomes ready;</span>
+<span class="doccomment">/// * the call is interrupted by a signal handler; or</span>
+<span class="doccomment">/// * the timeout expires.</span>
+<span class="doccomment">/// # Return Values and Side-effects</span>
+<span class="doccomment">/// * On success, a positive number is returned; this is the number of structures</span>
+<span class="doccomment">///   which have nonzero revents fields (in other words, those descriptors</span>
+<span class="doccomment">///   with events or errors reported).</span>
+<span class="doccomment">/// * A value of 0 indicates that the call timed out and no file descriptors were ready.</span>
+<span class="doccomment">/// * On error, -1 is returned, and errno is set appropriately.</span>
+<span class="doccomment">/// * The observed event is written back to the array, with others cleared.</span>
 <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">ppoll</span>(<span class="ident">poll_fd_p</span>: <span class="ident">usize</span>, <span class="ident">nfds</span>: <span class="ident">usize</span>, <span class="ident">time_spec</span>: <span class="ident">usize</span>, <span class="ident">sigmask</span>: <span class="kw-2">*const</span> <span class="ident">Signals</span>) -&gt; <span class="ident">isize</span> {
     <span class="comment">/*support only POLLIN for currently*/</span>
     <span class="kw">let</span> <span class="ident">oldsig</span> <span class="op">=</span> <span class="kw-2">&amp;mut</span> <span class="ident">Signals::empty</span>();
@@ -612,25 +664,31 @@
 <span class="comment">// This may be unsafe since the size of bits is undefined.</span>
 <span class="attribute">#[<span class="ident">derive</span>(<span class="ident">Debug</span>)]</span>
 <span class="attribute">#[<span class="ident">repr</span>(<span class="ident">C</span>)]</span>
+<span class="doccomment">/// Bitmap used by `pselect()` and `select` to indicate the event to wait for.</span>
 <span class="kw">pub</span> <span class="kw">struct</span> <span class="ident">FdSet</span> {
     <span class="ident">bits</span>: [<span class="ident">u64</span>; <span class="number">16</span>],
 }
 <span class="kw">use</span> <span class="ident"><span class="kw">crate</span>::lang_items::Bytes</span>;
 <span class="kw">impl</span> <span class="ident">FdSet</span> {
+    <span class="doccomment">/// Return an empty bitmap for further manipulation</span>
     <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">empty</span>() -&gt; <span class="self">Self</span> {
         <span class="self">Self</span> { <span class="ident">bits</span>: [<span class="number">0</span>; <span class="number">16</span>] }
     }
+    <span class="doccomment">/// Divide `d` by 64 to decide the `u64` in `bits` to visit.</span>
     <span class="kw">fn</span> <span class="ident">fd_elt</span>(<span class="ident">d</span>: <span class="ident">usize</span>) -&gt; <span class="ident">usize</span> {
         <span class="ident">d</span> <span class="op">&gt;</span><span class="op">&gt;</span> <span class="number">6</span>
     }
+    <span class="doccomment">/// Mod `d` by 64 for the position of `d` in the `fd_elt()` bitmap.</span>
     <span class="kw">fn</span> <span class="ident">fd_mask</span>(<span class="ident">d</span>: <span class="ident">usize</span>) -&gt; <span class="ident">u64</span> {
         <span class="number">1</span> <span class="op">&lt;</span><span class="op">&lt;</span> (<span class="ident">d</span> <span class="op">&amp;</span> <span class="number">0x3F</span>)
     }
+    <span class="doccomment">/// Clear the current struct.</span>
     <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">clr_all</span>(<span class="kw-2">&amp;mut</span> <span class="self">self</span>) {
         <span class="kw">for</span> <span class="ident">i</span> <span class="kw">in</span> <span class="number">0</span>..<span class="number">16</span> {
             <span class="self">self</span>.<span class="ident">bits</span>[<span class="ident">i</span>] <span class="op">=</span> <span class="number">0</span>;
         }
     }
+    <span class="doccomment">/// Collect all fds with their bits set.</span>
     <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">get_fd_vec</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="ident">Vec</span><span class="op">&lt;</span><span class="ident">usize</span><span class="op">&gt;</span> {
         <span class="kw">let</span> <span class="kw-2">mut</span> <span class="ident">v</span> <span class="op">=</span> <span class="ident">Vec::new</span>();
         <span class="kw">for</span> <span class="ident">i</span> <span class="kw">in</span> <span class="number">0</span>..<span class="number">1024</span> {
@@ -640,6 +698,7 @@
         }
         <span class="ident">v</span>
     }
+    <span class="doccomment">/// The total number of set bits.</span>
     <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">set_num</span>(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; <span class="ident">u32</span> {
         <span class="kw">let</span> <span class="kw-2">mut</span> <span class="ident">sum</span>: <span class="ident">u32</span> <span class="op">=</span> <span class="number">0</span>;
         <span class="kw">for</span> <span class="ident">i</span> <span class="kw">in</span> <span class="self">self</span>.<span class="ident">bits</span>.<span class="ident">iter</span>() {
@@ -650,9 +709,11 @@
     <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">set</span>(<span class="kw-2">&amp;mut</span> <span class="self">self</span>, <span class="ident">d</span>: <span class="ident">usize</span>) {
         <span class="self">self</span>.<span class="ident">bits</span>[<span class="ident"><span class="self">Self</span>::fd_elt</span>(<span class="ident">d</span>)] <span class="op">|</span><span class="op">=</span> <span class="ident"><span class="self">Self</span>::fd_mask</span>(<span class="ident">d</span>);
     }
+    <span class="doccomment">/// Clear a certain bit `d` to stop waiting for the event of the correspond fd.</span>
     <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">clr</span>(<span class="kw-2">&amp;mut</span> <span class="self">self</span>, <span class="ident">d</span>: <span class="ident">usize</span>) {
         <span class="self">self</span>.<span class="ident">bits</span>[<span class="ident"><span class="self">Self</span>::fd_elt</span>(<span class="ident">d</span>)] <span class="op">&amp;=</span> <span class="op">!</span><span class="ident"><span class="self">Self</span>::fd_mask</span>(<span class="ident">d</span>);
     }
+    <span class="doccomment">/// Predicate for whether the bit is set for the `d`</span>
     <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">is_set</span>(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="ident">d</span>: <span class="ident">usize</span>) -&gt; <span class="ident">bool</span> {
         (<span class="ident"><span class="self">Self</span>::fd_mask</span>(<span class="ident">d</span>) <span class="op">&amp;</span> <span class="self">self</span>.<span class="ident">bits</span>[<span class="ident"><span class="self">Self</span>::fd_elt</span>(<span class="ident">d</span>)]) <span class="op">!</span><span class="op">=</span> <span class="number">0</span>
     }
@@ -675,7 +736,8 @@
         }
     }
 }
-<span class="doccomment">/// Poll each of the file discriptors until certain events</span>
+<span class="doccomment">/// Poll each of the file discriptors</span>
+<span class="doccomment">/// until certain events.</span>
 <span class="doccomment">///</span>
 <span class="doccomment">/// # Arguments</span>
 <span class="doccomment">///</span>
@@ -697,17 +759,19 @@
 <span class="doccomment">/// * On success, select() and pselect() return the number of file descriptors  contained in the three returned descriptor sets (that is, the total number of bits that are set in  readfds, writefds,  exceptfds)  which  may be zero if the timeout expires before anything interesting happens.  </span>
 <span class="doccomment">///</span>
 <span class="doccomment">/// * On error, -1  is returned,  the file descriptor sets are unmodified, and  timeout  becomes  undefined.</span>
+<span class="doccomment">///  </span>
+<span class="doccomment">/// * If both fields of the timeval structure are zero,</span>
+<span class="doccomment">///    then select() returns immediately.</span>
+<span class="doccomment">///    (This is useful for  polling.)</span>
+<span class="doccomment">///    If timeout is NULL (no timeout), select() can block indefinitely.</span>
 <span class="kw">pub</span> <span class="kw">fn</span> <span class="ident">pselect</span>(
     <span class="ident">nfds</span>: <span class="ident">usize</span>,
     <span class="ident">read_fds</span>: <span class="prelude-ty">Option</span><span class="op">&lt;</span><span class="kw-2">&amp;mut</span> <span class="ident">FdSet</span><span class="op">&gt;</span>,
     <span class="ident">write_fds</span>: <span class="prelude-ty">Option</span><span class="op">&lt;</span><span class="kw-2">&amp;mut</span> <span class="ident">FdSet</span><span class="op">&gt;</span>,
     <span class="ident">exception_fds</span>: <span class="prelude-ty">Option</span><span class="op">&lt;</span><span class="kw-2">&amp;mut</span> <span class="ident">FdSet</span><span class="op">&gt;</span>,
     <span class="comment">/*
-    If both fields of the timeval structure are zero,
-    then select() returns immediately.
-    (This is useful for  polling.)
-    If timeout is NULL (no timeout), select() can block indefinitely.
-     */</span>
+
+    */</span>
     <span class="ident">timeout</span>: <span class="prelude-ty">Option</span><span class="op">&lt;</span><span class="kw-2">&amp;</span><span class="ident">TimeSpec</span><span class="op">&gt;</span>,
     <span class="ident">sigmask</span>: <span class="kw-2">*const</span> <span class="ident">Signals</span>,
 ) -&gt; <span class="ident">isize</span> {
@@ -845,24 +909,6 @@
     <span class="comment">// look up according to TimeVal</span>
     <span class="ident">ret</span> <span class="kw">as</span> <span class="ident">isize</span>
 }
-
-<span class="comment">/*
-[DEBUG] args[0]: 6 nfds
-[DEBUG] args[1]: FFFFFFFFFFFFC948 read_fds
-[DEBUG] args[2]: 0 write_fds
-[DEBUG] args[3]: 0 except_fds
-[DEBUG] args[4]: FFFFFFFFFFFFC8F8 timeout
-[DEBUG] args[5]: 0 sigmask
-*/</span>
-
-<span class="comment">/*
-The final argument of the pselect6() system call  is  not  a
-sigset_t * pointer, but is instead a structure of the form:
-
-struct {
-    const kernel_sigset_t *ss;   /* Pointer to signal set */
-    size_t ss_len;               /* Size (in bytes) of object pointed to by &#39;ss&#39; */
- */</span>
 </code></pre></div>
 </section><section id="search" class="content hidden"></section></div></main><div id="rustdoc-vars" data-root-path="../../../" data-current-crate="os" data-themes="ayu,dark,light" data-resource-suffix="" data-rustdoc-version="1.60.0-nightly (9ad5d82f8 2022-01-18)" ></div>
 </body></html>

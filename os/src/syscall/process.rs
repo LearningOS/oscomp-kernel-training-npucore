@@ -617,7 +617,9 @@ pub fn sys_prlimit(
     }
     SUCCESS
 }
-
+/// set pointer to thread ID
+/// This feature is currently NOT supported and is implemented as a stub,
+/// since threads are not supported.
 pub fn sys_set_tid_address(tidptr: usize) -> isize {
     current_task()
         .unwrap()
