@@ -1,7 +1,7 @@
 use crate::layout::{FATDirEnt, FATShortDirEnt};
 use crate::vfs::FileContent;
 use crate::{CacheManager, Inode};
-use alloc::string::{String, ToString};
+use alloc::string::{String};
 use spin::MutexGuard;
 
 pub enum DirIterMode {
@@ -10,7 +10,6 @@ pub enum DirIterMode {
     UsedIter,
     Unused,
     Enum,
-    Dirent,
 }
 
 #[allow(unused)]
@@ -169,7 +168,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
             self.inode
                 .read_at_block_cache(&mut self.lock, offset as usize, dir_ent.as_bytes_mut());
             match self.mode {
-                DirIterMode::Enum | DirIterMode::Dirent => (),
+                DirIterMode::Enum => (),
                 _ => {
                     // if directory entry is "last and unused", next is unavailable
                     if dir_ent.last_and_unused() {
@@ -211,7 +210,6 @@ impl<T: CacheManager, F: CacheManager> Iterator for DirIter<'_, T, F> {
                     DirIterMode::LongIter => !dir_ent.unused() && dir_ent.is_long(),
                     DirIterMode::ShortIter => !dir_ent.unused() && dir_ent.is_short(),
                     DirIterMode::Enum => true,
-                    DirIterMode::Dirent => !dir_ent.unused() || dir_ent.last_and_unused(),
                 }
             }
             if check_dir_ent_legality(&self.mode, &dir_ent) {
