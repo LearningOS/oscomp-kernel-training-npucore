@@ -270,7 +270,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Allocate required clusters
     fn alloc_clus(&self, lock: &mut MutexGuard<FileContent<T>>, alloc_num: usize) {
         let clus_list = &mut lock.clus_list;
-        let mut new_clus_list = self.fs.fat.alloc_mult(
+        let mut new_clus_list = self.fs.fat.alloc(
             &self.fs.block_device,
             alloc_num,
             clus_list.last().map(|clus| *clus),
@@ -282,11 +282,13 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     fn dealloc_clus(&self, lock: &mut MutexGuard<FileContent<T>>, dealloc_num: usize) {
         let clus_list = &mut lock.clus_list;
         let dealloc_num = dealloc_num.min(clus_list.len());
+        let mut dealloc_list = Vec::<u32>::new();
         for _ in 0..dealloc_num {
-            self.fs
-                .fat
-                .dealloc(&self.fs.block_device, clus_list.pop().unwrap())
+            dealloc_list.push(clus_list.pop().unwrap());
         }
+        self.fs
+            .fat
+            .free(&self.fs.block_device, dealloc_list);
     }
     /// Change the size of current file.
     /// This operation is ignored if the result size is negative
@@ -650,7 +652,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
         // Deallocate clusters
         let clus_list = mem::take(&mut lock.clus_list);
-        trash.fs.fat.mult_dealloc(&trash.fs.block_device, clus_list);
+        trash.fs.fat.free(&trash.fs.block_device, clus_list);
         // Remove directory entries
         trash.delete_self_dir_ent();
         return Ok(());
@@ -697,11 +699,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 let fst_clus = parent_dir
                     .fs
                     .fat
-                    .alloc_one(&parent_dir.fs.block_device, None);
-                if fst_clus.is_none() {
+                    .alloc(&parent_dir.fs.block_device, 1, None);
+                if fst_clus.is_empty() {
                     return Err(());
                 }
-                fst_clus.unwrap()
+                fst_clus[0]
             } else {
                 0
             };

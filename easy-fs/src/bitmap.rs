@@ -5,7 +5,8 @@ use crate::{
 
 use super::{BlockDevice, BLOCK_SZ};
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
-use spin::Mutex;
+use log::error;
+use spin::{Mutex, MutexGuard};
 
 const BLOCK_BITS: usize = BLOCK_SZ * 8;
 const VACANT_CLUS_CACHE_SIZE: usize = 64;
@@ -26,7 +27,7 @@ pub struct Fat<T> {
     tot_ent: usize,
     /// The queue used to store known vacant clusters
     vacant_clus: Mutex<VecDeque<u32>>,
-    /// The final unused clus id we found
+    /// The final unused cluster id we found
     hint: Mutex<usize>,
 }
 
@@ -130,7 +131,11 @@ impl<T: CacheManager> Fat<T> {
         (fat_offset % (T::CACHE_SZ as u32)) as usize
     }
     /// Assign the cluster entry to `current` to `next`
-    fn set_next_clus(&self, block_device: &Arc<dyn BlockDevice>, current: u32, next: u32) {
+    fn set_next_clus(&self, block_device: &Arc<dyn BlockDevice>, current: Option<u32>, next: u32) {
+        if current.is_none() {
+            return;
+        }
+        let current = current.unwrap();
         self.fat_cache_mgr
             .lock()
             .get_block_cache(
@@ -161,71 +166,80 @@ impl<T: CacheManager> Fat<T> {
     }
 
     /// Allocate as many clusters (but not greater than alloc_num) as possible.
-    pub fn alloc_mult(
+    /// `block_device`: The target block_device.
+    /// `alloc_num`: The number of clusters to allocate.
+    /// `last`: The preceding cluster of the one to be allocated.
+    pub fn alloc(
         &self,
         block_device: &Arc<dyn BlockDevice>,
         alloc_num: usize,
-        attach: Option<u32>,
+        mut last: Option<u32>,
     ) -> Vec<u32> {
-        let mut v = Vec::new();
-        let mut last = attach;
+        let mut allocated_cluster = Vec::new();
+        // A lock is required to guarantee mutual exclusion between processes.
+        let mut hlock = self.hint.lock();
         for _ in 0..alloc_num {
-            last = self.alloc_one(block_device, last);
+            last = self.alloc_one(block_device, last, &mut hlock);
             if last.is_none() {
-                //println!("why here?");
+                // There is no more free cluster.
+                // Or `last` next cluster is valid.
+                error!("[alloc]: alloc error, last: {:?}", last);
                 break;
             }
-            v.push(last.unwrap());
+            allocated_cluster.push(last.unwrap());
         }
-        v
+        allocated_cluster
     }
 
+    
     /// Find and allocate an cluster from data area.
-    /// `block_device`: The target block_device
-    /// `cache_mgr`: The cache manager
-    /// `attach`: The preceding cluster of the one to be allocated
-    pub fn alloc_one(
+    /// `block_device`: The target block_device.
+    /// `last`: The preceding cluster of the one to be allocated.
+    /// `hlock`: The lock of hint(Fat). This guarantees mutual exclusion between processes.
+    fn alloc_one(
         &self,
         block_device: &Arc<dyn BlockDevice>,
-        attach: Option<u32>,
+        last: Option<u32>,
+        hlock: &mut MutexGuard<usize>
     ) -> Option<u32> {
-        if attach.is_some()
-            && self.get_next_clus_num(attach.unwrap(), block_device) < FAT_ENTRY_RESERVED_TO_END
-        {
-            return None;
+        if last.is_some() {
+            // If next cluster is invalid, return None. 
+            let next_cluster_of_current = self.get_next_clus_num(last.unwrap(), block_device);
+            if next_cluster_of_current < FAT_ENTRY_RESERVED_TO_END {
+                return None;
+            }            
         }
-        // now we can alloc freely
-        if let Some(next_clus_id) = self.alloc_one_no_attach_locked(block_device) {
-            if attach.is_some() {
-                self.set_next_clus(block_device, attach.unwrap(), next_clus_id);
-            }
-            return Some(next_clus_id);
-        }
-        None
-    }
-    fn alloc_one_no_attach_locked(&self, block_device: &Arc<dyn BlockDevice>) -> Option<u32> {
-        // get from vacant_clus
-        if let Some(clus_id) = self.vacant_clus.lock().pop_back() {
-            // modify cached
-            self.set_next_clus(block_device, clus_id, EOC);
-            return Some(clus_id);
+        // Now we can allocate clusters freely
+
+        // Get a free cluster from `vacant_clus`
+        if let Some(free_clus_id) = self.vacant_clus.lock().pop_back() {
+            self.set_next_clus(block_device, last, free_clus_id);
+            self.set_next_clus(block_device, Some(free_clus_id), EOC);
+            return Some(free_clus_id);
         }
 
-        let mut hlock = self.hint.lock();
-        let start = *hlock;
+        // Allocate a free cluster starts with `hint`
+        let start = **hlock;
         let free_clus_id = self.get_next_free_clus(start as u32, block_device);
         if free_clus_id.is_none() {
             return None;
         }
         let free_clus_id = free_clus_id.unwrap();
-        *hlock = (free_clus_id + 1) as usize % self.tot_ent;
-        drop(hlock);
+        **hlock = (free_clus_id + 1) as usize % self.tot_ent;
 
-        self.set_next_clus(block_device, free_clus_id, EOC);
+        self.set_next_clus(block_device, last, free_clus_id);
+        self.set_next_clus(block_device, Some(free_clus_id), EOC);
         Some(free_clus_id)
     }
 
-    fn get_next_free_clus(&self, start: u32, block_device: &Arc<dyn BlockDevice>) -> Option<u32> {
+    /// Find next free cluster from data area.
+    /// `start`: The cluster id to traverse to find the next free cluster
+    /// `block_device`: The target block_device.
+    fn get_next_free_clus(
+        &self, 
+        start: u32, 
+        block_device: &Arc<dyn BlockDevice>
+    ) -> Option<u32> {
         for clus_id in start..self.tot_ent as u32 {
             if FAT_ENTRY_FREE == self.get_next_clus_num(clus_id, block_device) {
                 return Some(clus_id);
@@ -239,18 +253,21 @@ impl<T: CacheManager> Fat<T> {
         None
     }
 
-    /// Find and allocate an empty block from data area.
-    /// This function must be changed into a cluster-based one in the future.
-    pub fn dealloc(&self, block_device: &Arc<dyn BlockDevice>, bit: u32) {
-        self.set_next_clus(block_device, bit as u32, FAT_ENTRY_FREE);
+    /// Free multiple clusters from the data area.
+    /// `block_device`: The target block_device.
+    /// `cluster_list`: The clusters that need to be freed
+    pub fn free(
+        &self, 
+        block_device: &Arc<dyn BlockDevice>, 
+        cluster_list: Vec<u32>
+    ) {
+        // Before freeing, a lock 
         let mut lock = self.vacant_clus.lock();
-        if lock.len() < VACANT_CLUS_CACHE_SIZE {
-            lock.push_back(bit as u32);
-        }
-    }
-    pub fn mult_dealloc(&self, block_device: &Arc<dyn BlockDevice>, v: Vec<u32>) {
-        for i in v {
-            self.dealloc(block_device, i);
+        for cluster_id in cluster_list {
+            self.set_next_clus(block_device, Some(cluster_id), FAT_ENTRY_FREE);
+            if lock.len() < VACANT_CLUS_CACHE_SIZE {
+                lock.push_back(cluster_id);
+            }
         }
     }
 
