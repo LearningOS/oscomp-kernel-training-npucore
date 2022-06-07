@@ -2,6 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use core::convert::TryInto;
 use core::mem;
+use core::ops::Mul;
 use volatile::ReadOnly;
 use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;
@@ -170,13 +171,19 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             access_time: 0,
             modify_time: 0,
         };
-        Arc::new(Inode {
+        let inode = Arc::new(Inode {
             file_content,
             file_type: ReadOnly::new(file_type),
             parent_dir,
             fs,
             time: Mutex::new(time),
-        })
+        });
+        
+        // Init hint
+        if file_type == DiskInodeType::Directory {
+            inode.set_hint();
+        }
+        inode
     }
 }
 
@@ -417,7 +424,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         let mut start_cache = start / T::CACHE_SZ;
         let mut read_size = 0;
-        log::debug!(
+        log::trace!(
             "[rd_at_blk_cache] st,end,st_ch,buf.len:{:?}",
             (start, end, start_cache, buf.len())
         );
@@ -474,7 +481,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         assert!(start <= end);
         let mut start_cache = start / T::CACHE_SZ;
         let mut write_size = 0;
-        log::debug!(
+        log::trace!(
             "[wr_at_blk_cache] st,end,st_ch,wr_sz, buf.len:{:?}",
             (start, end, start_cache, write_size, buf.len())
         );
@@ -537,15 +544,65 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             inode,
         }
     }
-    fn expand_dir_size(&self, lock: &mut MutexGuard<FileContent<T>>) -> core::fmt::Result {
-        let size = self.fs.clus_size();
-        self.modify_size(lock, size as isize);
-        log::trace!("[expand_dir_size] new_size: {}", lock.size);
-        let buf = vec![0u8; size as usize];
-        self.write_at_block_cache(lock, (lock.size - size) as usize, buf.as_ref());
+    /// Set the offset of the last entry in the directory file(first byte is 0x00) to hint 
+    /// # Warning
+    /// This function will lock self's file_content, may cause deadlock
+    fn set_hint(&self) {
+        let lock = self.file_content.lock();
+        let mut iter = self.dir_iter(lock, None, DirIterMode::Enum, FORWARD);
+        loop {
+            let dir_ent = iter.next();
+            if dir_ent.is_none() {
+                // Means iter reachs the end of file
+                iter.lock.hint = iter.lock.size;
+                log::trace!("[set_hint] hint: {}", iter.lock.hint);
+                return;
+            }
+            let dir_ent = dir_ent.unwrap();
+            if dir_ent.last_and_unused() {
+                iter.lock.hint = iter.get_offset().unwrap();
+                log::trace!("[set_hint] hint: {}", iter.lock.hint);
+                return;
+            }
+        }
+    }
+    /// Expand directory file's size(a cluster)
+    /// # Arguments
+    /// `lock`: The lock of FileContent
+    fn expand_dir_size(
+        &self, 
+        lock: &mut MutexGuard<FileContent<T>>
+    ) -> core::fmt::Result {
+        let diff_size = self.fs.clus_size();
+        self.modify_size(lock, diff_size as isize);
+        log::debug!("[expand_dir_size] new_size: {}", lock.size);
         Ok(())
     }
-    /// return the offset of last free entry
+    /// Shrink directory file's size to fit **hint**(the offset from end of file)
+    /// For directory files, it has at least one cluster and should care
+    /// # Arguments
+    /// `lock`: The lock of FileContent
+    fn shrink_dir_size(
+        &self,
+        lock: &mut MutexGuard<FileContent<T>>
+    ) -> core::fmt::Result {
+        let new_size = 
+            lock.hint
+                .div_ceil(self.fs.clus_size())
+                .mul(self.fs.clus_size())
+                // For directory file, it has at least one cluster
+                .max(self.fs.clus_size());
+        let diff_size = new_size as isize - lock.size as isize;
+        self.modify_size(lock, diff_size as isize);
+        log::debug!("[shrink_dir_size] new_size: {}", lock.size);
+        Ok(())
+    }
+    /// Allocate directory entries required for new file.
+    /// Return the offset of the last entry and the lock.
+    /// # Arguments
+    /// `parent_dir`: The parent directory inode pointer
+    /// `lock`: The lock of FileContent
+    /// `alloc_num`: The number of directory entries required
     fn alloc_dir_ent<'a>(
         parent_dir: &'a Arc<Self>,
         lock: MutexGuard<'a, FileContent<T>>,
@@ -565,19 +622,25 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 }
                 continue;
             }
-            let dir_ent = dir_ent.unwrap();
-            if dir_ent.unused() {
-                found_free_dir_ent += 1;
-                log::trace!("[alloc_dir_ent]{:?}", iter.get_offset());
-                if found_free_dir_ent >= alloc_num {
-                    let offset = iter.get_offset().unwrap();
-                    let lock = iter.lock;
-                    log::debug!("[alloc_dir_ent]found! end offset: {}", offset);
-                    return Ok((offset, lock));
+            // We assume that all entries after `hint` are valid
+            // That's why we use `hint`. It can reduce the cost of iterating over used entries
+            found_free_dir_ent += 1;
+            log::trace!("[alloc_dir_ent]{:?}", iter.get_offset());
+            if found_free_dir_ent >= alloc_num {
+                let offset = iter.get_offset().unwrap();
+                // Set hint
+                // Set next entry to last_and_unused
+                if iter.next().is_some() {
+                    iter.write_to_current_ent(&FATDirEnt::unused_and_last_entry());
+                    iter.lock.hint = iter.get_offset().unwrap();
+                } else {
+                    // Means iter reachs the end of file
+                    iter.lock.hint = iter.lock.size;
                 }
-            } else {
-                log::trace!("[alloc_dir_ent]found a used entry, 'found_free_dir_ent' set to 0");
-                found_free_dir_ent = 0;
+                
+                let lock = iter.lock;
+                log::debug!("[alloc_dir_ent]found! end offset: {}, hint: {}", offset, lock.hint);
+                return Ok((offset, lock));
             }
         }
     }
@@ -594,9 +657,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let lock = inode.file_content.lock();
         let mut iter = inode.dir_iter(lock, Some(*offset), DirIterMode::UsedIter, BACKWARD);
 
-        log::debug!("[delete_self_dir_ent]: short_dir_ent offset: {}", *offset);
-
         iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
+
+        log::debug!("[delete_self_dir_ent] offset: {:?}", iter.get_offset());
 
         // Check this dir_ent is a short dir_ent
         {
@@ -621,13 +684,46 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if !dir_ent.is_long() {
                 panic!("invalid long dir_ent");
             }
-            log::trace!("[delete_self_dir_ent] dir_ent: {:?}, name: {:?}", dir_ent, dir_ent.get_name());
+            log::trace!("[delete_self_dir_ent] offset: {:?}, dir_ent: {:?}, name: {:?}", 
+                iter.get_offset(), dir_ent, dir_ent.get_name());
             iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
             iter.next();
             if dir_ent.is_last_long_dir_ent() {
-                return;
+                break;
             }
         }
+        
+        // Modify hint
+        // We use new iterate mode
+        let old_hint = iter.lock.hint;
+        let mut iter = 
+            inode.dir_iter(
+                iter.lock, 
+                Some(old_hint),
+                DirIterMode::Enum,
+                BACKWARD);
+        loop {
+            let dir_ent = iter.next();
+            if dir_ent.is_none() {
+                // Indicates that the file is empty
+                iter.lock.hint = 0;
+                break;
+            }
+            let dir_ent = dir_ent.unwrap();
+            if dir_ent.unused() {
+                iter.lock.hint = iter.get_offset().unwrap();
+                iter.write_to_current_ent(&FATDirEnt::unused_and_last_entry());
+            }
+            else {
+                // Represents `iter` pointer to a used entry
+                break;
+            }
+        }
+        log::debug!("[delete_self_dir_ent] hint: {:?}", iter.lock.hint);
+
+        // Modify file size
+        let mut lock = iter.lock;
+        inode.shrink_dir_size(&mut lock).unwrap();
     }
     /// Delete the file from the disk,
     /// deallocating both the directory entries (whether long or short),
@@ -732,8 +828,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             let current_dir = Inode::from_ent(&parent_dir, &short_ent, short_ent_offset);
             //if file_type is Directory, set first 3 directory entry
             if file_type == DiskInodeType::Directory {
-                let lock = current_dir.file_content.lock();
-                //fill content
+                let mut lock = current_dir.file_content.lock();
+                // Set hint
+                lock.hint = 2 * core::mem::size_of::<FATDirEnt>() as u32;
+                // Fill content
                 Self::fill_empty_dir(&parent_dir, &current_dir, lock, fst_clus);
             }
             Ok(current_dir)

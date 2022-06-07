@@ -76,6 +76,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         } else {
             self.offset = Some(offset + STEP_SIZE);
         }
+        log::debug!("[set_iter_offset] new offset: {:?}", self.offset);
     }
     pub fn current_clone(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent = FATDirEnt::empty();
@@ -154,7 +155,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         {
             panic!("failed!");
         }
-        //println!("[write_to_current_ent] offset:{}, content:{:?}", self.offset.unwrap(), ent.as_bytes());
+        log::debug!("[write_to_current_ent] offset:{}, content:{:?}", self.offset.unwrap(), ent.as_bytes());
     }
     pub fn step(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent: FATDirEnt = FATDirEnt::empty();
@@ -192,7 +193,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
                 dir_ent.as_bytes_mut(),
             );
         }
-        // println!("offset {:?}, unused: {:?}, {:?}", self.offset, dir_ent.unused(), dir_ent);
+        log::trace!("offset {:?}, unused: {:?}, {:?}", self.offset, dir_ent.unused(), dir_ent);
         Some(dir_ent)
     }
     pub fn walk(self) -> DirWalker<'a, T, F> {
