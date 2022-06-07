@@ -190,7 +190,7 @@ impl FSInfo {
     fn free_clus(clus_num: usize) {}
 }
 
-#[derive(PartialEq, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum DiskInodeType {
     File,
     Directory,
