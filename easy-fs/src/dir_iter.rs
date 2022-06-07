@@ -48,25 +48,39 @@ pub const BACKWARD: bool = false;
 const STEP_SIZE: u32 = core::mem::size_of::<FATDirEnt>() as u32;
 pub struct DirIter<'a, T: CacheManager, F: CacheManager> {
     pub lock: MutexGuard<'a, FileContent<T>>,
-    pub offset: Option<u32>,
-    pub mode: DirIterMode,
-    pub forward: bool,
-    pub inode: &'a Inode<T, F>,
+    offset: Option<u32>,
+    mode: DirIterMode,
+    forward: bool,
+    inode: &'a Inode<T, F>,
 }
 
 impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
-    #[allow(unused)]
-    #[inline(always)]
-    fn file_size(&self) -> u32 {
-        self.lock.size
+    pub fn new(
+        lock: MutexGuard<'a, FileContent<T>>,
+        offset: Option<u32>,
+        mode: DirIterMode,
+        forward: bool,
+        inode: &'a Inode<T, F>,
+    ) -> Self {
+        Self{
+            lock,
+            offset,
+            mode,
+            forward,
+            inode,
+        }
     }
-    #[allow(unused)]
+
     #[inline(always)]
+    /// Get iterator corresponding offset
     pub fn get_offset(&self) -> Option<u32> {
         self.offset
     }
-    #[allow(unused)]
+
     #[inline(always)]
+    /// Sets the offset to make the first iteration of the iterator to the target `offset`
+    /// # Arguments
+    /// `offset`: The target offset we want after the first iteration
     pub fn set_iter_offset(&mut self, offset: u32) {
         if self.forward {
             if offset == 0 {
@@ -79,10 +93,11 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         }
         log::debug!("[set_iter_offset] new offset: {:?}", self.offset);
     }
+    /// Get iterator corresponding `FATDirEnt`
     pub fn current_clone(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent = FATDirEnt::empty();
         if self.offset.is_some()
-            && self.offset.unwrap() < self.file_size()
+            && self.offset.unwrap() < self.lock.size
             && self.inode.read_at_block_cache(
                 &mut self.lock,
                 self.offset.unwrap() as usize,
@@ -147,6 +162,9 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         self.mode = DirIterMode::Unused;
         self
     }
+    /// Write `ent` to iterator corresponding directory entry
+    /// # Arguments
+    /// `ent`: The directory entry we want to write to
     pub fn write_to_current_ent(&mut self, ent: &FATDirEnt) {
         if self.inode.write_at_block_cache(
             &mut self.lock,
@@ -158,13 +176,13 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         }
         log::debug!("[write_to_current_ent] offset:{}, content:{:?}", self.offset.unwrap(), ent.as_bytes());
     }
-    pub fn step(&mut self) -> Option<FATDirEnt> {
+    fn step(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent: FATDirEnt = FATDirEnt::empty();
         if self.forward {
             // if offset is None => 0
             // if offset is non-negative => offset + STEP_SIZE
             let offset = self.offset.map(|offset| offset + STEP_SIZE).unwrap_or(0);
-            if offset >= self.file_size() {
+            if offset >= self.lock.size {
                 return None;
             }
             self.inode
@@ -201,6 +219,12 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         DirWalker { iter: self }
     }
 }
+
+/// Iterator for DirIter
+/// `next()` will return the next valid entry and change to the offset corresponding to the target entry
+/// `next()` will return None and will not change if the iterator is out of bounds with the next iterator
+/// For modes other than `Enum`, their bounds are the `last_and_unused` entry or the start/end of the file
+/// For `Enum` mode, its bounds are the start/end of the file(it will not be bound by the `last_and_unused` entry)
 impl<T: CacheManager, F: CacheManager> Iterator for DirIter<'_, T, F> {
     type Item = FATDirEnt;
     fn next(&mut self) -> Option<Self::Item> {
@@ -227,6 +251,9 @@ pub struct DirWalker<'a, T: CacheManager, F: CacheManager> {
     pub iter: DirIter<'a, T, F>,
 }
 
+
+/// Iterator for DirWalker
+/// It is based on `DirIter` and used to iterate over directory entries (combination of long and short entries)
 impl<T: CacheManager, F: CacheManager> Iterator for DirWalker<'_, T, F> {
     type Item = (String, FATShortDirEnt);
     fn next(&mut self) -> Option<Self::Item> {

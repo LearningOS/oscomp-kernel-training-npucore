@@ -535,13 +535,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             panic!("this isn't a directory")
         }
         let inode = self;
-        DirIter {
-            lock,
-            offset,
-            mode,
-            forward,
-            inode,
-        }
+        DirIter::new(lock, offset, mode, forward, inode)
     }
     /// Set the offset of the last entry in the directory file(first byte is 0x00) to hint 
     /// # Warning
