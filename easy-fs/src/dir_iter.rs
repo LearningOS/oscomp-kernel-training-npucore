@@ -215,6 +215,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         Some(dir_ent)
     }
     pub fn walk(self) -> DirWalker<'a, T, F> {
+        matches!(self.mode, DirIterMode::UsedIter);
         DirWalker { iter: self }
     }
 }

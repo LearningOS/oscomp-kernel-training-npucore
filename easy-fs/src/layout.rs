@@ -391,9 +391,7 @@ impl FATDirEnt {
         }
     }
     pub fn set_size(&mut self, size: u32) {
-        {
-            self.short_entry.file_size = size
-        };
+        self.short_entry.file_size = size
     }
     pub fn get_fst_clus(&self) -> u32 {
         if !self.is_short() {
@@ -414,7 +412,6 @@ impl FATDirEnt {
     }
     #[allow(unused)]
     pub fn is_short(&self) -> bool {
-        //unsafe { self.short_entry.attr == FATDiskInodeType::AttrLongName }
         !self.is_long()
     }
     pub fn get_short_ent(&self) -> Option<&FATShortDirEnt> {
@@ -438,6 +435,14 @@ impl FATDirEnt {
             } else {
                 self.short_entry.name()
             }
+        }
+    }
+    pub fn set_name(&mut self, name: [u8; 11]) {
+        if !self.is_short() {
+            panic!("this cluster is not a short dir ent")
+        }
+        unsafe {
+            self.short_entry.name.copy_from_slice(&name);
         }
     }
     pub fn get_short_name_array(&self) -> [u8; 11] {
@@ -544,6 +549,7 @@ impl FATShortDirEnt {
 }
 
 pub const LONG_DIR_ENT_NAME_CAPACITY: usize = 13;
+pub const SHORT_DIR_ENT_NAME_CAPACITY: usize = 11;
 #[derive(Debug, PartialEq, Clone, Copy)]
 #[repr(packed)]
 /// *On-disk* data structure for partition information.
