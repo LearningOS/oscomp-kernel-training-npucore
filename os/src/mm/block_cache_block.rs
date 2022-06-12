@@ -138,7 +138,7 @@ impl CacheManager for BlockCacheManager {
         }
     }
     fn try_get_block_cache(
-        &mut self,
+        &self,
         block_id: usize,
         inner_cache_id: usize,
     ) -> Option<Arc<Mutex<Self::CacheType>>> {
@@ -155,7 +155,7 @@ impl CacheManager for BlockCacheManager {
     }
 
     fn get_block_cache<FUNC>(
-        &mut self,
+        &self,
         block_id: usize,
         inner_cache_id: usize,
         neighbor: FUNC,

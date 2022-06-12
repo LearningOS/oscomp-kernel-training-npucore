@@ -299,14 +299,14 @@ macro_rules! CacheMgrImpl {
                 Self { empty: () }
             }
             fn try_get_block_cache(
-                &mut self,
+                &self,
                 block_id: usize,
                 inner_cache_id: usize,
             ) -> Option<Arc<Mutex<Self::CacheType>>> {
                 None
             }
             fn get_block_cache<FUNC>(
-                &mut self,
+                &self,
                 block_id: usize,
                 inner_cache_id: usize,
                 neighbor: FUNC,
