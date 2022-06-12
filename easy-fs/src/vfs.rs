@@ -209,21 +209,33 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         self.get_first_clus()
             .map(|clus| self.fs.first_sector_of_cluster(clus))
     }
-    /// !!! This function have many bugs
     /// Get the neighboring 8 or fewer(the trailing mod-of-eight blocks of the file) blocks
-    /// of `inner_block_id`,
-    pub fn get_neighboring_sec(&self, inner_cache_id: usize) -> Vec<usize> {
-        Vec::new()
-        // let inner_block_id = inner_cache_id * T::CACHE_SZ / BLOCK_SZ;
-        // let mut v = Vec::new();
-        // for i in inner_block_id & (!0b111usize)..=(inner_block_id | (0b111usize)) {
-        //     if let Some(j) = self.get_block_id(i as u32) {
-        //         v.push(j as usize)
-        //     } else {
-        //         break;
-        //     }
-        // }
-        // v
+    /// of `inner_block_id`, 
+    /// # Arguments
+    /// `clus_list`: The cluster list
+    /// `inner_cache_id`: The start `clus_list` index 
+    pub fn get_neighboring_sec(
+        &self,
+        clus_list: &Vec<u32>, 
+        mut inner_cache_id: usize
+    ) -> Vec<usize> {
+        assert!([1,2,4,8].contains(&self.fs.sec_per_clus));
+        let sec_per_clus = self.fs.sec_per_clus as usize;
+        let byts_per_sec = self.fs.byts_per_sec as usize;
+        let required_sec_num = T::CACHE_SZ / byts_per_sec;
+        let required_clus_num = required_sec_num / sec_per_clus;
+        let mut block_id_list = Vec::new();
+        for _ in 0..required_clus_num {
+            if inner_cache_id > clus_list.len() {
+                break;
+            }
+            let start_block_id = sec_per_clus * clus_list[inner_cache_id] as usize;
+            for i in start_block_id..start_block_id + sec_per_clus {
+                block_id_list.push(i);
+            }
+            inner_cache_id += 1;
+        }
+        block_id_list
     }
     /// Check if file type is directory
     #[inline(always)]
@@ -428,7 +440,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 .get_block_cache(
                     block_id,
                     start_cache,
-                    || -> Vec<usize> { self.get_neighboring_sec(start_cache) },
+                    || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, start_cache) },
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
@@ -484,7 +496,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 .get_block_cache(
                     block_id,
                     start_cache,
-                    || -> Vec<usize> { self.get_neighboring_sec(start_cache) },
+                    || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, start_cache) },
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()

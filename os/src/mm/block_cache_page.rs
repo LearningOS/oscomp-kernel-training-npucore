@@ -177,7 +177,7 @@ impl CacheManager for PageCacheManager {
     }
 
     fn try_get_block_cache(
-        &mut self,
+        &self,
         block_id: usize,
         inner_cache_id: usize,
     ) -> Option<Arc<Mutex<PageCache>>> {
@@ -200,7 +200,7 @@ impl CacheManager for PageCacheManager {
     }
 
     fn get_block_cache<FUNC>(
-        &mut self,
+        &self,
         block_id: usize,
         inner_cache_id: usize,
         neighbor: FUNC,
@@ -209,25 +209,26 @@ impl CacheManager for PageCacheManager {
     where
         FUNC: Fn() -> Vec<usize>,
     {
-        while inner_cache_id >= self.cache_pool.len() {
-            self.cache_pool.push(Weak::new());
-        }
-        let page_caches = PAGECACHE_MANAGER.lock();
-        let mut page_cache = self.cache_pool[inner_cache_id].upgrade();
-        if page_cache.is_none() {
-            let mut new_page_cache = PageCache::new();
-            new_page_cache.read_in(neighbor(), &block_device);
-            let new_page_cache = Arc::new(Mutex::new(new_page_cache));
-            self.cache_pool[inner_cache_id] = Arc::downgrade(&new_page_cache);
-            page_cache = Some(new_page_cache.clone());
-            PAGECACHE_MANAGER.lock().push(new_page_cache);
-        }
-        let page_cache = page_cache.unwrap();
-        let mut locked = page_cache.lock();
-        if locked.priority < PRIORITY_UPPERBOUND {
-            locked.priority += 1;
-        }
-        drop(locked);
-        page_cache
+        // while inner_cache_id >= self.cache_pool.len() {
+        //     self.cache_pool.push(Weak::new());
+        // }
+        // let page_caches = PAGECACHE_MANAGER.lock();
+        // let mut page_cache = self.cache_pool[inner_cache_id].upgrade();
+        // if page_cache.is_none() {
+        //     let mut new_page_cache = PageCache::new();
+        //     new_page_cache.read_in(neighbor(), &block_device);
+        //     let new_page_cache = Arc::new(Mutex::new(new_page_cache));
+        //     self.cache_pool[inner_cache_id] = Arc::downgrade(&new_page_cache);
+        //     page_cache = Some(new_page_cache.clone());
+        //     PAGECACHE_MANAGER.lock().push(new_page_cache);
+        // }
+        // let page_cache = page_cache.unwrap();
+        // let mut locked = page_cache.lock();
+        // if locked.priority < PRIORITY_UPPERBOUND {
+        //     locked.priority += 1;
+        // }
+        // drop(locked);
+        // page_cache
+        todo!()
     }
 }
