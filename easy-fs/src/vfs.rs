@@ -130,7 +130,21 @@ pub struct Inode<T: CacheManager, F: CacheManager> {
 
 impl<T: CacheManager, F: CacheManager> Drop for Inode<T, F> {
     fn drop(&mut self) {
-        //todo!();
+        if self.parent_dir.lock().is_none() {
+            return;
+        }
+        let par_lock = self.parent_dir.lock();
+        let (parent_dir, offset) = par_lock.as_ref().unwrap();
+        let dir_ent = parent_dir.get_dir_ent(*offset).unwrap();
+        let mut short_dir_ent = *dir_ent.get_short_ent().unwrap();
+        // Modify size
+        let lock = self.file_content.lock();
+        short_dir_ent.file_size = lock.size;
+        // Modify time
+        // todo!
+        log::debug!("[Inode drop]: new_ent: {:?}", short_dir_ent);
+        // Write back
+        parent_dir.set_dir_ent(*offset, dir_ent).unwrap();
     }
 }
 
@@ -656,12 +670,53 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             }
         }
     }
+    /// Get a derectory entries
+    /// # Arguments
+    /// `offset`: The offset of entry
+    /// # Warning
+    /// This function will lock self's file_content, may cause deadlock
+    fn get_dir_ent(
+        &self,
+        offset: u32
+    ) -> Result<FATDirEnt,()> {
+        log::trace!("[get_dir_ent]: offset: {}", offset);
+        let mut dir_ent = FATDirEnt::empty();
+        if self.read_at_block_cache(
+            &mut self.file_content.lock(),
+            offset as usize,
+            dir_ent.as_bytes_mut()
+        ) != dir_ent.as_bytes().len() {
+            return Err(());
+        }
+        Ok(dir_ent)
+    }
+    /// Get a derectory entries
+    /// # Arguments
+    /// `offset`: The offset of entry
+    /// `dir_ent`: The buffer needs to write back
+    /// # Warning
+    /// This function will lock self's file_content, may cause deadlock
+    fn set_dir_ent(
+        &self,
+        offset: u32,
+        dir_ent: FATDirEnt
+    ) -> Result<(),()> {
+        log::trace!("[set_dir_ent]: offset: {}, dir_ent: {:?}", offset, dir_ent);
+        if self.write_at_block_cache(
+            &mut self.file_content.lock(), 
+            offset as usize, 
+            dir_ent.as_bytes()
+        ) != dir_ent.as_bytes().len() {
+            return Err(());
+        } 
+        Ok(())
+    }
     /// Get derectory entries, including short and long entries
     /// # Arguments
     /// `offset`: The offset of short entry
     /// # Warning
     /// This function will lock self's file_content, may cause deadlock
-    fn get_dir_ent(
+    fn get_all_dir_ent(
         &self,
         offset: u32
     ) -> Result<(FATShortDirEnt, Vec<FATLongDirEnt>),()> {
@@ -704,7 +759,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 break;
             }
         }
-        log::trace!("[get_dir_ent] inode:{:?}, offset:{}, short_ent:{:?}, long_ents:{:?}", 
+        log::trace!("[get_all_dir_ent] inode:{:?}, offset:{}, short_ent:{:?}, long_ents:{:?}", 
                     self.get_inode_num(), offset, short_ent, long_ents);
         Ok((short_ent, long_ents))
     }
@@ -875,7 +930,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let clus_list = mem::take(&mut lock.clus_list);
         trash.fs.fat.free(&trash.fs.block_device, clus_list);
         // Remove directory entries
-        trash.delete_self_dir_ent()
+        if trash.delete_self_dir_ent().is_err() {
+            return Err(());
+        }
+        *trash.parent_dir.lock() = None;
+        Ok(())
     }
 }
 
@@ -1054,11 +1113,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     fn fill_empty_dir(
         parent_dir: &Arc<Inode<T, F>>,
         current_dir: &Arc<Inode<T, F>>,
-        mut current_lock: MutexGuard<FileContent<T>>,
+        current_lock: MutexGuard<FileContent<T>>,
         fst_clus: u32,
     ) {
-        let buf = vec![0; current_lock.size as usize];
-        current_dir.write_at_block_cache(&mut current_lock, 0, buf.as_ref());
         let mut iter = current_dir.dir_iter(current_lock, None, DirIterMode::Enum, FORWARD);
         let mut short_name: [u8; 11] = [' ' as u8; 11];
         //.
@@ -1106,11 +1163,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let old_parent_dir = &parent_dir.0;
         let old_offset = &parent_dir.1;
 
-        let old_lock = old_parent_dir.file_content.lock();
         // Get old short entry
-        let mut iter = self.dir_iter(old_lock, Some(*old_offset), DirIterMode::Enum, BACKWARD);
-        let old_short_ent = *iter.current_clone().unwrap().get_short_ent().unwrap();
-        drop(iter);
+        let old_short_ent = 
+            *self.get_dir_ent(*old_offset).unwrap().get_short_ent().unwrap();
         // Generate new entries
         let (new_short_ent, new_long_ents) =  
             Self::gen_dir_ent(new_parent_dir, &name, old_short_ent.get_first_clus(),
