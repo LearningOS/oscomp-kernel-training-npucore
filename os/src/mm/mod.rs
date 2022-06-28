@@ -7,7 +7,6 @@ mod page_table;
 
 use address::VPNRange;
 pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
-pub use elf_cache::push_elf_area;
 pub use frame_allocator::{frame_alloc, frame_dealloc, unallocated_frames, FrameTracker};
 pub use memory_set::remap_test;
 pub use memory_set::{
@@ -15,7 +14,7 @@ pub use memory_set::{
 };
 use page_table::PTEFlags;
 pub use page_table::{
-    copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string, translated_byte_buffer_append_to_existed_vec, translated_byte_buffer, translated_ref,
+    copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string, translated_byte_buffer_append_to_existing_vec, translated_byte_buffer, translated_ref,
     translated_refmut, translated_str, PageTable, PageTableEntry, UserBuffer, UserBufferIterator,
 };
 

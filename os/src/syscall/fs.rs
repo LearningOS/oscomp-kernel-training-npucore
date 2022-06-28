@@ -2,7 +2,7 @@ use crate::fs::{make_pipe, open, pselect, DiskInodeType, OpenFlags, StatMode, op
 use crate::fs::{ppoll, Dirent, FdSet, File, FileDescriptor, FileLike, Null, Stat, Zero, TTY};
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
-    translated_byte_buffer_append_to_existed_vec, translated_ref, translated_refmut,
+    translated_byte_buffer_append_to_existing_vec, translated_ref, translated_refmut,
     translated_str, MapPermission, UserBuffer,
 };
 use crate::task::{current_task, current_user_token};
@@ -176,7 +176,7 @@ pub fn sys_readv(fd: usize, iov: usize, iovcnt: usize) -> isize {
         Vec::new(),
         |buffer, iovec| {
             // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
-            translated_byte_buffer_append_to_existed_vec(
+            translated_byte_buffer_append_to_existing_vec(
                 Some(buffer),
                 token,
                 iovec.iov_base,
@@ -226,7 +226,7 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
                 }
             }
             // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
-            translated_byte_buffer_append_to_existed_vec(
+            translated_byte_buffer_append_to_existing_vec(
                 Some(buffer),
                 token,
                 iovec.iov_base,

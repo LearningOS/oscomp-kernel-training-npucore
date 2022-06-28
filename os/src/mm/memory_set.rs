@@ -89,15 +89,12 @@ impl MemorySet {
     pub fn insert_program_area(
         &mut self,
         start_va: VirtAddr,
-        end_va: VirtAddr,
         permission: MapPermission,
-    ) -> Option<MapArea> {
-        let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, permission, None);
-        if let Err(_) = map_area.map(&mut self.page_table) {
-            return None;
-        }
-        self.areas.push(map_area.clone());
-        Some(map_area)
+        frames: Vec<Option<Arc<FrameTracker>>>
+    ) -> Result {
+        let map_area = MapArea::from_existing_frame(start_va, MapType::Framed, permission, frames);
+        self.push_no_alloc(map_area)?;
+        Ok(())
     }
     /// # Warning
     /// if the start_vpn does not match any area's start_vpn, then nothing is done and return `Ok(())`
@@ -113,7 +110,7 @@ impl MemorySet {
             }
             self.areas.remove(idx);
         } else {
-            warn!("[remove_area_with_start_vpn] Target area not found!")
+            warn!("[remove_area_with_start_vpn] Target area not found! Request vpn: {:?}", start_vpn);
         }
         Ok(())
     }
@@ -144,7 +141,7 @@ impl MemorySet {
         Ok(())
     }
     /// Push the map area into the memory set without copying or allocation.
-    pub fn push_no_alloc(&mut self, map_area: &MapArea) -> Result {
+    pub fn push_no_alloc(&mut self, map_area: MapArea) -> Result {
         for vpn in map_area.data_frames.vpn_range {
             let frame = map_area.data_frames.get(&vpn).unwrap();
             if !self.page_table.is_mapped(vpn) {
@@ -155,7 +152,7 @@ impl MemorySet {
                 return Err(Error);
             }
         }
-        self.areas.push(map_area.clone());
+        self.areas.push(map_area);
         Ok(())
     }
     pub fn find_mmap_area_end(&self) -> VirtAddr {
@@ -426,7 +423,7 @@ impl MemorySet {
             },
         )
     }
-    pub fn from_existed_user(user_space: &mut MemorySet) -> MemorySet {
+    pub fn from_existing_user(user_space: &mut MemorySet) -> MemorySet {
         let mut memory_set = Self::new_bare();
         // map trampoline
         memory_set.map_trampoline();
@@ -436,7 +433,7 @@ impl MemorySet {
         for i in 0..user_space.areas.len() - 1 {
             let mut new_area = user_space.areas[i].clone();
             new_area
-                .map_from_existed_page_table(&mut memory_set.page_table, &mut user_space.page_table)
+                .map_from_existing_page_table(&mut memory_set.page_table, &mut user_space.page_table)
                 .unwrap();
             memory_set.areas.push(new_area);
             debug!(
@@ -588,6 +585,26 @@ impl MapArea {
             map_file: another.map_file.clone(),
         }
     }
+    /// Create `MapArea` from `Vec<Arc<FrameTracker>>` \
+    /// # NOTE
+    /// `start_vpn` will be set to `start_va.floor()`,
+    /// `end_vpn` will be set to `start_vpn + frames.len()`,
+    /// `map_file` will be set to `None`.
+    pub fn from_existing_frame(
+        start_va: VirtAddr,
+        map_type: MapType,
+        map_perm: MapPermission,
+        frames: Vec<Option<Arc<FrameTracker>>>,
+    ) -> Self {
+        let start_vpn = start_va.floor();
+        let end_vpn = VirtPageNum::from(start_vpn.0 + frames.len());
+        Self {
+            data_frames: MapRangeDict { vpn_range: VPNRange::new(start_vpn, end_vpn), data_frames: frames },
+            map_type,
+            map_perm,
+            map_file: None,
+        }
+    }
     /// Map an included page in current area.
     /// If the `map_type` is `Framed`, then physical pages shall be allocated by this function.
     /// Otherwise, where `map_type` is `Identical`,
@@ -650,7 +667,7 @@ impl MapArea {
     /// # Argument
     /// `dst_page_table`: The destination to be mapped into.
     /// `src_page_table`: The source to be mapped from. This is also the page table where `self` should be included.
-    pub fn map_from_existed_page_table(
+    pub fn map_from_existing_page_table(
         &mut self,
         dst_page_table: &mut PageTable,
         src_page_table: &mut PageTable,

@@ -1,10 +1,11 @@
-use core::fmt::{self, Debug, Formatter};
 use super::signal::*;
 use super::AuxvEntry;
 use super::AuxvType;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::fs::{open, DiskInodeType, File, FileDescriptor, FileLike, OSInode, OpenFlags, TTY, open_root_inode};
+use crate::fs::{
+    open, open_root_inode, DiskInodeType, File, FileDescriptor, FileLike, OSInode, OpenFlags, TTY,
+};
 use crate::mm::PageTable;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::*;
@@ -20,6 +21,7 @@ use alloc::string::ToString;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::fmt::{self, Debug, Formatter};
 use log::{debug, error, info, trace, warn};
 use riscv::register::scause::{Interrupt, Trap};
 use spin::{Mutex, MutexGuard};
@@ -464,7 +466,7 @@ impl TaskControlBlock {
         // ---- hold parent PCB lock
         let mut parent_inner = self.acquire_inner_lock();
         // copy user space(include trap context)
-        let memory_set = MemorySet::from_existed_user(&mut parent_inner.memory_set);
+        let memory_set = MemorySet::from_existing_user(&mut parent_inner.memory_set);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
@@ -545,27 +547,26 @@ impl TaskControlBlock {
 }
 
 fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> isize {
-    let size = file.size();
-    let start: usize = MMAP_BASE;
-    let buffer = unsafe { core::slice::from_raw_parts_mut(start as *mut u8, size) };
-
-    let frame_list = file.get_all_cache_frame();
+    let buffer = unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, file.size()) };
+    let frames = file.get_all_cache_frame();
+    warn!("get_all_cache_frame passed!");
 
     crate::mm::KERNEL_SPACE
         .lock()
         .insert_program_area(
             MMAP_BASE.into(),
-            (MMAP_BASE + size).into(),
             crate::mm::MapPermission::R | crate::mm::MapPermission::W,
+            frames,
         )
         .unwrap();
-    file.kread(None, buffer);
+    warn!("insert_program_area passed!");
 
     let task = current_task().unwrap();
     show_frame_consumption! {
         "task_exec";
         task.load_elf(buffer, argv_vec, envp_vec);
     }
+    warn!("load_elf passed!");
     // remove elf area
     crate::mm::KERNEL_SPACE
         .lock()
