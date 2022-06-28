@@ -45,7 +45,7 @@ impl<T: CacheManager> Fat<T> {
                 self.this_fat_sec_num(start) as usize,
                 self.this_fat_inner_cache_num(start),
                 || -> Vec<usize> { self.get_eight_blk(start) },
-                Arc::clone(block_device),
+                block_device,
             )
             .lock()
             .read(
@@ -137,7 +137,7 @@ impl<T: CacheManager> Fat<T> {
                 self.this_fat_sec_num(current) as usize,
                 self.this_fat_inner_cache_num(current as u32),
                 || -> Vec<usize> { self.get_eight_blk(current) },
-                block_device.clone(),
+                block_device,
             )
             .lock()
             .modify(
