@@ -218,9 +218,9 @@ impl PageTable {
     }
 }
 
-/// if `existed_vec == None`, a empty `Vec` will be created.
-pub fn translated_byte_buffer_append_to_existed_vec(
-    existed_vec: Option<Vec<&'static mut [u8]>>,
+/// if `existing_vec == None`, a empty `Vec` will be created.
+pub fn translated_byte_buffer_append_to_existing_vec(
+    existing_vec: Option<Vec<&'static mut [u8]>>,
     token: usize,
     ptr: *const u8,
     len: usize,
@@ -228,7 +228,7 @@ pub fn translated_byte_buffer_append_to_existed_vec(
     let page_table = PageTable::from_token(token);
     let mut start = ptr as usize;
     let end = start + len;
-    let mut v = existed_vec.unwrap_or_default();
+    let mut v = existing_vec.unwrap_or_default();
     while start < end {
         let start_va = VirtAddr::from(start);
         let mut vpn = start_va.floor();
@@ -247,7 +247,7 @@ pub fn translated_byte_buffer_append_to_existed_vec(
 }
 
 pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&'static mut [u8]> {
-    translated_byte_buffer_append_to_existed_vec(None, token, ptr, len)
+    translated_byte_buffer_append_to_existing_vec(None, token, ptr, len)
 }
 
 /// Load a string from other address spaces into kernel space without an end `\0`.

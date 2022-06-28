@@ -1,4 +1,4 @@
-use super::{elf_cache::try_remove_elf, PhysAddr, PhysPageNum};
+use super::{PhysAddr, PhysPageNum};
 use super::super::fs;
 use crate::config::{MEMORY_END, PAGE_SIZE};
 // KISS
@@ -123,8 +123,6 @@ pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
         log::warn!("Hit GC");
         fs::oom();
         log::warn!("Cache GC finished");
-        try_remove_elf(super::elf_cache::ELF_CACHE.read(), None);
-        log::warn!("Elf Cache GC finished");
         FRAME_ALLOCATOR
             .write()
             .alloc()

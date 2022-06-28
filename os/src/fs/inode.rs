@@ -242,14 +242,14 @@ impl OSInode {
             })
             .collect()
     }
-    pub fn get_all_cache_frame(&self) -> Vec<Arc<FrameTracker>> {
+    pub fn get_all_cache_frame(&self) -> Vec<Option<Arc<FrameTracker>>> {
         self.inner
             .inode
             .get_all_cache()
             .iter()
             .map(|cache|{
                 assert!(!cache.is_locked());
-                cache.lock().get_tracker()
+                Some(cache.lock().get_tracker())
             })
             .collect()
     }
