@@ -1,7 +1,7 @@
 use core::panic;
 use super::cache_mgr::*;
 use super::{Dirent, File, OpenFlags, Stat, StatMode};
-use crate::mm::UserBuffer;
+use crate::mm::{UserBuffer, FrameTracker};
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
 use crate::{drivers::BLOCK_DEVICE, println};
@@ -239,6 +239,17 @@ impl OSInode {
                     d_type,
                     name.as_str(),
                 )
+            })
+            .collect()
+    }
+    pub fn get_all_cache_frame(&self) -> Vec<Arc<FrameTracker>> {
+        self.inner
+            .inode
+            .get_all_cache()
+            .iter()
+            .map(|cache|{
+                assert!(!cache.is_locked());
+                cache.lock().get_tracker()
             })
             .collect()
     }

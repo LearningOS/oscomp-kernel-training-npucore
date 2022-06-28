@@ -3,7 +3,6 @@ use alloc::vec::Vec;
 use easy_fs::{BlockDevice, Cache, CacheManager};
 use spin::Mutex;
 use crate::config::{PAGE_SIZE_BITS, PAGE_SIZE};
-use crate::drivers::BLOCK_DEVICE;
 use crate::mm::{FrameTracker, frame_alloc, PhysPageNum, KERNEL_SPACE, PageTableEntry};
 
 const PAGE_BUFFERS: usize = 8;
@@ -243,6 +242,10 @@ impl PageCache {
             .unwrap()
     }
 
+    pub fn get_tracker(&self) -> Arc<FrameTracker> {
+        self.tracker.clone()
+    }
+
     pub fn read_in(
         &mut self, 
         block_ids: Vec<usize>, 
@@ -365,13 +368,12 @@ impl CacheManager for PageCacheManager {
 
         for inner_cache_id in &*self.allocated_cache.lock() {
             let inner_cache_id = *inner_cache_id;
-            let inner = lock[inner_cache_id].as_ref().unwrap();
-            if Arc::strong_count(inner) > 1 {
+            log::warn!("inner_id: {}", inner_cache_id);
+            let mut inner_lock = lock[inner_cache_id].as_ref().unwrap().lock();
+            if Arc::strong_count(&inner_lock.tracker) > 1{
                 new_allocated_cache.push(inner_cache_id);
-                continue;
             }
-            let mut inner_lock = inner.lock();
-            if inner_lock.priority > 0 {
+            else if inner_lock.priority > 0 {
                 inner_lock.priority -= 1;
                 new_allocated_cache.push(inner_cache_id);
             } else {
@@ -379,7 +381,6 @@ impl CacheManager for PageCacheManager {
                 inner_lock.sync(block_ids, block_device);
                 dropped += 1;
                 drop(inner_lock);
-                drop(inner);
                 lock[inner_cache_id] = None;
             }
         }

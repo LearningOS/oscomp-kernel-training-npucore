@@ -1,5 +1,4 @@
 use core::fmt::{self, Debug, Formatter};
-
 use super::signal::*;
 use super::AuxvEntry;
 use super::AuxvType;
@@ -549,14 +548,19 @@ fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) 
     let size = file.size();
     let start: usize = MMAP_BASE;
     let buffer = unsafe { core::slice::from_raw_parts_mut(start as *mut u8, size) };
-    show_frame_consumption! {
-        "push_elf_area";
-        if crate::mm::push_elf_area(file.clone()).is_err() {
-            file.kread(None, buffer);
-        } else {
-            info!("[elf_exec] Hit ELF cache, no alloc");
-        };
-    }
+
+    let frame_list = file.get_all_cache_frame();
+
+    crate::mm::KERNEL_SPACE
+        .lock()
+        .insert_program_area(
+            MMAP_BASE.into(),
+            (MMAP_BASE + size).into(),
+            crate::mm::MapPermission::R | crate::mm::MapPermission::W,
+        )
+        .unwrap();
+    file.kread(None, buffer);
+
     let task = current_task().unwrap();
     show_frame_consumption! {
         "task_exec";

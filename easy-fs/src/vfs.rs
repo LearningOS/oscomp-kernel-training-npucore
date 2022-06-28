@@ -324,7 +324,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T,F> {
         let lock = lock.unwrap();
         log::warn!("[vfs:oom]: size: {}", lock.size);
         let neighbor = |inner_cache_id|{self.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
-        lock.file_cache_mgr.oom(neighbor, &self.fs.block_device)
+        let tmp = lock.file_cache_mgr.oom(neighbor, &self.fs.block_device);
+        log::warn!("[vfs:oom]: finish!");
+        tmp
     }
 }
 
@@ -448,6 +450,29 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             start = end_current_block;
         }
         write_size
+    }
+
+    pub fn get_all_cache(&self) -> Vec<Arc<Mutex<T::CacheType>>> {
+        let lock = self.file_content.lock();
+        let mut start_cache = 0;
+        let mut cache_list = Vec::<Arc<Mutex<T::CacheType>>>::new();
+        loop {
+            if start_cache >= lock.size as usize / T::CACHE_SZ {
+                break;
+            }
+            let block_id = self.get_block_id(&lock, start_cache as u32).unwrap() as usize;
+            let cache = 
+                lock.file_cache_mgr
+                    .get_block_cache(
+                        block_id,
+                        start_cache,
+                        || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, start_cache) },
+                        &self.fs.block_device,
+                    );
+            cache_list.push(cache);
+            start_cache += 1;
+        }
+        cache_list
     }
 }
 
