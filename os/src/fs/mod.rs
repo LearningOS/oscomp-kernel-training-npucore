@@ -9,7 +9,7 @@ use core::mem::size_of;
 use crate::{mm::UserBuffer, syscall::errno::ENOTTY, timer::TimeSpec};
 use alloc::{boxed::Box, sync::Arc};
 pub use dev::*;
-pub use inode::{list_apps, open, open_root_inode, DiskInodeType, OSInode};
+pub use inode::{list_apps, open, open_root_inode, DiskInodeType, OSInode, oom};
 pub use pipe::{make_pipe, Pipe};
 pub use poll::{ppoll, pselect, FdSet, PollFd};
 

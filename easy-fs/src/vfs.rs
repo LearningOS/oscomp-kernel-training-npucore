@@ -1,18 +1,14 @@
 use alloc::collections::BTreeMap;
-use alloc::vec;
 use core::convert::TryInto;
 use core::mem;
 use core::ops::Mul;
 use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;
-
 use crate::block_cache::{Cache, CacheManager};
 use crate::dir_iter::*;
 use crate::layout::{
     FATDirEnt, FATDiskInodeType, FATLongDirEnt, FATShortDirEnt,
 };
-use crate::DataBlock;
-
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
@@ -231,25 +227,28 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn get_neighboring_sec(
         &self,
         clus_list: &Vec<u32>, 
-        mut inner_cache_id: usize
+        inner_cache_id: usize
     ) -> Vec<usize> {
         assert!([1,2,4,8].contains(&self.fs.sec_per_clus));
         let sec_per_clus = self.fs.sec_per_clus as usize;
         let byts_per_sec = self.fs.byts_per_sec as usize;
         let required_sec_num = T::CACHE_SZ / byts_per_sec;
         let required_clus_num = required_sec_num / sec_per_clus;
-        let mut block_id_list = Vec::new();
+        let mut cluster_id = inner_cache_id * required_clus_num;
+        let mut block_ids = Vec::new();
         for _ in 0..required_clus_num {
-            if inner_cache_id > clus_list.len() {
+            if cluster_id >= clus_list.len() {
                 break;
             }
-            let start_block_id = sec_per_clus * clus_list[inner_cache_id] as usize;
+            log::trace!("[get_neighboring_sec] cluster_id: {}", clus_list[cluster_id]);
+            let start_block_id = self.fs.first_sector_of_cluster(clus_list[cluster_id]) as usize;
             for i in start_block_id..start_block_id + sec_per_clus {
-                block_id_list.push(i);
+                block_ids.push(i);
             }
-            inner_cache_id += 1;
+            cluster_id += 1;
         }
-        block_id_list
+        log::debug!("[get_neighboring_sec] block_ids: {:?}", block_ids);
+        block_ids
     }
     /// Check if file type is directory
     #[inline(always)]
@@ -416,6 +415,20 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
 }
 
+/// Out of memory
+impl<T: CacheManager, F: CacheManager> Inode<T,F> {
+    pub fn oom(&self) -> usize{
+        let lock = self.file_content.try_lock();
+        if lock.is_none() {
+            return 0;
+        }
+        let lock = lock.unwrap();
+        log::info!("[vfs:oom]: size: {}", lock.size);
+        let neighbor = |inner_cache_id|{self.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
+        lock.file_cache_mgr.oom(neighbor, &self.fs.block_device)
+    }
+}
+
 /// IO
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// The `get_block_cache` version of read_at
@@ -459,7 +472,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
-                .read(0, |data_block: &DataBlock| {
+                // I know hardcoding 4096 in is bad, but I can't get around Rust's syntax checking...
+                .read(0, |data_block: &[u8; 4096]| {
                     let src =
                         &data_block[start % T::CACHE_SZ..start % T::CACHE_SZ + block_read_size];
                     dst.copy_from_slice(src);
@@ -515,7 +529,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     Arc::clone(&self.fs.block_device),
                 )
                 .lock()
-                .modify(0, |data_block: &mut DataBlock| {
+                // I know hardcoding 4096 in is bad, but I can't get around Rust's syntax checking...
+                .modify(0, |data_block: &mut [u8; 4096]| {
                     let src = &buf[write_size..write_size + block_write_size];
                     let dst = &mut data_block
                         [start % T::CACHE_SZ..start % T::CACHE_SZ + block_write_size];

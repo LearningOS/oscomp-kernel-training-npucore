@@ -19,6 +19,5 @@ use bitmap::Fat;
 pub use block_cache::{Cache, CacheManager};
 pub use block_dev::BlockDevice;
 pub use efs::EasyFileSystem;
-pub use layout::DataBlock;
 pub use layout::DiskInodeType;
 pub use vfs::Inode;

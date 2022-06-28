@@ -1,5 +1,5 @@
 use super::BlockDevice;
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::{*}};
 use spin::Mutex;
 
 pub trait Cache {
@@ -7,6 +7,8 @@ pub trait Cache {
     fn read<T, V>(&self, offset: usize, f: impl FnOnce(&T) -> V) -> V;
     /// The mutable mapper to the block cache
     fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V;
+    ///
+    fn sync(&self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {}
 }
 
 pub trait CacheManager {
@@ -47,4 +49,15 @@ pub trait CacheManager {
     ) -> Arc<Mutex<Self::CacheType>>
     where
         FUNC: Fn() -> Vec<usize>;
+    
+    fn oom<FUNC>(
+        &self,
+        neighbor: FUNC,
+        block_device: &Arc<dyn BlockDevice>
+    ) -> usize
+    where
+        FUNC: Fn(usize) -> Vec<usize>
+    {
+        0
+    }
 }
