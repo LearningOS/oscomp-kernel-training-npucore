@@ -196,8 +196,6 @@ pub enum DiskInodeType {
     Directory,
 }
 
-pub type DataBlock = [u8; BLOCK_SZ];
-
 #[derive(PartialEq, Debug, Clone, Copy)]
 #[repr(u8)]
 pub enum FATDiskInodeType {

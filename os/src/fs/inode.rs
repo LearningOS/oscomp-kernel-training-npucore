@@ -1,6 +1,6 @@
-use super::cache_mgr::DataCacheMgrWrapper;
+use core::panic;
+use super::cache_mgr::*;
 use super::{Dirent, File, OpenFlags, Stat, StatMode};
-use crate::fs::cache_mgr::InfoCacheMgrWrapper;
 use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
@@ -9,7 +9,7 @@ use crate::{drivers::BLOCK_DEVICE, println};
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
-use alloc::sync::{Arc, Weak};
+use alloc::sync::{Arc};
 use alloc::vec::Vec;
 use easy_fs::layout::FATDiskInodeType;
 pub use easy_fs::DiskInodeType;
@@ -17,8 +17,7 @@ use easy_fs::{CacheManager, EasyFileSystem, Inode};
 use lazy_static::*;
 use spin::{Mutex, RwLock};
 
-type InodeImpl =
-    Inode<crate::fs::cache_mgr::DataCacheMgrWrapper, crate::fs::cache_mgr::InfoCacheMgrWrapper>;
+type InodeImpl = Inode<PageCacheManager, BlockCacheManager>;
 
 pub struct OSInode {
     readable: bool,
@@ -167,7 +166,7 @@ impl OSInode {
                     return Ok(Arc::new(OSInode::new(readable, writable, {
                         log::trace!("[open_by_relative_path] create: {}", component);
                         let new_treenode = Arc::new(DirectoryTreeNode::new(
-                            Inode::<DataCacheMgrWrapper, InfoCacheMgrWrapper>::create(
+                            InodeImpl::create(
                                 &current_treenode.inode,
                                 component.to_string(),
                                 type_,
@@ -360,13 +359,10 @@ impl OSInode {
 
 lazy_static! {
     pub static ref FILE_SYSTEM: Arc<
-        EasyFileSystem<
-            crate::fs::cache_mgr::DataCacheMgrWrapper,
-            crate::fs::cache_mgr::InfoCacheMgrWrapper,
-        >,
+        EasyFileSystem<PageCacheManager, BlockCacheManager>,
     > = EasyFileSystem::open(
         BLOCK_DEVICE.clone(),
-        Arc::new(Mutex::new(InfoCacheMgrWrapper::new()))
+        Arc::new(Mutex::new(BlockCacheManager::new()))
     );
     pub static ref ROOT: Arc<DirectoryTreeNode> = Arc::new(DirectoryTreeNode::new(Inode::new(
         FILE_SYSTEM.root_clus,
@@ -421,6 +417,36 @@ pub fn open(
         open_root_inode().open_by_relative_path(path, flags, type_)
     } else {
         working_inode.open_by_relative_path(path, flags, type_)
+    }
+}
+
+pub fn oom()
+{
+    const MAX_FAIL_TIME: usize = 16;
+    let mut fail_time = 0;
+    fn dfs(u: &Arc<DirectoryTreeNode>) -> usize
+    {
+        let mut dropped = u.inode.oom();
+        let read_lock = u.children.try_read();
+        if read_lock.is_none() {
+            return dropped;
+        }
+        let read_lock = read_lock.unwrap();
+        for (_, v) in read_lock.iter() {
+            dropped += dfs(v);
+        }
+        dropped
+    }
+    loop {
+        let dropped = dfs(&ROOT);
+        if dropped > 0 {
+            log::warn!("recycle pages: {}", dropped);
+            break;
+        }
+        fail_time += 1;
+        if fail_time >= MAX_FAIL_TIME {
+            panic!("oom error");
+        }
     }
 }
 
