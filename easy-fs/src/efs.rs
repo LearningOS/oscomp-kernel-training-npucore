@@ -96,7 +96,7 @@ impl<T: CacheManager, F: CacheManager> EasyFileSystem<T, F> {
                 0,
                 0,
                 || -> alloc::vec::Vec<usize> { alloc::vec::Vec::new() },
-                Arc::clone(&block_device),
+                &block_device,
             )
             .lock()
             .read(0, |super_block: &BPB| {

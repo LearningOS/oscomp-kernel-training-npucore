@@ -323,7 +323,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T,F> {
             return 0;
         }
         let lock = lock.unwrap();
-        log::info!("[vfs:oom]: size: {}", lock.size);
+        log::warn!("[vfs:oom]: size: {}", lock.size);
         let neighbor = |inner_cache_id|{self.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
         lock.file_cache_mgr.oom(neighbor, &self.fs.block_device)
     }
@@ -369,7 +369,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     block_id,
                     start_cache,
                     || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, start_cache) },
-                    Arc::clone(&self.fs.block_device),
+                    &self.fs.block_device,
                 )
                 .lock()
                 // I know hardcoding 4096 in is bad, but I can't get around Rust's syntax checking...
@@ -426,7 +426,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     block_id,
                     start_cache,
                     || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, start_cache) },
-                    Arc::clone(&self.fs.block_device),
+                    &self.fs.block_device,
                 )
                 .lock()
                 // I know hardcoding 4096 in is bad, but I can't get around Rust's syntax checking...

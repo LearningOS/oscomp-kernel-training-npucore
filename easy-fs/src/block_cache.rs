@@ -45,7 +45,7 @@ pub trait CacheManager {
         block_id: usize,
         inner_cache_id: usize,
         neighbor: FUNC,
-        block_device: Arc<dyn BlockDevice>,
+        block_device: &Arc<dyn BlockDevice>,
     ) -> Arc<Mutex<Self::CacheType>>
     where
         FUNC: Fn() -> Vec<usize>;
