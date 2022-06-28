@@ -1,6 +1,4 @@
 mod address;
-mod block_cache_block;
-mod block_cache_page;
 mod elf_cache;
 mod frame_allocator;
 mod heap_allocator;
