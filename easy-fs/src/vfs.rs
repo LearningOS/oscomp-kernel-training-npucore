@@ -1,4 +1,3 @@
-use alloc::collections::BTreeMap;
 use core::convert::TryInto;
 use core::mem;
 use core::ops::Mul;
@@ -23,48 +22,6 @@ pub struct FileContent<T: CacheManager> {
     pub file_cache_mgr: T,
     /// If this file is a directory, hint will record the position of last directory entry(the first byte is 0x00).
     pub hint: u32,
-}
-
-/// The functionality of ClusLi & Inode can be merged.
-/// The struct for file information
-
-pub enum OpenTabCmd<T: CacheManager, F: CacheManager> {
-    InsertFile(Arc<Inode<T, F>>),
-    GetFileByInode(u64),
-    DropFileByInode(u64),
-    /// The former is the previous ino and the latter is the new.
-    ChInode(u64, u64),
-}
-
-#[allow(unused)]
-impl<T: CacheManager, F: CacheManager> OpenTabCmd<T, F> {
-    /// Returns `true` if the file or inode is [`Inode`].
-    ///
-    /// [`Inode`]: FileOrInode::Inode
-    fn is_inode(&self) -> bool {
-        matches!(self, Self::GetFileByInode(..))
-    }
-    /// Returns `true` if the file or inode is [`File`].
-    ///
-    /// [`File`]: FileOrInode::File
-    fn is_file(&self) -> bool {
-        matches!(self, Self::InsertFile(..))
-    }
-    fn as_file(&self) -> Option<&Inode<T, F>> {
-        if let Self::InsertFile(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    fn as_inode(&self) -> Option<&u64> {
-        if let Self::GetFileByInode(v) = self {
-            Some(v)
-        } else {
-            None
-        }
-    }
 }
 
 pub struct InodeTime {
@@ -229,23 +186,20 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         clus_list: &Vec<u32>, 
         inner_cache_id: usize
     ) -> Vec<usize> {
-        assert!([1,2,4,8].contains(&self.fs.sec_per_clus));
         let sec_per_clus = self.fs.sec_per_clus as usize;
         let byts_per_sec = self.fs.byts_per_sec as usize;
-        let required_sec_num = T::CACHE_SZ / byts_per_sec;
-        let required_clus_num = required_sec_num / sec_per_clus;
-        let mut cluster_id = inner_cache_id * required_clus_num;
+        let sec_per_cache = T::CACHE_SZ / byts_per_sec;
+        let mut sec_id = inner_cache_id * sec_per_cache;
         let mut block_ids = Vec::new();
-        for _ in 0..required_clus_num {
+        for _ in 0..8 {
+            let cluster_id = sec_id / sec_per_clus;
             if cluster_id >= clus_list.len() {
                 break;
             }
-            log::trace!("[get_neighboring_sec] cluster_id: {}", clus_list[cluster_id]);
+            let offset = sec_id % sec_per_clus;
             let start_block_id = self.fs.first_sector_of_cluster(clus_list[cluster_id]) as usize;
-            for i in start_block_id..start_block_id + sec_per_clus {
-                block_ids.push(i);
-            }
-            cluster_id += 1;
+            block_ids.push(start_block_id + offset);
+            sec_id += 1;
         }
         log::debug!("[get_neighboring_sec] block_ids: {:?}", block_ids);
         block_ids
@@ -357,60 +311,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         dir_ent.set_size(new_size);
         log::trace!("[modify_size] new_size: {}", new_size);
-    }
-}
-
-/// Open File Table
-impl<T: CacheManager, F: CacheManager> Inode<T, F> {
-    /// Open file table static operation function.
-    pub fn open_tab(file: OpenTabCmd<T, F>) -> Option<Arc<Self>> {
-        static mut ORG_LI: usize = 0;
-        static mut V: Vec<(u64, u64)> = Vec::new(); // (pre,now)
-        unsafe {
-            if ORG_LI == 0 {
-                ORG_LI = &mut (Mutex::new(BTreeMap::new())) as *mut Mutex<BTreeMap<u64, Arc<Self>>>
-                    as usize;
-            }
-            /// The macro is a must.
-            /// It's an error to use `let` construct to instanitiate a variable with generic parameters.
-            macro_rules! tree {
-                () => {
-                    *(ORG_LI as *mut Mutex<BTreeMap<u64, Arc<Self>>>)
-                };
-            }
-            match file {
-                OpenTabCmd::InsertFile(f) => {
-                    let ino = f.get_inode_num();
-                    let arc = tree!().lock().insert(ino.unwrap_or(0) as u64, f.clone());
-                    return None;
-                }
-                OpenTabCmd::GetFileByInode(i) => {
-                    let lock = tree!().lock();
-                    lock.get(&i).map(|i| i.clone()).or_else(|| {
-                        if let Some((_, next)) = V.iter().find(|(pre, _)| *pre == i) {
-                            lock.get(next).map(|i| i.clone())
-                        } else {
-                            None
-                        }
-                    })
-                }
-                OpenTabCmd::DropFileByInode(i) => {
-                    // Should panic if file isn't found.
-                    let mut lock = tree!().lock();
-                    if let Some((_, next)) = V.iter().find(|&(pre, _)| *pre == i) {
-                        lock.remove(next);
-                    }
-                    lock.remove(&i)
-                }
-                OpenTabCmd::ChInode(pre, next) => {
-                    let mut lock = tree!().lock();
-                    V.push((pre, next));
-                    let arc = lock.remove(&pre).unwrap();
-                    lock.insert(next, arc);
-                    return None;
-                }
-            }
-        }
     }
 }
 
