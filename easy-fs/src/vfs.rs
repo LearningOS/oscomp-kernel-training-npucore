@@ -458,7 +458,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut start_cache = 0;
         let mut cache_list = Vec::<Arc<Mutex<T::CacheType>>>::new();
         loop {
-            if start_cache >= lock.size as usize / T::CACHE_SZ {
+            if start_cache * T::CACHE_SZ >= lock.size as usize {
                 break;
             }
             let block_id = self.get_block_id(&lock, start_cache as u32).unwrap() as usize;
