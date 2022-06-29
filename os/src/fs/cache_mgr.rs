@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use easy_fs::{BlockDevice, Cache, CacheManager};
 use spin::Mutex;
 use crate::config::{PAGE_SIZE_BITS, PAGE_SIZE};
-use crate::mm::{FrameTracker, frame_alloc, PhysPageNum, KERNEL_SPACE, PageTableEntry};
+use crate::mm::{FrameTracker, frame_alloc};
 
 const PAGE_BUFFERS: usize = 8;
 const BUFFER_SIZE: usize = 512;
@@ -101,7 +101,7 @@ impl BlockCacheManager {
     fn try_get_block_cache(
         &self,
         block_id: usize,
-        inner_cache_id: usize,
+        _inner_cache_id: usize,
     ) -> Option<Arc<Mutex<BufferCache>>> {
         for buffer_cache in &self.cache_pool {
             let mut locked = buffer_cache.lock();
@@ -139,7 +139,7 @@ impl CacheManager for BlockCacheManager {
     fn try_get_block_cache(
         &self,
         block_id: usize,
-        inner_cache_id: usize,
+        _inner_cache_id: usize,
     ) -> Option<Arc<Mutex<Self::CacheType>>> {
         for buffer_cache in &self.cache_pool {
             let mut locked = buffer_cache.lock();
@@ -157,7 +157,7 @@ impl CacheManager for BlockCacheManager {
         &self,
         block_id: usize,
         inner_cache_id: usize,
-        neighbor: FUNC,
+        _neighbor: FUNC,
         block_device: &Arc<dyn BlockDevice>,
     ) -> Arc<Mutex<Self::CacheType>>
     where
@@ -231,17 +231,6 @@ impl PageCache {
         }
     }
 
-    pub fn get_ppn(&self) -> PhysPageNum {
-        self.tracker.ppn
-    }
-
-    pub fn get_pte(&self) -> PageTableEntry {
-        KERNEL_SPACE
-            .lock()
-            .translate(self.get_ppn().0.into())
-            .unwrap()
-    }
-
     pub fn get_tracker(&self) -> Arc<FrameTracker> {
         self.tracker.clone()
     }
@@ -252,7 +241,6 @@ impl PageCache {
         block_device: &Arc<dyn BlockDevice>
     ) {
         assert!(block_ids.len() <= PAGE_BUFFERS);
-        log::trace!("[PageCache :: read_in], block_ids {:?}", block_ids);
         for (i, block_id) in block_ids.iter().enumerate() {
             let buf = unsafe {
                 self.page_ptr
@@ -302,7 +290,7 @@ impl CacheManager for PageCacheManager {
 
     fn try_get_block_cache(
         &self,
-        block_id: usize,
+        _block_id: usize,
         inner_cache_id: usize,
     ) -> Option<Arc<Mutex<PageCache>>> {
         let lock = self.cache_pool.lock();
@@ -321,7 +309,7 @@ impl CacheManager for PageCacheManager {
 
     fn get_block_cache<FUNC>(
         &self,
-        block_id: usize,
+        _block_id: usize,
         inner_cache_id: usize,
         neighbor: FUNC,
         block_device: &Arc<dyn BlockDevice>,
@@ -368,9 +356,13 @@ impl CacheManager for PageCacheManager {
 
         for inner_cache_id in &*self.allocated_cache.lock() {
             let inner_cache_id = *inner_cache_id;
-            log::warn!("inner_id: {}", inner_cache_id);
-            let mut inner_lock = lock[inner_cache_id].as_ref().unwrap().lock();
-            if Arc::strong_count(&inner_lock.tracker) > 1{
+            let inner = lock[inner_cache_id].as_ref().unwrap();
+            if Arc::strong_count(inner) > 1 {
+                new_allocated_cache.push(inner_cache_id);
+                continue;
+            }
+            let mut inner_lock = inner.lock();
+            if Arc::strong_count(&inner_lock.tracker) > 1 {
                 new_allocated_cache.push(inner_cache_id);
             }
             else if inner_lock.priority > 0 {

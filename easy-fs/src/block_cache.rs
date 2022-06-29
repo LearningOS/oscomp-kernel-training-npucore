@@ -58,6 +58,6 @@ pub trait CacheManager {
     where
         FUNC: Fn(usize) -> Vec<usize>
     {
-        0
+        unreachable!()
     }
 }

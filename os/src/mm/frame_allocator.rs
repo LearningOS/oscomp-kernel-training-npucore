@@ -120,9 +120,10 @@ pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     if ret.is_some() {
         ret
     } else {
-        log::warn!("Hit GC");
-        fs::oom();
-        log::warn!("Cache GC finished");
+        crate::show_frame_consumption! {
+            "GC";
+            fs::oom();
+        };
         FRAME_ALLOCATOR
             .write()
             .alloc()
@@ -191,10 +192,10 @@ macro_rules! show_frame_consumption {
         let __frame_consumption_before = crate::mm::unallocated_frames();
         $($statement)*
         let __frame_consumption_after = crate::mm::unallocated_frames();
-        debug!("[{}] consumed frames: {}, last frames: {}", $place, (__frame_consumption_before - __frame_consumption_after) as isize, __frame_consumption_after)
+        log::debug!("[{}] consumed frames: {}, last frames: {}", $place, (__frame_consumption_before - __frame_consumption_after) as isize, __frame_consumption_after)
     };
     ($place:literal, $before:ident) => {
-        debug!(
+        log::debug!(
             "[{}] consumed frames:{}, last frames:{}",
             $place,
             ($before - crate::mm::unallocated_frames()) as isize,

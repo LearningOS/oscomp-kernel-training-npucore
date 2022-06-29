@@ -549,7 +549,6 @@ impl TaskControlBlock {
 fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> isize {
     let buffer = unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, file.size()) };
     let frames = file.get_all_cache_frame();
-    warn!("get_all_cache_frame passed!");
 
     crate::mm::KERNEL_SPACE
         .lock()
@@ -559,14 +558,12 @@ fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) 
             frames,
         )
         .unwrap();
-    warn!("insert_program_area passed!");
 
     let task = current_task().unwrap();
     show_frame_consumption! {
         "task_exec";
         task.load_elf(buffer, argv_vec, envp_vec);
     }
-    warn!("load_elf passed!");
     // remove elf area
     crate::mm::KERNEL_SPACE
         .lock()
