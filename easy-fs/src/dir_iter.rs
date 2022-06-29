@@ -97,7 +97,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
         let mut dir_ent = FATDirEnt::empty();
         if self.offset.is_some()
             && self.offset.unwrap() < self.lock.size
-            && self.inode.read_at_block_cache(
+            && self.inode.read_at_block_cache_lock(
                 &mut self.lock,
                 self.offset.unwrap() as usize,
                 dir_ent.as_bytes_mut(),
@@ -165,7 +165,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
     /// # Arguments
     /// `ent`: The directory entry we want to write to
     pub fn write_to_current_ent(&mut self, ent: &FATDirEnt) {
-        if self.inode.write_at_block_cache(
+        if self.inode.write_at_block_cache_lock(
             &mut self.lock,
             self.offset.unwrap() as usize,
             ent.as_bytes(),
@@ -185,7 +185,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
                 return None;
             }
             self.inode
-                .read_at_block_cache(&mut self.lock, offset as usize, dir_ent.as_bytes_mut());
+                .read_at_block_cache_lock(&mut self.lock, offset as usize, dir_ent.as_bytes_mut());
             match self.mode {
                 DirIterMode::Enum => (),
                 _ => {
@@ -205,7 +205,7 @@ impl<'a, T: CacheManager, F: CacheManager> DirIter<'a, T, F> {
                 return None;
             }
             self.offset = self.offset.map(|offset| offset - STEP_SIZE);
-            self.inode.read_at_block_cache(
+            self.inode.read_at_block_cache_lock(
                 &mut self.lock,
                 self.offset.unwrap() as usize,
                 dir_ent.as_bytes_mut(),

@@ -195,7 +195,7 @@ impl OSInode {
         if flags.contains(OpenFlags::O_TRUNC) {
             let mut file_content = current_treenode.inode.file_content.lock();
             let diff = -(file_content.size as isize);
-            current_treenode.inode.modify_size(&mut file_content, diff);
+            current_treenode.inode.modify_size_lock(&mut file_content, diff);
         }
         let os_inode = Arc::from(OSInode::new(readable, writable, current_treenode));
         if flags.contains(OpenFlags::O_APPEND) {
@@ -293,7 +293,7 @@ impl OSInode {
         let sz = self.inner.inode.get_file_size();
         self.inner
             .inode
-            .modify_size(&mut file_content_lock, -(sz as i64) as isize);
+            .modify_size_lock(&mut file_content_lock, -(sz as i64) as isize);
     }
 
     pub fn delete(&self) {
@@ -370,7 +370,7 @@ impl OSInode {
 
 lazy_static! {
     pub static ref FILE_SYSTEM: Arc<
-        EasyFileSystem<PageCacheManager, BlockCacheManager>,
+        EasyFileSystem<BlockCacheManager>,
     > = EasyFileSystem::open(
         BLOCK_DEVICE.clone(),
         Arc::new(Mutex::new(BlockCacheManager::new()))
@@ -433,7 +433,7 @@ pub fn open(
 
 pub fn oom()
 {
-    const MAX_FAIL_TIME: usize = 16;
+    const MAX_FAIL_TIME: usize = 6;
     let mut fail_time = 0;
     fn dfs(u: &Arc<DirectoryTreeNode>) -> usize
     {
@@ -448,10 +448,11 @@ pub fn oom()
         }
         dropped
     }
+    log::warn!("[oom] start oom");
     loop {
         let dropped = dfs(&ROOT);
         if dropped > 0 {
-            log::warn!("recycle pages: {}", dropped);
+            log::warn!("[oom] recycle pages: {}", dropped);
             break;
         }
         fail_time += 1;
@@ -477,7 +478,7 @@ impl File for OSInode {
             let read_size =
                 self.inner
                     .inode
-                    .read_at_block_cache(&mut file_cont_lock, *offset, *slice);
+                    .read_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
             if read_size == 0 {
                 break;
             }
@@ -495,7 +496,7 @@ impl File for OSInode {
             let write_size =
                 self.inner
                     .inode
-                    .write_at_block_cache(&mut file_cont_lock, *offset, *slice);
+                    .write_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
             assert_eq!(write_size, slice.len());
             *offset += write_size;
             total_write_size += write_size;
@@ -516,7 +517,7 @@ impl File for OSInode {
                 let len =
                     self.inner
                         .inode
-                        .read_at_block_cache(&mut file_cont_lock, *offset, buffer);
+                        .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len
@@ -526,7 +527,7 @@ impl File for OSInode {
                 let len =
                     self.inner
                         .inode
-                        .read_at_block_cache(&mut file_cont_lock, *offset, buffer);
+                        .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len
@@ -547,7 +548,7 @@ impl File for OSInode {
                 let len =
                     self.inner
                         .inode
-                        .write_at_block_cache(&mut file_cont_lock, *offset, buffer);
+                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len
@@ -557,7 +558,7 @@ impl File for OSInode {
                 let len =
                     self.inner
                         .inode
-                        .write_at_block_cache(&mut file_cont_lock, *offset, buffer);
+                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len

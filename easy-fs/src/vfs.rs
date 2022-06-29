@@ -76,7 +76,7 @@ pub struct Inode<T: CacheManager, F: CacheManager> {
     /// The parent directory of this inode
     pub parent_dir: Mutex<Option<(Arc<Self>, u32)>>,
     /// file system
-    pub fs: Arc<EasyFileSystem<T, F>>,
+    pub fs: Arc<EasyFileSystem<F>>,
     /// Struct to hold time related information
     pub time: Mutex<InodeTime>,
 }
@@ -115,7 +115,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         file_type: DiskInodeType,
         size: Option<u32>,
         parent_dir: Option<(Arc<Self>, u32)>,
-        fs: Arc<EasyFileSystem<T, F>>,
+        fs: Arc<EasyFileSystem<F>>,
     ) -> Arc<Self> {
         let file_cache_mgr = T::new();
         let clus_list = match fst_clus {
@@ -201,7 +201,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             block_ids.push(start_block_id + offset);
             sec_id += 1;
         }
-        log::debug!("[get_neighboring_sec] block_ids: {:?}", block_ids);
         block_ids
     }
     /// Check if file type is directory
@@ -231,7 +230,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Get block id corresponding to the blk
     #[inline(always)]
-    fn get_block_id(&self, lock: &MutexGuard<FileContent<T>>, blk: u32) -> Option<u32> {
+    fn get_block_id(
+        &self, 
+        lock: &MutexGuard<FileContent<T>>, 
+        blk: u32
+    ) -> Option<u32> {
         let idx = blk as usize / self.fs.sec_per_clus as usize;
         let clus_list = &lock.clus_list;
         if idx >= clus_list.len() {
@@ -241,13 +244,28 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let offset = blk % self.fs.sec_per_clus as u32;
         Some(base + offset)
     }
+    /// Open the root directory
+    pub fn root_inode(efs: &Arc<EasyFileSystem<F>>) -> Arc<Self> {
+        let rt_clus = efs.root_clus;
+        // release efs lock
+        Inode::new(
+            rt_clus,
+            DiskInodeType::Directory,
+            None,
+            None,
+            Arc::clone(efs),
+        )
+    }
 }
 
 /// File Content Operation
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Allocate required clusters
-    fn alloc_clus(&self, lock: &mut MutexGuard<FileContent<T>>, alloc_num: usize) {
-        log::trace!("[alloc_clus] alloc_num: {}", alloc_num);
+    fn alloc_clus(
+        &self, 
+        lock: &mut MutexGuard<FileContent<T>>, 
+        alloc_num: usize
+    ) {
         let clus_list = &mut lock.clus_list;
         let mut new_clus_list = self.fs.fat.alloc(
             &self.fs.block_device,
@@ -258,10 +276,13 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Deallocate required cluster
     /// If the required number is greater than the number of clusters in the file, all clusters will be deallocated
-    fn dealloc_clus(&self, lock: &mut MutexGuard<FileContent<T>>, dealloc_num: usize) {
+    fn dealloc_clus(
+        &self, 
+        lock: &mut MutexGuard<FileContent<T>>, 
+        dealloc_num: usize
+    ) {
         let clus_list = &mut lock.clus_list;
         let dealloc_num = dealloc_num.min(clus_list.len());
-        log::trace!("[dealloc_clus]: dealloc_num: {}", dealloc_num);
         let mut dealloc_list = Vec::<u32>::new();
         for _ in 0..dealloc_num {
             dealloc_list.push(clus_list.pop().unwrap());
@@ -278,11 +299,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// # Warning
     /// This function will lock parent's file content. May cause DEADLOCK
     /// This function does not modify its parent file(because we change current file's size), we are going to modify it when it is deleted. 
-    pub fn modify_size(
+    pub fn modify_size_lock(
         &self, 
         lock: &mut MutexGuard<FileContent<T>>, 
-        diff: isize) {
-        log::trace!("[modify_size] diff: {}", diff);
+        diff: isize
+    ) {
         let mut dir_ent = FATDirEnt::empty();
 
         // This operation is ignored if the result size is negative
@@ -311,7 +332,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             }
         }
         dir_ent.set_size(new_size);
-        log::trace!("[modify_size] new_size: {}", new_size);
     }
 }
 
@@ -323,11 +343,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T,F> {
             return 0;
         }
         let lock = lock.unwrap();
-        log::warn!("[vfs:oom]: size: {}", lock.size);
         let neighbor = |inner_cache_id|{self.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
-        let tmp = lock.file_cache_mgr.oom(neighbor, &self.fs.block_device);
-        log::warn!("[vfs:oom]: finish!");
-        tmp
+        lock.file_cache_mgr.oom(neighbor, &self.fs.block_device)
     }
 }
 
@@ -340,7 +357,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// * `buf`: The destination buffer of the read data
     /// * `offset`: The offset
     /// * `block_device`: the block_dev
-    pub fn read_at_block_cache(
+    pub fn read_at_block_cache_lock(
         &self,
         lock: &mut MutexGuard<FileContent<T>>,
         offset: usize,
@@ -354,10 +371,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         let mut start_cache = start / T::CACHE_SZ;
         let mut read_size = 0;
-        log::trace!(
-            "[rd_at_blk_cache] st,end,st_ch,buf.len:{:?}",
-            (start, end, start_cache, buf.len())
-        );
         loop {
             // calculate end of current block
             let mut end_current_block = (start / T::CACHE_SZ + 1) * T::CACHE_SZ;
@@ -390,7 +403,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         read_size
     }
-    pub fn write_at_block_cache(
+    
+    #[inline(always)]
+    pub fn read_at_block_cache(
+        &self,
+        offset: usize,
+        buf: &mut [u8],
+    ) -> usize {
+        let mut lock = self.file_content.lock();
+        self.read_at_block_cache_lock(&mut lock, offset, buf)
+    }
+
+    pub fn write_at_block_cache_lock(
         &self,
         lock: &mut MutexGuard<FileContent<T>>,
         offset: usize,
@@ -399,23 +423,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut start = offset;
         let old_size = lock.size as usize;
         let diff_len = buf.len() as isize + offset as isize - old_size as isize;
-        log::trace!("[wr_at_blk_cache] diff{},size{}", diff_len, old_size);
         if diff_len > 0 as isize {
             // allocate as many blocks as possible.
-            log::trace!("[wr_at_blk_cache] trying to modify size...");
-            log::trace!("[wr_at_blk_cache] diff{},size{}", diff_len, old_size);
-            self.modify_size(lock, diff_len);
-            log::trace!("[wr_at_blk_cache] \"file.size\":{}", lock.size);
+            self.modify_size_lock(lock, diff_len);
         }
         let end = (offset + buf.len()).min(lock.size as usize);
 
         assert!(start <= end);
+
         let mut start_cache = start / T::CACHE_SZ;
         let mut write_size = 0;
-        log::trace!(
-            "[wr_at_blk_cache] st,end,st_ch,wr_sz, buf.len:{:?}",
-            (start, end, start_cache, write_size, buf.len())
-        );
         loop {
             // calculate end of current block
             let mut end_current_block = (start / T::CACHE_SZ + 1) * T::CACHE_SZ;
@@ -439,10 +456,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     dst.copy_from_slice(src);
                 });
             write_size += block_write_size;
-            log::trace!(
-                "[wr_at_blk_cache] end_cur_blk blk_wr_sz,blk_id,wr_sz:{:?}",
-                (end_current_block, block_write_size, block_id, write_size)
-            );
             // move to next block
             if end_current_block == end {
                 break;
@@ -453,25 +466,56 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         write_size
     }
 
+    #[inline(always)]
+    pub fn write_at_block_cache(
+        &self,
+        offset: usize,
+        buf: &[u8],
+    ) -> usize {
+        let mut lock = self.file_content.lock();
+        self.write_at_block_cache_lock(&mut lock, offset, buf)
+    }
+
+    pub fn get_single_cache(
+        &self,
+        inner_id: usize
+    ) -> Arc<Mutex<T::CacheType>> {
+        let lock = self.file_content.lock();
+        let block_id = self.get_block_id(&lock, inner_id as u32).unwrap() as usize;
+        lock.file_cache_mgr
+            .get_block_cache(
+                block_id,
+                inner_id,
+                || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, inner_id) },
+                &self.fs.block_device,
+            )
+    }
+
+    pub fn get_single_cache_lock(
+        &self,
+        lock: &MutexGuard<FileContent<T>>,
+        inner_id: usize
+    ) -> Arc<Mutex<T::CacheType>> {
+        let block_id = self.get_block_id(&lock, inner_id as u32).unwrap() as usize;
+        lock.file_cache_mgr
+            .get_block_cache(
+                block_id,
+                inner_id,
+                || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, inner_id) },
+                &self.fs.block_device,
+            )
+    }
+
     pub fn get_all_cache(&self) -> Vec<Arc<Mutex<T::CacheType>>> {
         let lock = self.file_content.lock();
-        let mut start_cache = 0;
+        let mut inner_id = 0;
         let mut cache_list = Vec::<Arc<Mutex<T::CacheType>>>::new();
         loop {
-            if start_cache * T::CACHE_SZ >= lock.size as usize {
+            if inner_id * T::CACHE_SZ >= lock.size as usize {
                 break;
             }
-            let block_id = self.get_block_id(&lock, start_cache as u32).unwrap() as usize;
-            let cache = 
-                lock.file_cache_mgr
-                    .get_block_cache(
-                        block_id,
-                        start_cache,
-                        || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, start_cache) },
-                        &self.fs.block_device,
-                    );
-            cache_list.push(cache);
-            start_cache += 1;
+            cache_list.push(self.get_single_cache_lock(&lock, inner_id));
+            inner_id += 1;
         }
         cache_list
     }
@@ -487,11 +531,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         mode: DirIterMode,
         forward: bool,
     ) -> DirIter<'a, T, F> {
-        if !self.is_dir() {
-            panic!("this isn't a directory")
-        }
-        let inode = self;
-        DirIter::new(lock, offset, mode, forward, inode)
+        assert!(self.is_dir(), "this isn't a directory");
+        DirIter::new(lock, offset, mode, forward, self)
     }
     /// Set the offset of the last entry in the directory file(first byte is 0x00) to hint 
     /// # Warning
@@ -504,13 +545,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if dir_ent.is_none() {
                 // Means iter reachs the end of file
                 iter.lock.hint = iter.lock.size;
-                log::trace!("[set_hint] hint: {}", iter.lock.hint);
                 return;
             }
             let dir_ent = dir_ent.unwrap();
             if dir_ent.last_and_unused() {
                 iter.lock.hint = iter.get_offset().unwrap();
-                log::trace!("[set_hint] hint: {}", iter.lock.hint);
                 return;
             }
         }
@@ -539,8 +578,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         lock: &mut MutexGuard<FileContent<T>>
     ) -> Result<(), ()> {
         let diff_size = self.fs.clus_size();
-        self.modify_size(lock, diff_size as isize);
-        log::debug!("[expand_dir_size] new_size: {}", lock.size);
+        self.modify_size_lock(lock, diff_size as isize);
         Ok(())
     }
     /// Shrink directory file's size to fit **hint**(the offset from end of file)
@@ -558,8 +596,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 // For directory file, it has at least one cluster
                 .max(self.fs.clus_size());
         let diff_size = new_size as isize - lock.size as isize;
-        self.modify_size(lock, diff_size as isize);
-        log::debug!("[shrink_dir_size] new_size: {}", lock.size);
+        self.modify_size_lock(lock, diff_size as isize);
         Ok(())
     }
     /// Allocate directory entries required for new file.
@@ -573,7 +610,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         alloc_num: usize,
     ) -> Result<(u32, MutexGuard<'a, FileContent<T>>), 
                  MutexGuard<'a, FileContent<T>>> {
-        log::debug!("[alloc_dir_ent]alloc num:{:?}", alloc_num);
         let offset = lock.hint;
         let mut iter = self.dir_iter(lock, None, DirIterMode::Enum, FORWARD);
         iter.set_iter_offset(offset);
@@ -591,7 +627,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             // We assume that all entries after `hint` are valid
             // That's why we use `hint`. It can reduce the cost of iterating over used entries
             found_free_dir_ent += 1;
-            log::trace!("[alloc_dir_ent]{:?}", iter.get_offset());
             if found_free_dir_ent >= alloc_num {
                 let offset = iter.get_offset().unwrap();
                 // Set hint
@@ -605,7 +640,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 }
                 
                 let lock = iter.lock;
-                log::debug!("[alloc_dir_ent]found! end offset: {}, hint: {}", offset, lock.hint);
                 return Ok((offset, lock));
             }
         }
@@ -619,9 +653,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         &self,
         offset: u32
     ) -> Result<FATDirEnt,()> {
-        log::trace!("[get_dir_ent]: offset: {}", offset);
         let mut dir_ent = FATDirEnt::empty();
-        if self.read_at_block_cache(
+        if self.read_at_block_cache_lock(
             &mut self.file_content.lock(),
             offset as usize,
             dir_ent.as_bytes_mut()
@@ -641,8 +674,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         offset: u32,
         dir_ent: FATDirEnt
     ) -> Result<(),()> {
-        log::trace!("[set_dir_ent]: offset: {}, dir_ent: {:?}", offset, dir_ent);
-        if self.write_at_block_cache(
+        if self.write_at_block_cache_lock(
             &mut self.file_content.lock(), 
             offset as usize, 
             dir_ent.as_bytes()
@@ -699,8 +731,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 break;
             }
         }
-        log::trace!("[get_all_dir_ent] inode:{:?}, offset:{}, short_ent:{:?}, long_ents:{:?}", 
-                    self.get_inode_num(), offset, short_ent, long_ents);
         Ok((short_ent, long_ents))
     }
     /// Delete derectory entries, including short and long entries
@@ -717,7 +747,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut iter = self.dir_iter(lock, Some(offset), DirIterMode::UsedIter, BACKWARD);
 
         iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
-        log::debug!("[delete_dir_ent] inode: {:?}, offset: {:?}", self.get_inode_num(), iter.get_offset());
         // Check if this directory entry is only a short directory entry
         {
             let dir_ent = iter.next();
@@ -741,8 +770,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if !dir_ent.is_long() {
                 return Err(());
             }
-            log::trace!("[delete_dir_ent] offset: {:?}, dir_ent: {:?}, name: {:?}", 
-                iter.get_offset(), dir_ent, dir_ent.get_name());
             iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
             iter.next();
             if dir_ent.is_last_long_dir_ent() {
@@ -805,9 +832,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 long_entry: long_ent,
             });
         }
-        
-        log::debug!("[create_dir_ent] inode: {:?}, offset: {}",
-                self.get_inode_num(), short_ent_offset);
         Ok(short_ent_offset)
     }
     /// Modify current directory file's ".." directory entry
@@ -831,7 +855,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if dir_ent.get_name() == ".." {
                 dir_ent.set_fst_clus(parent_dir_clus_num);
                 iter.write_to_current_ent(&dir_ent);
-                log::trace!("[modify_parent_dir_entry]: new clus: {}", parent_dir_clus_num);
                 return Ok(());
             }
         } 
@@ -1184,11 +1207,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             .walk();
         match walker.find(|(name, _)| name.as_str() == req_name.as_str()) {
             Some((name, short_ent)) => {
-                log::trace!("[easy-fs: find_local] Query name: {} found", req_name);
+                log::trace!("[find_local] Query name: {} found", req_name);
                 Ok(Some((name, short_ent, walker.iter.get_offset().unwrap())))
             }
             None => {
-                log::trace!("[easy-fs: find_local] Query name: {} not found", req_name);
+                log::trace!("[find_local] Query name: {} not found", req_name);
                 Ok(None)
             }
         }
@@ -1222,7 +1245,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         if !self.is_dir() {
             return Err(());
         }
-        log::debug!("[dirent_info] offset: {}, length: {}", offset, length);
         let lock = self.file_content.lock();
         let size = lock.size;
         let mut walker = self
@@ -1250,11 +1272,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     return Ok(v);
                 }
             };
-            log::trace!(
-                "{}, offset: {}",
-                last_name,
-                walker.iter.get_offset().unwrap() as usize
-            );
             v.push((
                 last_name,
                 next_dirent_offset,
@@ -1264,7 +1281,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             last_name = name;
             last_short_ent = short_ent;
         }
-        log::trace!("[dirent_info] v: {:?}", v);
         Ok(v)
     }
 }
