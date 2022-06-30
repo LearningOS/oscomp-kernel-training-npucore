@@ -67,10 +67,6 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
         }
     }
     #[inline(always)]
-    pub fn get_lock(&mut self) -> &mut MutexGuard<'b, FileContent<T>> {
-        self.lock
-    }
-    #[inline(always)]
     /// Get iterator corresponding offset
     pub fn get_offset(&self) -> Option<u32> {
         self.offset
@@ -100,7 +96,7 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
     pub fn current_clone(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent = FATDirEnt::empty();
         if self.offset.is_some()
-            && self.offset.unwrap() < self.lock.size
+            && self.offset.unwrap() < self.lock.get_file_size()
             && self.inode.read_at_block_cache_lock(
                 &mut self.lock,
                 self.offset.unwrap() as usize,
@@ -138,7 +134,7 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
             // offset = None    => 0
             // otherwise        => offset + STEP_SIZE
             let offset = self.offset.map(|offset| offset + STEP_SIZE).unwrap_or(0);
-            if offset >= self.lock.size {
+            if offset >= self.lock.get_file_size() {
                 return None;
             }
             self.inode
