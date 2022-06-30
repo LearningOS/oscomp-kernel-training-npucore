@@ -31,14 +31,20 @@ do
     sudo cp -r ../user/target/riscv64gc-unknown-none-elf/release/${programname%.rs} ${U_FAT32_DIR}/fs/${programname%.rs}
 done
 
+sudo mkdir -p ${U_FAT32_DIR}/fs/syscall
 for programname in $(ls ../user/riscv64)
 do
-    sudo cp -r ../user/riscv64/$programname ${U_FAT32_DIR}/fs/
+    sudo cp -r ../user/riscv64/$programname ${U_FAT32_DIR}/fs/syscall
 done
 
 for programname in $(ls -A ../user/busybox_lua_testsuites)
 do
     sudo cp -r ../user/busybox_lua_testsuites/$programname ${U_FAT32_DIR}/fs/
+done
+
+for programname in $(ls -A ../user/disk)
+do
+    sudo cp -r ../user/disk/$programname ${U_FAT32_DIR}/fs/
 done
 
 sudo umount ${U_FAT32_DIR}/fs
