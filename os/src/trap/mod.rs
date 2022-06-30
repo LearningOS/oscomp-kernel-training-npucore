@@ -87,7 +87,7 @@ pub fn trap_handler() -> ! {
             // This is where we handle the page fault.
             if inner.memory_set.do_page_fault(addr).is_err() {
                 inner.add_signal(Signals::SIGSEGV);
-                log::debug!("{:?}", inner.siginfo);
+                log::debug!("{:?}", inner.sigstatus);
             }
         }
         Trap::Exception(Exception::IllegalInstruction) => {
