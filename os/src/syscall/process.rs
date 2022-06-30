@@ -1,4 +1,4 @@
-use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE};
+use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE, USER_STACK_SIZE};
 use crate::mm::{
     copy_from_user, copy_to_user, copy_to_user_string, mmap, munmap, sbrk, translated_byte_buffer,
     translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
@@ -126,7 +126,7 @@ pub fn sys_nanosleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
         while !remain.is_zero() {
             let inner = task.acquire_inner_lock();
             if inner
-                .siginfo
+                .sigstatus
                 .signal_pending
                 .difference(inner.sigmask)
                 .is_empty()
@@ -573,6 +573,16 @@ pub fn sys_prlimit(
         drop(inner);
         if !old_limit.is_null() {
             match resource {
+                Resource::STACK => {
+                    copy_to_user(
+                        token,
+                        &(RLimit {
+                            rlim_cur: USER_STACK_SIZE,
+                            rlim_max: USER_STACK_SIZE,
+                        }),
+                        old_limit,
+                    );
+                }
                 Resource::NPROC => {
                     copy_to_user(
                         token,
@@ -711,6 +721,10 @@ pub fn sys_sigprocmask(how: u32, set: usize, oldset: usize) -> isize {
         how, set, oldset
     );
     sigprocmask(how, set as *const Signals, oldset as *mut Signals)
+}
+
+pub fn sys_sigtimedwait(set: usize, info: usize, timeout: usize) -> isize {
+    sigtimedwait(set as *const Signals, info as *mut SigInfo, timeout as *const TimeSpec)
 }
 
 pub fn sys_sigreturn() -> isize {

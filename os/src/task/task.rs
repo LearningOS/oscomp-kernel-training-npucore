@@ -51,7 +51,7 @@ pub struct TaskControlBlockInner {
     pub address: ProcAddress,
     pub heap_bottom: usize,
     pub heap_pt: usize,
-    pub siginfo: SigInfo,
+    pub sigstatus: SigStatus,
     pub pgid: usize,
     pub rusage: Rusage,
     pub clock: ProcClock,
@@ -171,7 +171,7 @@ impl TaskControlBlockInner {
         }
     }
     pub fn add_signal(&mut self, signal: Signals) {
-        self.siginfo.signal_pending.insert(signal);
+        self.sigstatus.signal_pending.insert(signal);
     }
     pub fn update_process_times_enter_trap(&mut self) {
         let now = TimeVal::now();
@@ -272,7 +272,7 @@ impl TaskControlBlock {
                 address: ProcAddress::new(),
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
-                siginfo: SigInfo::new(),
+                sigstatus: SigStatus::new(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
                 timer: [ITimerVal::new(); 3],
@@ -450,7 +450,7 @@ impl TaskControlBlock {
         inner.heap_bottom = program_break;
         inner.heap_pt = program_break;
         // flush signal handler
-        inner.siginfo.signal_handler = BTreeMap::new();
+        inner.sigstatus.signal_handler = BTreeMap::new();
         // flush cloexec fd
         inner.fd_table.iter_mut().for_each(|fd| match fd {
             Some(file) => {
@@ -498,7 +498,7 @@ impl TaskControlBlock {
                 //cloned(usu. still inherited)
                 working_inode: parent_inner.working_inode.clone(),
                 working_dir: parent_inner.working_dir.clone(),
-                siginfo: parent_inner.siginfo.clone(),
+                sigstatus: parent_inner.sigstatus.clone(),
                 //new/empty
                 parent: Some(Arc::downgrade(self)),
                 children: Vec::new(),
