@@ -1428,6 +1428,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
 // metadata
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
+    /// Return the `time` field of `self`
+    pub fn time(&self) -> MutexGuard<InodeTime> {
+        self.time.lock()
+    }
     /// Return the `stat` structure to `self` file.
     /// # Argument
     /// `lock`: The lock of current file content
@@ -1435,7 +1439,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// (file size, access time, modify time, create time, inode number)
     pub fn stat_lock(
         &self,
-        lock: &mut MutexGuard<FileContent<T>>
+        lock: &MutexGuard<FileContent<T>>
     ) -> (i64, i64, i64, i64, u64) {
         let time = self.time.lock();
         (
