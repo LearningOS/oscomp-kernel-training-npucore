@@ -148,7 +148,7 @@ impl OSInode {
                 treenode
             } else if let Some((_, short_ent, offset)) = current_treenode
                 .inode
-                .find_local(component.to_string())
+                .find_local_lock(&mut current_treenode.inode.lock(), component.to_string())
                 .unwrap()
             {
                 let new_treenode = Arc::new(DirectoryTreeNode::new(Inode::from_ent(
@@ -166,8 +166,9 @@ impl OSInode {
                     return Ok(Arc::new(OSInode::new(readable, writable, {
                         log::trace!("[open_by_relative_path] create: {}", component);
                         let new_treenode = Arc::new(DirectoryTreeNode::new(
-                            InodeImpl::create(
+                            InodeImpl::create_lock(
                                 &current_treenode.inode,
+                                &mut current_treenode.inode.lock(),
                                 component.to_string(),
                                 type_,
                             )
@@ -179,7 +180,7 @@ impl OSInode {
                             .insert(component.to_string(), new_treenode.clone());
                         log::debug!(
                             "[create] result: {:?}",
-                            current_treenode.inode.find_local(component.to_string())
+                            current_treenode.inode.find_local_lock(&mut current_treenode.inode.lock(), component.to_string())
                         );
                         new_treenode
                     })));
@@ -193,8 +194,8 @@ impl OSInode {
             return Err(EEXIST);
         }
         if flags.contains(OpenFlags::O_TRUNC) {
-            let mut file_content = current_treenode.inode.file_content.lock();
-            let diff = -(file_content.size as isize);
+            let mut file_content = current_treenode.inode.lock();
+            let diff = -(file_content.get_file_size() as isize);
             current_treenode.inode.modify_size_lock(&mut file_content, diff);
         }
         let os_inode = Arc::from(OSInode::new(readable, writable, current_treenode));
@@ -211,9 +212,10 @@ impl OSInode {
 
         assert!(self.inner.inode.is_dir());
         let mut offset = self.offset.lock();
+        let mut file_cont_lock = self.inner.inode.lock();
         log::debug!(
             "[get_dirent] tot size: {}, offset: {}, count: {}",
-            self.inner.inode.get_file_size(),
+            file_cont_lock.get_file_size(),
             offset,
             count
         );
@@ -221,7 +223,7 @@ impl OSInode {
         let vec = self
             .inner
             .inode
-            .dirent_info(*offset as u32, count / core::mem::size_of::<Dirent>())
+            .dirent_info_lock(&mut file_cont_lock, *offset as u32, count / core::mem::size_of::<Dirent>())
             .unwrap();
         if let Some((_, next_offset, _, _)) = vec.last() {
             *offset = *next_offset;
@@ -284,24 +286,20 @@ impl OSInode {
     }
 
     pub fn size(&self) -> usize {
-        let (size, _, _, _, _) = self.inner.inode.stat();
+        let (size, _, _, _, _) = self.inner.inode.stat_lock(&self.inner.inode.lock());
         return size as usize;
     }
 
     pub fn clear(&self) {
-        let mut file_content_lock = self.inner.inode.file_content.lock();
-        let sz = self.inner.inode.get_file_size();
+        let mut file_cont_lock = self.inner.inode.lock();
+        let sz = file_cont_lock.get_file_size();
         self.inner
             .inode
-            .modify_size_lock(&mut file_content_lock, -(sz as i64) as isize);
+            .modify_size_lock(&mut file_cont_lock, -(sz as i64) as isize);
     }
 
     pub fn delete(&self) {
         Inode::delete_from_disk(self.inner.inode.clone()).unwrap();
-    }
-
-    pub fn get_head_cluster(&self) -> u32 {
-        self.inner.inode.get_file_clus()
     }
 
     pub fn set_offset(&self, off: usize) {
@@ -326,7 +324,7 @@ impl OSInode {
                 }
             }
             SeekWhence::SEEK_END => {
-                let new_offset = self.inner.inode.get_file_size() as isize + offset;
+                let new_offset = self.inner.inode.lock().get_file_size() as isize + offset;
                 if new_offset >= 0 {
                     new_offset
                 } else {
@@ -341,7 +339,7 @@ impl OSInode {
             "[lseek] old offset: {}, new offset: {}, file size: {}",
             old_offset,
             new_offset,
-            self.inner.inode.get_file_size()
+            self.inner.inode.lock().get_file_size()
         );
 
         *self.offset.lock() = new_offset as usize;
@@ -355,7 +353,7 @@ impl OSInode {
             atime,
             mtime
         );
-        let mut inode_time = self.inner.inode.time.lock();
+        let mut inode_time = self.inner.inode.time();
         if let Some(ctime) = ctime {
             inode_time.set_create_time(ctime as u64);
         }
@@ -404,7 +402,7 @@ pub fn open_root_inode() -> Arc<OSInode> {
 
 pub fn list_apps() {
     println!("/**** APPS ****");
-    for (name, short_ent) in ROOT.inode.ls().unwrap() {
+    for (name, short_ent) in ROOT.inode.ls_lock(&mut ROOT.inode.lock()).unwrap() {
         if !short_ent.is_dir() {
             println!("{}", name);
         }
@@ -473,7 +471,7 @@ impl File for OSInode {
         let mut total_read_size = 0usize;
 
         let mut offset = self.offset.lock();
-        let mut file_cont_lock = self.inner.inode.file_content.lock();
+        let mut file_cont_lock = self.inner.inode.lock();
         for slice in buf.buffers.iter_mut() {
             let read_size =
                 self.inner
@@ -491,7 +489,7 @@ impl File for OSInode {
         let mut total_write_size = 0usize;
 
         let mut offset = self.offset.lock();
-        let mut file_cont_lock = self.inner.inode.file_content.lock();
+        let mut file_cont_lock = self.inner.inode.lock();
         for slice in buf.buffers.iter() {
             let write_size =
                 self.inner
@@ -511,7 +509,7 @@ impl File for OSInode {
     /// # Warning
     /// Buffer must be in kernel space
     fn kread(&self, offset: Option<&mut usize>, buffer: &mut [u8]) -> usize {
-        let mut file_cont_lock = self.inner.inode.file_content.lock();
+        let mut file_cont_lock = self.inner.inode.lock();
         match offset {
             Some(offset) => {
                 let len =
@@ -542,7 +540,7 @@ impl File for OSInode {
     /// # Warning
     /// Buffer must be in kernel space
     fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
-        let mut file_cont_lock = self.inner.inode.file_content.lock();
+        let mut file_cont_lock = self.inner.inode.lock();
         match offset {
             Some(offset) => {
                 let len =
@@ -566,7 +564,7 @@ impl File for OSInode {
         }
     }
     fn stat(&self) -> Box<Stat> {
-        let (size, atime, mtime, ctime, ino) = self.inner.inode.stat();
+        let (size, atime, mtime, ctime, ino) = self.inner.inode.stat_lock(&mut self.inner.inode.lock());
         let st_mod: u32 = {
             if self.inner.inode.is_dir() {
                 (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
