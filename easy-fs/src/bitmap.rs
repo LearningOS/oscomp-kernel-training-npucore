@@ -5,7 +5,6 @@ use crate::{
 
 use super::{BlockDevice, BLOCK_SZ};
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
-use log::error;
 use spin::{Mutex, MutexGuard};
 
 const BLOCK_BITS: usize = BLOCK_SZ * 8;
@@ -15,9 +14,9 @@ const FAT_ENTRY_RESERVED_TO_END: u32 = 0x0FFF_FFF8;
 pub const EOC: u32 = 0x0FFF_FFFF;
 /// *In-memory* data structure
 /// In FAT32, there are 2 FATs by default. We use ONLY the first one.
-
 pub struct Fat<T> {
-    pub fat_cache_mgr: Arc<Mutex<T>>,
+    /// Cache manager for fat
+    fat_cache_mgr: Arc<Mutex<T>>,
     /// The first block id of FAT.
     /// In FAT32, this is equal to bpb.rsvd_sec_cnt
     start_block_id: usize,
@@ -32,52 +31,62 @@ pub struct Fat<T> {
 }
 
 impl<T: CacheManager> Fat<T> {
-    fn get_eight_blk(&self, start: u32) -> Vec<usize> {
-        let v = (((self.this_fat_inner_sec_num(start)) & (!7)) + self.start_block_id
-            ..self.start_block_id + (self.this_fat_inner_sec_num(start)) & (!7))
-            .collect();
-        return v;
-    }
     /// Get the next cluster number pointed by current fat entry.
-    pub fn get_next_clus_num(&self, start: u32, block_device: &Arc<dyn BlockDevice>) -> u32 {
+    /// # Arguments
+    /// `current_clus_num`: current cluster number
+    /// `block_device`: pointer of block device
+    /// # Return value
+    /// Next cluster number
+    pub fn get_next_clus_num(
+        &self, 
+        current_clus_num: u32, 
+        block_device: &Arc<dyn BlockDevice>
+    ) -> u32 {
         self.fat_cache_mgr
             .lock()
             .get_block_cache(
-                self.this_fat_sec_num(start) as usize,
-                self.this_fat_inner_cache_num(start),
-                || -> Vec<usize> { self.get_eight_blk(start) },
+                self.this_fat_sec_num(current_clus_num) as usize,
+                usize::MAX,
+                || -> Vec<usize> { unreachable!() },
                 block_device,
             )
             .lock()
             .read(
-                self.this_fat_ent_offset(start) as usize,
+                self.this_fat_ent_offset(current_clus_num) as usize,
                 |fat_entry: &u32| -> u32 { *fat_entry },
             )
             & EOC
     }
-
-    /// In theory, there may also be one function that only reads the first parts, or the needed FAT entries of the file.
+    /// Get all cluster numbers after the current cluster number
+    /// # Arguments
+    /// `current_clus_num`: current cluster number
+    /// `block_device`: pointer of block device
+    /// # Return value
+    /// List of cluster numbers
     pub fn get_all_clus_num(
         &self,
-        mut start: u32,
+        mut current_clus_num: u32,
         block_device: &Arc<dyn BlockDevice>,
     ) -> Vec<u32> {
         let mut v = Vec::new();
         loop {
-            v.push(start);
-            start = self.get_next_clus_num(start, &block_device);
-            if [BAD_BLOCK, FAT_ENTRY_FREE].contains(&start) || start >= FAT_ENTRY_RESERVED_TO_END {
+            v.push(current_clus_num);
+            current_clus_num = self.get_next_clus_num(current_clus_num, &block_device);
+            if [BAD_BLOCK, FAT_ENTRY_FREE].contains(&current_clus_num) || current_clus_num >= FAT_ENTRY_RESERVED_TO_END {
                 break;
             }
         }
         v
     }
 
-    /// Create a new FAT object in memory.
+    /// Constructor for fat
     /// # Argument
-    /// * `rsvd_sec_cnt`: size of BPB
-    /// * `byts_per_sec`: literal meaning
-    /// * `clus`: the total numebr of FAT entries
+    /// `rsvd_sec_cnt`: size in bytes of BPB
+    /// `byts_per_sec`: bytes per sector
+    /// `clus`: the total numebr of FAT entries
+    /// `fat_cache_mgr`: fat cache manager
+    /// # Return value
+    /// Fat
     pub fn new(
         rsvd_sec_cnt: usize,
         byts_per_sec: usize,
@@ -95,43 +104,38 @@ impl<T: CacheManager> Fat<T> {
         }
     }
 
+    /// For a given cluster number, calculate its sector ID in the fat region
+    /// # Argument
+    /// `clus_num`: cluster number
+    /// # Return value
+    /// sector ID
     #[inline(always)]
-    /// Given any valid cluster number N,
-    /// where in the FAT(s) is the entry for that cluster number
-    /// Return the sector number of the FAT sector that contains the entry for
-    /// cluster N in the first FAT
-    pub fn this_fat_inner_cache_num(&self, n: u32) -> usize {
-        let fat_offset = n * 4;
-        fat_offset as usize / T::CACHE_SZ
-    }
-
-    #[inline(always)]
-    /// Given any valid cluster number N,
-    /// where in the FAT(s) is the entry for that cluster number
-    /// Return the sector number of the FAT sector that contains the entry for
-    /// cluster N in the first FAT
-    pub fn this_fat_inner_sec_num(&self, n: u32) -> usize {
-        let fat_offset = n * 4;
-        (fat_offset / (self.byts_per_sec as u32)) as usize
-    }
-    #[inline(always)]
-    /// Given any valid cluster number N,
-    /// where in the FAT(s) is the entry for that cluster number
-    /// Return the sector number of the FAT sector that contains the entry for
-    /// cluster N in the first FAT
-    pub fn this_fat_sec_num(&self, n: u32) -> usize {
-        let fat_offset = n * 4;
+    pub fn this_fat_sec_num(&self, clus_num: u32) -> usize {
+        let fat_offset = clus_num * 4;
         (self.start_block_id as u32 + (fat_offset / (self.byts_per_sec as u32))) as usize
     }
     #[inline(always)]
-    /// Return the offset (measured by bytes) of the entry from the first bit of the sector of the
-    /// n is the ordinal number of the cluster
-    pub fn this_fat_ent_offset(&self, n: u32) -> usize {
-        let fat_offset = n * 4;
+    /// For a given cluster number, calculate its offset in the sector of the fat region
+    /// # Argument
+    /// `clus_num`: cluster number
+    /// # Return value
+    /// offset
+    pub fn this_fat_ent_offset(&self, clus_num: u32) -> usize {
+        let fat_offset = clus_num * 4;
         (fat_offset % (T::CACHE_SZ as u32)) as usize
     }
     /// Assign the cluster entry to `current` to `next`
-    fn set_next_clus(&self, block_device: &Arc<dyn BlockDevice>, current: Option<u32>, next: u32) {
+    /// If `current` is None, ignore this operation
+    /// # Argument
+    /// `block_device`: pointer of block device
+    /// `current`: current cluster number
+    /// `next`: next cluster to set
+    fn set_next_clus(
+        &self, 
+        block_device: &Arc<dyn BlockDevice>, 
+        current: Option<u32>, 
+        next: u32
+    ) {
         if current.is_none() {
             return;
         }
@@ -140,8 +144,8 @@ impl<T: CacheManager> Fat<T> {
             .lock()
             .get_block_cache(
                 self.this_fat_sec_num(current) as usize,
-                self.this_fat_inner_cache_num(current as u32),
-                || -> Vec<usize> { self.get_eight_blk(current) },
+                usize::MAX,
+                || -> Vec<usize> { unreachable!() },
                 block_device,
             )
             .lock()
@@ -154,21 +158,13 @@ impl<T: CacheManager> Fat<T> {
             )
     }
 
-    pub fn cnt_all_fat(&self, block_device: &Arc<dyn BlockDevice>) -> usize {
-        let mut sum = 0;
-        /* println!("[cnt_all_fat] self.clus{:?}", self.vacant_clus); */
-        for i in 0..self.tot_ent as u32 {
-            if self.get_next_clus_num(i, block_device) == FAT_ENTRY_FREE {
-                sum += 1;
-            }
-        }
-        sum
-    }
-
     /// Allocate as many clusters (but not greater than alloc_num) as possible.
+    /// # Argument
     /// `block_device`: The target block_device.
     /// `alloc_num`: The number of clusters to allocate.
     /// `last`: The preceding cluster of the one to be allocated.
+    /// # Return value
+    /// List of cluster numbers
     pub fn alloc(
         &self,
         block_device: &Arc<dyn BlockDevice>,
@@ -183,7 +179,7 @@ impl<T: CacheManager> Fat<T> {
             if last.is_none() {
                 // There is no more free cluster.
                 // Or `last` next cluster is valid.
-                error!("[alloc]: alloc error, last: {:?}", last);
+                log::error!("[alloc]: alloc error, last: {:?}", last);
                 break;
             }
             allocated_cluster.push(last.unwrap());
@@ -193,9 +189,13 @@ impl<T: CacheManager> Fat<T> {
 
     
     /// Find and allocate an cluster from data area.
+    /// # Argument
     /// `block_device`: The target block_device.
     /// `last`: The preceding cluster of the one to be allocated.
-    /// `hlock`: The lock of hint(Fat). This guarantees mutual exclusion between processes.
+    /// `hlock`: The lock of hint(Fat). 
+    /// # Return value
+    /// If successful, return allocated cluster number
+    /// otherwise, return None
     fn alloc_one(
         &self,
         block_device: &Arc<dyn BlockDevice>,
@@ -233,8 +233,12 @@ impl<T: CacheManager> Fat<T> {
     }
 
     /// Find next free cluster from data area.
+    /// # Argument
     /// `start`: The cluster id to traverse to find the next free cluster
     /// `block_device`: The target block_device.
+    /// # Return value
+    /// If successful, return free cluster number
+    /// otherwise, return None
     fn get_next_free_clus(
         &self, 
         start: u32, 
@@ -254,8 +258,9 @@ impl<T: CacheManager> Fat<T> {
     }
 
     /// Free multiple clusters from the data area.
-    /// `block_device`: The target block_device.
-    /// `cluster_list`: The clusters that need to be freed
+    /// # Argument
+    /// `block_device`: Pointer to block_device.
+    /// `cluster_list`: List of clusters that need to be freed
     pub fn free(
         &self, 
         block_device: &Arc<dyn BlockDevice>, 
@@ -269,9 +274,5 @@ impl<T: CacheManager> Fat<T> {
                 lock.push_back(cluster_id);
             }
         }
-    }
-
-    pub fn maximum(&self) -> usize {
-        self.tot_ent * BLOCK_BITS
     }
 }

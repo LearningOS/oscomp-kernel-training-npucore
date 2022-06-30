@@ -1,4 +1,3 @@
-use super::BLOCK_SZ;
 use alloc::{
     format,
     string::{String, ToString},
@@ -176,19 +175,6 @@ pub struct FSInfo {
     /// match the signature bytes used at the same offsets in sector 0.
     trail_sig: u32,
 }
-impl FSInfo {
-    #[allow(unused)]
-    /* fn new(block_offset: usize, bpb: &BPB, block_device: Arc<dyn BlockDevice>) -> Self {
-     *     let mut ret: Self = unsafe { mem::zeroed() };
-     *     get_block_cache(bpb.fs_info.into(), block_device)
-     *         .lock()
-     *         .read(block_offset, |get: &FSInfo| ret = get.clone());
-     *     ret
-     * } */
-    /// Free a cluster if it is marked used.
-    #[allow(unused)]
-    fn free_clus(clus_num: usize) {}
-}
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum DiskInodeType {
@@ -232,7 +218,6 @@ impl Debug for FATDirEnt {
 impl FATDirEnt {
     /// Test whether `self` is a short entry
     /// and whether the short entry name of `self` is the same type of `prefix`.
-
     pub fn gen_short_name_numtail(v: Vec<FATDirEnt>, name_res: &mut [u8; 11]) {
         if v.iter()
             .find(|i| i.get_short_name_array()[..] == name_res[..])
@@ -408,7 +393,6 @@ impl FATDirEnt {
     pub fn is_long(&self) -> bool {
         unsafe { self.short_entry.attr == FATDiskInodeType::AttrLongName }
     }
-    #[allow(unused)]
     pub fn is_short(&self) -> bool {
         !self.is_long()
     }
@@ -446,12 +430,15 @@ impl FATDirEnt {
     pub fn get_short_name_array(&self) -> [u8; 11] {
         unsafe { self.short_entry.name }
     }
+    // Check if is a unused entry
     pub fn unused(&self) -> bool {
         self.last_and_unused() || self.unused_not_last()
     }
+    // Check if is a unused and not last entry, like a gap
     pub fn unused_not_last(&self) -> bool {
         unsafe { self.long_entry.ord == DIR_ENTRY_UNUSED }
     }
+    // Check if is a unused and last entry, marks the end of the directory file
     pub fn last_and_unused(&self) -> bool {
         unsafe { self.long_entry.ord == DIR_ENTRY_LAST_AND_UNUSED }
     }
@@ -463,7 +450,7 @@ impl FATDirEnt {
 pub struct FATShortDirEnt {
     /// name, offset
     pub name: [u8; 11],
-    pub attr: FATDiskInodeType, //?
+    pub attr: FATDiskInodeType,
     pub nt_res: u8,
     pub crt_time_teenth: u8,
     pub crt_time: u16,
@@ -514,7 +501,6 @@ impl FATShortDirEnt {
     pub fn is_dir(&self) -> bool {
         self.attr == FATDiskInodeType::AttrDirectory
     }
-    #[allow(unused)]
     pub fn is_file(&self) -> bool {
         self.attr == FATDiskInodeType::AttrArchive
             || self.attr == FATDiskInodeType::AttrHidden
