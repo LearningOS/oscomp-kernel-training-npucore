@@ -9,20 +9,15 @@ use alloc::sync::Arc;
 pub struct EasyFileSystem<F: CacheManager> {
     /// Partition/Device the FAT32 is hosted on.
     pub block_device: Arc<dyn BlockDevice>,
-
     /// FAT information
     pub fat: Fat<F>,
-
     /// The first data sector beyond the root directory
     pub data_area_start_block: u32,
-
     /// This is set to the cluster number of the first cluster of the root directory,
     /// usually 2 but not required to be 2.
     pub root_clus: u32,
-
     /// sector per cluster, usually 8 for SD card
     pub sec_per_clus: u8,
-
     /// Bytes per sector, 512 for SD card
     pub byts_per_sec: u16,
 }
@@ -43,7 +38,6 @@ impl<F: CacheManager> EasyFileSystem<F> {
     }
 }
 
-// All sorts of accessors
 impl<F: CacheManager> EasyFileSystem<F> {
     pub fn first_data_sector(&self) -> u32 {
         self.data_area_start_block
@@ -55,16 +49,23 @@ impl<F: CacheManager> EasyFileSystem<F> {
 }
 
 impl<F: CacheManager> EasyFileSystem<F> {
-    /// n is the ordinal number of the cluster.
+    /// For a given cluster number, calculate its first sector
+    /// # Arguments
+    /// `clus_num`: cluster number
+    /// # Return Value
+    /// sector number
     #[inline(always)]
-    pub fn first_sector_of_cluster(&self, n: u32) -> u32 {
+    pub fn first_sector_of_cluster(&self, clus_num: u32) -> u32 {
         assert_eq!(self.sec_per_clus.count_ones(), 1);
-        assert!(n >= 2);
+        assert!(clus_num >= 2);
         let start_block = self.data_area_start_block;
-        let offset_blocks = (n - 2) * self.sec_per_clus as u32;
+        let offset_blocks = (clus_num - 2) * self.sec_per_clus as u32;
         start_block + offset_blocks
     }
     /// Open the filesystem object.
+    /// # Argument
+    /// `block_device`: pointer of hardware device
+    /// `index_cache_mgr`: fat cache manager
     pub fn open(
         block_device: Arc<dyn BlockDevice>,
         index_cache_mgr: Arc<spin::Mutex<F>>,
@@ -76,8 +77,8 @@ impl<F: CacheManager> EasyFileSystem<F> {
             .lock()
             .get_block_cache(
                 0,
-                0,
-                || -> alloc::vec::Vec<usize> { alloc::vec::Vec::new() },
+                usize::MAX,
+                || -> alloc::vec::Vec<usize> { unreachable!() },
                 &block_device,
             )
             .lock()
@@ -99,14 +100,5 @@ impl<F: CacheManager> EasyFileSystem<F> {
                 };
                 Arc::new(efs)
             })
-    }
-    /// Look up the first sector denoted by inode_id
-    /// Inode is not natively supported in FAT32. However, fst_clus may be used as the inode_id
-    /// Only path is an UNIQUE id to a file in FAT32.
-    pub fn get_disk_fat_pos(&self, n: u32) -> (u32, usize) {
-        (
-            self.fat.this_fat_sec_num(n) as u32,
-            self.fat.this_fat_ent_offset(n) as usize,
-        )
     }
 }

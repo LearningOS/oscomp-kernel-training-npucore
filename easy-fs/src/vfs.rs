@@ -82,6 +82,7 @@ pub struct Inode<T: CacheManager, F: CacheManager> {
 }
 
 impl<T: CacheManager, F: CacheManager> Drop for Inode<T, F> {
+    /// Before deleting the inode, the file information should be written back to the parent directory
     fn drop(&mut self) {
         if self.parent_dir.lock().is_none() {
             return;
@@ -106,10 +107,12 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Constructor for Inodes
     /// # Arguments
     /// `fst_clus`: The first cluster of the file
-    /// `type_`: The type of the inode determined by the file
+    /// `file_type`: The type of the inode determined by the file
     /// `size`: NOTE: the `size` field should be set to `None` for a directory
     /// `parent_dir`: parent directory
     /// `fs`: The pointer to the file system
+    /// # Return Value
+    /// Pointer to Inode
     pub fn new(
         fst_clus: u32,
         file_type: DiskInodeType,
@@ -157,9 +160,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 /// Basic Funtions
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Get first cluster of inode.
-    /// If cluster list is empty, it will return None.
+    /// # Return Value
+    /// If cluster list isn't empty, it will return the first cluster list number.
+    /// Otherwise it will return None.
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock
     pub fn get_first_clus(&self) -> Option<u32> {
         let lock = self.file_content.lock();
         let clus_list = &lock.clus_list;
@@ -170,17 +175,23 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
     }
     /// Get inode number of inode.
-    /// See first sector number as inode number.
+    /// For convenience, treat the first sector number as the inode number.
+    /// # Return Value
+    /// If cluster list isn't empty, it will return the first sector number.
+    /// Otherwise it will return None. 
+    /// # Warning
+    /// This function will lock self's `file_content`, may cause deadlock
     #[inline(always)]
     pub fn get_inode_num(&self) -> Option<u32> {
         self.get_first_clus()
             .map(|clus| self.fs.first_sector_of_cluster(clus))
     }
-    /// Get the neighboring 8 or fewer(the trailing mod-of-eight blocks of the file) blocks
-    /// of `inner_block_id`, 
+    /// Get a list of `block_id` represented by the given cache index.
     /// # Arguments
     /// `clus_list`: The cluster list
-    /// `inner_cache_id`: The start `clus_list` index 
+    /// `inner_cache_id`: Index of T's file caches (usually 4096 size per cache)
+    /// # Return Value
+    /// List of `block_id`
     pub fn get_neighboring_sec(
         &self,
         clus_list: &Vec<u32>, 
@@ -191,7 +202,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let sec_per_cache = T::CACHE_SZ / byts_per_sec;
         let mut sec_id = inner_cache_id * sec_per_cache;
         let mut block_ids = Vec::new();
-        for _ in 0..8 {
+        for _ in 0..sec_per_cache {
             let cluster_id = sec_id / sec_per_clus;
             if cluster_id >= clus_list.len() {
                 break;
@@ -204,50 +215,73 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         block_ids
     }
     /// Check if file type is directory
+    /// # Return Value
+    /// Bool result
     #[inline(always)]
     pub fn is_dir(&self) -> bool {
         self.file_type == DiskInodeType::Directory
     }
     /// Check if file type is file
+    /// # Return Value
+    /// Bool result
     #[inline(always)]
     pub fn is_file(&self) -> bool {
         self.file_type == DiskInodeType::File
     }
     /// Get file size
+    /// # Return Value
+    /// The file size
     /// # Warning
-    /// This function is an external interface.
-    /// May cause DEADLOCK if called on internal interface
+    /// This function will lock self's `file_content`, may cause deadlock
     pub fn get_file_size(&self) -> u32 {
         self.file_content.lock().size
     }
     /// Get the number of clusters corresponding to the size.
+    /// # Return Value
+    /// The number of clusters
+    /// # Warning
+    /// This function will lock self's `file_content`, may cause deadlock
     pub fn get_file_clus(&self) -> u32 {
         self.total_clus(self.get_file_size())
     }
     /// Get the number of clusters needed after rounding up according to size.
-    fn total_clus(&self, size: u32) -> u32 {
+    /// # Return Value
+    /// The number representing the number of clusters
+    fn total_clus(
+        &self, 
+        size: u32
+    ) -> u32 {
         size.div_ceil(self.fs.clus_size())
     }
-    /// Get block id corresponding to the blk
+    /// Get first block id corresponding to the inner cache index
+    /// # Arguments
+    /// `lock`: The lock of target file content
+    /// `inner_cache_id`: The index of inner cache
+    /// # Return Value
+    /// If `inner_cache_id` is valid, it will return the first block id
+    /// Otherwise it will return None
     #[inline(always)]
     fn get_block_id(
         &self, 
         lock: &MutexGuard<FileContent<T>>, 
-        blk: u32
+        inner_cache_id: u32
     ) -> Option<u32> {
-        let idx = blk as usize / self.fs.sec_per_clus as usize;
+        let idx = inner_cache_id as usize / self.fs.sec_per_clus as usize;
         let clus_list = &lock.clus_list;
         if idx >= clus_list.len() {
             return None;
         }
         let base = self.fs.first_sector_of_cluster(clus_list[idx]);
-        let offset = blk % self.fs.sec_per_clus as u32;
+        let offset = inner_cache_id % self.fs.sec_per_clus as u32;
         Some(base + offset)
     }
     /// Open the root directory
+    /// # Arguments
+    /// `efs`: The pointer to inner file system
+    /// # Return Value
+    /// A pointer to Inode
     pub fn root_inode(efs: &Arc<EasyFileSystem<F>>) -> Arc<Self> {
         let rt_clus = efs.root_clus;
-        // release efs lock
         Inode::new(
             rt_clus,
             DiskInodeType::Directory,
@@ -256,11 +290,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             Arc::clone(efs),
         )
     }
+
 }
 
 /// File Content Operation
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
-    /// Allocate required clusters
+    /// Allocate the required cluster.
+    /// It will allocate as much as possible and then append to `clus_list` in `lock`.
+    /// # Arguments
+    /// `lock`: The lock of target file content
+    /// `alloc_num`: Required number of clusters
     fn alloc_clus(
         &self, 
         lock: &mut MutexGuard<FileContent<T>>, 
@@ -274,8 +313,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         );
         clus_list.append(&mut new_clus_list);
     }
-    /// Deallocate required cluster
-    /// If the required number is greater than the number of clusters in the file, all clusters will be deallocated
+    /// Release a certain number of clusters from `clus_list` in `lock`.
+    /// `clus_list` will be emptied when the quantity to be freed exceeds the available quantity.
+    /// # Arguments
+    /// `lock`: The lock of target file content
+    /// `dealloc_num`: The number of clusters that need to be released
     fn dealloc_clus(
         &self, 
         lock: &mut MutexGuard<FileContent<T>>, 
@@ -294,10 +336,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// This operation is ignored if the result size is negative
     /// # Arguments
     /// `lock`: The lock of target file content
-    /// `diff`: The change in size
+    /// `diff`: The change in file size
     /// # Warning
-    /// This function will lock parent's file content. May cause DEADLOCK
-    /// This function does not modify its parent file(because we change current file's size), we are going to modify it when it is deleted. 
+    /// This function will not modify its parent directory (since we changed the size of the current file), 
+    /// we will modify it when it is deleted. 
     pub fn modify_size_lock(
         &self, 
         lock: &mut MutexGuard<FileContent<T>>, 
@@ -332,10 +374,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         dir_ent.set_size(new_size);
     }
-}
 
-/// Out of memory
-impl<T: CacheManager, F: CacheManager> Inode<T,F> {
+    /// When memory is low, it is called to free its cache
+    /// it just tries to lock it's file contents to free memory
+    /// # Return Value
+    /// The number of freed pages
     pub fn oom(&self) -> usize{
         let lock = self.file_content.try_lock();
         if lock.is_none() {
@@ -349,13 +392,15 @@ impl<T: CacheManager, F: CacheManager> Inode<T,F> {
 
 /// IO
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
-    /// The `get_block_cache` version of read_at
-    /// Read the inode(file) denoted by self, starting from offset.
-    /// read till the minor of `buf.len()` and `self.size`
+    /// Read file content into buffer.
+    /// It will read from `offset` until the end of the file or buffer can't read more
+    /// This operation is ignored if start is greater than or equal to end.
     /// # Arguments    
-    /// * `buf`: The destination buffer of the read data
-    /// * `offset`: The offset
-    /// * `block_device`: the block_dev
+    /// `lock`: The lock of target file content
+    /// `offset`: The start offset in file
+    /// `buf`: The buffer to receive data
+    /// # Return Value
+    /// The number of number of bytes read.
     pub fn read_at_block_cache_lock(
         &self,
         lock: &mut MutexGuard<FileContent<T>>,
@@ -402,7 +447,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         read_size
     }
-    
+    /// Read file content into buffer.
+    /// It will read from `offset` until the end of the file or buffer can't read more
+    /// This operation is ignored if start is greater than or equal to end.
+    /// # Arguments    
+    /// `offset`: The start offset in file
+    /// `buf`: The buffer to receive data
+    /// # Return Value
+    /// The number of number of bytes read.
+    /// # Warning
+    /// This function will lock self's `file_content`, may cause deadlock
     #[inline(always)]
     pub fn read_at_block_cache(
         &self,
@@ -413,6 +467,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         self.read_at_block_cache_lock(&mut lock, offset, buf)
     }
 
+    /// Write buffer into file content.
+    /// It will start to write from `offset` until the buffer is written,
+    /// and when the write exceeds the end of file, it will modify file's size.
+    /// If hard disk space id low, it will try to write as much data as possible.
+    /// # Arguments    
+    /// `lock`: The lock of target file content
+    /// `offset`: The start offset in file
+    /// `buf`: The buffer to write data
+    /// # Return Value
+    /// The number of number of bytes write.
     pub fn write_at_block_cache_lock(
         &self,
         lock: &mut MutexGuard<FileContent<T>>,
@@ -423,7 +487,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let old_size = lock.size as usize;
         let diff_len = buf.len() as isize + offset as isize - old_size as isize;
         if diff_len > 0 as isize {
-            // allocate as many blocks as possible.
+            // allocate as many clusters as possible.
             self.modify_size_lock(lock, diff_len);
         }
         let end = (offset + buf.len()).min(lock.size as usize);
@@ -465,6 +529,17 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         write_size
     }
 
+    /// Write buffer into file content.
+    /// It will start to write from `offset` until the buffer is written,
+    /// and when the write exceeds the end of file, it will modify file's size.
+    /// If hard disk space id low, it will try to write as much data as possible.
+    /// # Arguments    
+    /// `offset`: The start offset in file
+    /// `buf`: The buffer to write data
+    /// # Return Value
+    /// The number of number of bytes write.
+    /// # Warning
+    /// This function will lock self's `file_content`, may cause deadlock
     #[inline(always)]
     pub fn write_at_block_cache(
         &self,
@@ -475,36 +550,45 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         self.write_at_block_cache_lock(&mut lock, offset, buf)
     }
 
+    /// Get a page cache corresponding to `inner_cache_id`.
+    /// # Arguments    
+    /// `inner_cache_id`: The index of inner cache
+    /// # Return Value
+    /// Pointer to page cache
+    /// # Warning
+    /// This function will lock self's `file_content`, may cause deadlock
     pub fn get_single_cache(
         &self,
-        inner_id: usize
+        inner_cache_id: usize
     ) -> Arc<Mutex<T::CacheType>> {
         let lock = self.file_content.lock();
-        let block_id = self.get_block_id(&lock, inner_id as u32).unwrap() as usize;
-        lock.file_cache_mgr
-            .get_block_cache(
-                block_id,
-                inner_id,
-                || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, inner_id) },
-                &self.fs.block_device,
-            )
+        self.get_single_cache_lock(&lock, inner_cache_id)
     }
 
+    /// Get a page cache corresponding to `inner_cache_id`.
+    /// # Arguments    
+    /// `lock`: The lock of target file content
+    /// `inner_cache_id`: The index of inner cache
+    /// # Return Value
+    /// Pointer to page cache
     pub fn get_single_cache_lock(
         &self,
         lock: &MutexGuard<FileContent<T>>,
-        inner_id: usize
+        inner_cache_id: usize
     ) -> Arc<Mutex<T::CacheType>> {
-        let block_id = self.get_block_id(&lock, inner_id as u32).unwrap() as usize;
+        let block_id = self.get_block_id(&lock, inner_cache_id as u32).unwrap() as usize;
         lock.file_cache_mgr
             .get_block_cache(
                 block_id,
-                inner_id,
-                || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, inner_id) },
+                inner_cache_id,
+                || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, inner_cache_id) },
                 &self.fs.block_device,
             )
     }
 
+    /// Get all page caches corresponding to file
+    /// # Return Value
+    /// List of pointers to the page cache
     pub fn get_all_cache(&self) -> Vec<Arc<Mutex<T::CacheType>>> {
         let lock = self.file_content.lock();
         let mut inner_id = 0;
@@ -522,23 +606,30 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
 /// Directory Operation
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
-    /// Iter Construct
-    fn dir_iter<'a>(
+    /// A Constructor for `DirIter`(See `dir_iter.rs/DirIter` for details).
+    /// # Arguments    
+    /// `lock`: The lock of target file content
+    /// `offset`: The start offset of iterator
+    /// `mode`: The mode of iterator
+    /// `forward`: The direction of the iterator iteration
+    /// # Return Value
+    /// Pointer to iterator
+    fn dir_iter<'a, 'b>(
         &'a self,
-        lock: MutexGuard<'a, FileContent<T>>,
+        lock: &'a mut MutexGuard<'b, FileContent<T>>,
         offset: Option<u32>,
         mode: DirIterMode,
         forward: bool,
-    ) -> DirIter<'a, T, F> {
+    ) -> DirIter<'a, 'b, T, F> {
         assert!(self.is_dir(), "this isn't a directory");
         DirIter::new(lock, offset, mode, forward, self)
     }
     /// Set the offset of the last entry in the directory file(first byte is 0x00) to hint 
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock
     fn set_hint(&self) {
-        let lock = self.file_content.lock();
-        let mut iter = self.dir_iter(lock, None, DirIterMode::Enum, FORWARD);
+        let mut lock = self.file_content.lock();
+        let mut iter = self.dir_iter(&mut lock, None, DirIterMode::Enum, FORWARD);
         loop {
             let dir_ent = iter.next();
             if dir_ent.is_none() {
@@ -554,16 +645,19 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
     }
     /// Check if current file is an empty directory
+    /// If a file contains only "." and "..", we consider it to be an empty directory 
+    /// # Return Value
+    /// Bool result
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock
     pub fn is_empty_dir(&self) -> bool {
         if !self.is_dir() {
             return false;
         }
-        let lock = self.file_content.lock();
-        let iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD).walk();
+        let mut lock = self.file_content.lock();
+        let iter = self.dir_iter(&mut lock, None, DirIterMode::Used, FORWARD).walk();
         for (name, _) in iter {
-            if [".", ".."].contains(&name.as_str()) {
+            if [".", ".."].contains(&name.as_str()) == false {
                 return false;
             }
         }
@@ -571,7 +665,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Expand directory file's size(a cluster)
     /// # Arguments
-    /// `lock`: The lock of FileContent
+    /// `lock`: The lock of target file content
+    /// # Return Value
+    /// Default is Ok
     fn expand_dir_size(
         &self, 
         lock: &mut MutexGuard<FileContent<T>>
@@ -580,10 +676,12 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         self.modify_size_lock(lock, diff_size as isize);
         Ok(())
     }
-    /// Shrink directory file's size to fit **hint**(the offset from end of file)
-    /// For directory files, it has at least one cluster and should care
+    /// Shrink directory file's size to fit `hint`.
+    /// For directory files, it has at least one cluster, which should be noted.
     /// # Arguments
-    /// `lock`: The lock of FileContent
+    /// `lock`: The lock of target file content
+    /// # Return Value
+    /// Default is Ok
     fn shrink_dir_size(
         &self,
         lock: &mut MutexGuard<FileContent<T>>
@@ -599,16 +697,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         Ok(())
     }
     /// Allocate directory entries required for new file.
-    /// Return the offset of the last entry and the lock.
+    /// The allocated directory entries is a contiguous segment.
     /// # Arguments
-    /// `lock`: The lock of FileContent
-    /// `alloc_num`: The number of directory entries required
-    fn alloc_dir_ent<'a>(
-        &'a self,
-        lock: MutexGuard<'a, FileContent<T>>,
+    /// `lock`: The lock of target file content
+    /// `alloc_num`: Required number of directory entries
+    /// # Return Value
+    /// It will return lock anyway.
+    /// If successful, it will also return the offset of the last allocated entry.
+    fn alloc_dir_ent(
+        &self,
+        lock: &mut MutexGuard<FileContent<T>>,
         alloc_num: usize,
-    ) -> Result<(u32, MutexGuard<'a, FileContent<T>>), 
-                 MutexGuard<'a, FileContent<T>>> {
+    ) -> Result<u32, ()> {
         let offset = lock.hint;
         let mut iter = self.dir_iter(lock, None, DirIterMode::Enum, FORWARD);
         iter.set_iter_offset(offset);
@@ -618,8 +718,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             if dir_ent.is_none() {
                 if self.expand_dir_size(&mut iter.lock).is_err() {
                     log::error!("[alloc_dir_ent]expand directory size error");
-                    let lock = iter.lock;
-                    return Err(lock);
+                    return Err(());
                 }
                 continue;
             }
@@ -637,17 +736,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     // Means iter reachs the end of file
                     iter.lock.hint = iter.lock.size;
                 }
-                
-                let lock = iter.lock;
-                return Ok((offset, lock));
+                return Ok(offset);
             }
         }
     }
-    /// Get a derectory entries
+    /// Get a directory entries.
     /// # Arguments
     /// `offset`: The offset of entry
+    /// # Return Value
+    /// If successful, it will return a `FATDirEnt`(See `layout.rs/FATDirEnt` for details)
+    /// Otherwise, it will return Error
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock
     fn get_dir_ent(
         &self,
         offset: u32
@@ -662,12 +762,15 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         Ok(dir_ent)
     }
-    /// Get a derectory entries
+    /// Write the directory entry back to the file contents.
     /// # Arguments
-    /// `offset`: The offset of entry
+    /// `offset`: The offset of file to write
     /// `dir_ent`: The buffer needs to write back
+    /// # Return Value
+    /// If successful, it will return Ok.
+    /// Otherwise, it will return Error.
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock
     fn set_dir_ent(
         &self,
         offset: u32,
@@ -682,11 +785,14 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         } 
         Ok(())
     }
-    /// Get derectory entries, including short and long entries
+    /// Get directory entries, including short and long entries
     /// # Arguments
     /// `offset`: The offset of short entry
+    /// # Return Value
+    /// If successful, it returns a pair of a short directory entry and a long directory entry list.
+    /// Otherwise, it will return Error.
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock
     fn get_all_dir_ent(
         &self,
         offset: u32
@@ -695,8 +801,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let short_ent: FATShortDirEnt;
         let mut long_ents = Vec::<FATLongDirEnt>::new();
 
-        let lock = self.file_content.lock();
-        let mut iter = self.dir_iter(lock, Some(offset), DirIterMode::Enum, BACKWARD);
+        let mut lock = self.file_content.lock();
+        let mut iter = self.dir_iter(&mut lock, Some(offset), DirIterMode::Enum, BACKWARD);
         
         short_ent = *iter.current_clone().unwrap()
                          .get_short_ent().unwrap();
@@ -732,18 +838,21 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         Ok((short_ent, long_ents))
     }
-    /// Delete derectory entries, including short and long entries
+    /// Delete derectory entries, including short and long entries.
     /// # Arguments
     /// `offset`: The offset of short entry
+    /// # Return Value
+    /// If successful, it will return Ok.
+    /// Otherwise, it will return Error.
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock.
     fn delete_dir_ent(
         &self,
         offset: u32
     ) -> Result<(),()> {
         assert!(self.is_dir());
-        let lock = self.file_content.lock();
-        let mut iter = self.dir_iter(lock, Some(offset), DirIterMode::UsedIter, BACKWARD);
+        let mut lock = self.file_content.lock();
+        let mut iter = self.dir_iter(&mut lock, Some(offset), DirIterMode::Used, BACKWARD);
 
         iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
         // Check if this directory entry is only a short directory entry
@@ -800,27 +909,30 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut lock = iter.lock;
         self.shrink_dir_size(&mut lock)
     }
-    /// Create new disk space for derectory entries, including short and long entries
+    /// Create new disk space for derectory entries, including short and long entries.
     /// # Arguments
-    /// `short_ent`: Short entry
-    /// `long_ents`: Long entries 
+    /// `short_ent`: short entry
+    /// `long_ents`: list of long entries 
+    /// # Return Value
+    /// If successful, it will return Ok.
+    /// Otherwise, it will return Error.
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock.
     fn create_dir_ent(
         &self,
         short_ent: FATShortDirEnt,
         long_ents: Vec<FATLongDirEnt>,
     ) -> Result<u32, ()> {
         assert!(self.is_dir());
-        let lock = self.file_content.lock();
-        let (short_ent_offset, lock) = 
-            match self.alloc_dir_ent(lock, 1 + long_ents.len()) {
-                Ok((offset, lock)) => (offset, lock),
+        let mut lock = self.file_content.lock();
+        let short_ent_offset = 
+            match self.alloc_dir_ent(&mut lock, 1 + long_ents.len()) {
+                Ok(offset) => offset,
                 Err(_) => return Err(()),
             };
         // We have graranteed we have alloc enough entries
         // So we use Enum mode
-        let mut iter = self.dir_iter(lock, Some(short_ent_offset), DirIterMode::Enum, BACKWARD);
+        let mut iter = self.dir_iter(&mut lock, Some(short_ent_offset), DirIterMode::Enum, BACKWARD);
         
         iter.write_to_current_ent(&FATDirEnt {
             short_entry: short_ent,
@@ -836,15 +948,18 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Modify current directory file's ".." directory entry
     /// # Arguments
     /// `parent_dir_clus_num`: The first cluster number of the parent directory
+    /// # Return Value
+    /// If successful, it will return Ok.
+    /// Otherwise, it will return Error.
     /// # Warning
-    /// This function will lock self's file_content, may cause deadlock
+    /// This function will lock self's `file_content`, may cause deadlock
     fn modify_parent_dir_entry(
         &self,
         parent_dir_clus_num: u32
     ) -> Result<(), ()> {
         assert!(self.is_dir());
-        let lock = self.file_content.lock();
-        let mut iter = self.dir_iter(lock, None, DirIterMode::UsedIter, FORWARD);
+        let mut lock = self.file_content.lock();
+        let mut iter = self.dir_iter(&mut lock, None, DirIterMode::Used, FORWARD);
         loop {
             let dir_ent = iter.next();
             if dir_ent.is_none() {
@@ -867,6 +982,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 /// We can recycle resources at will, and don't care about the resource competition of this inode
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Delete the short and the long entry of `self` from `parent_dir`
+    /// # Return Value
+    /// If successful, it will return Ok.
+    /// Otherwise, it will return Error.
+    /// # Warning
+    /// This function will lock self's parent_dir, may cause deadlock
     fn delete_self_dir_ent(&self) -> Result<(), ()>{
         if let Some((par_inode, offset)) = &*self.parent_dir.lock() {
             return par_inode.delete_dir_ent(*offset);
@@ -876,6 +996,15 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Delete the file from the disk,
     /// deallocating both the directory entries (whether long or short),
     /// and the occupied clusters.
+    /// # Arguments
+    /// `trash`: the pointer to Inode needs to be deleted 
+    /// # Return Value
+    /// If successful, it will return Ok.
+    /// Otherwise, it will return Error.
+    /// # Warning
+    /// This function will lock trash's `file_content`, may cause deadlock
+    /// Make sure Arc has a strong count of 1.
+    /// Make sure all its caches are not held by anyone else.
     pub fn delete_from_disk(trash: Arc<Self>) -> Result<(), ()> {
         if trash.is_dir() && !trash.is_empty_dir() {
             return Err(())
@@ -886,8 +1015,12 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         lock.size = 0;
         // Before deallocating the cluster, we should sync cache data with disk.
         // Or we may found data is written by global cache manager(non-repeatable read in database).
-        // Sync cache (todo!!!)
-
+        // Sync cache
+        let neighbor = |inner_cache_id|{trash.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
+        let block_device = &trash.fs.block_device;
+        for _ in 0..4 {
+            lock.file_cache_mgr.oom(neighbor, block_device);
+        }
         // Deallocate clusters
         let clus_list = mem::take(&mut lock.clus_list);
         trash.fs.fat.mult_dealloc(&trash.fs.block_device, clus_list);
@@ -903,20 +1036,24 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 /// Create
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Create a file or a directory from the parent.
+    /// The parent directory will write the new file directory entries.
+    /// # Arguments
+    /// `parent_dir` the pointer to parent directory inode
+    /// `name` new file's name
+    /// `file_type` new file's file type
+    /// # Return Value
+    /// If successful, it will return the new file inode
+    /// Otherwise, it will return Error.
+    /// # Warning
+    /// This function will lock the `file_content` of the parent directory, may cause deadlock
+    /// The length of name should be less than 256(for ascii), otherwise the file system can not store.
+    /// Make sure there are no duplicate names in parent_dir.
     pub fn create(
         parent_dir: &Arc<Self>,
         name: String,
         file_type: DiskInodeType,
-    ) -> Result<Arc<Inode<T, F>>, ()> {
-        if parent_dir.is_file()
-            || name.len() >= 256
-            || parent_dir
-                .ls()
-                .unwrap()
-                .iter()
-                .find(|(existed_name, _)| existed_name.to_uppercase() == name.to_uppercase())
-                .is_some()
-        {
+    ) -> Result<Arc<Self>, ()> {
+        if parent_dir.is_file() || name.len() >= 256 {
             Err(())
         } else {
             log::debug!("[create] par_inode: {:?}, name: {:?}, file_type: {:?}", 
@@ -943,7 +1080,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                     Err(_) => return Err(()),
                 };
             // Generate current file
-            let current_file = Inode::from_ent(&parent_dir, &short_ent, short_ent_offset);
+            let current_file = Self::from_ent(&parent_dir, &short_ent, short_ent_offset);
             // If file_type is Directory, set first 3 directory entry
             if file_type == DiskInodeType::Directory {
                 let mut lock = current_file.file_content.lock();
@@ -960,7 +1097,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// _NOTE_: the first entry is of number 0 for `long_ent_num`
     /// # Arguments
     /// `name`: File name
-    /// `long_ent_index`: The index of long entry
+    /// `long_ent_index`: The index of long entry(start from 0)
+    /// # Return Value
+    /// A long name slice
     fn gen_long_name_slice(
         name: &String,
         long_ent_index: usize,
@@ -979,6 +1118,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// # Arguments
     /// `parent_dir`: The pointer to parent directory
     /// `name`: File name
+    /// # Return Value
+    /// A short name slice
+    /// # Warning
+    /// This function will lock the `file_content` of the parent directory, may cause deadlock
     fn gen_short_name_slice(
         parent_dir: &Arc<Self>,
         name: &String,
@@ -991,8 +1134,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let mut short_name_slice = [0u8; 11];
         short_name_slice.copy_from_slice(&short_name.as_bytes()[0..11]);
 
-        let lock = parent_dir.file_content.lock();
-        let iter = parent_dir.dir_iter(lock, None, DirIterMode::ShortIter, FORWARD);
+        let mut lock = parent_dir.file_content.lock();
+        let iter = parent_dir.dir_iter(&mut lock, None, DirIterMode::Short, FORWARD);
         FATDirEnt::gen_short_name_numtail(iter.collect(), &mut short_name_slice);
         short_name_slice
     }
@@ -1000,6 +1143,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// # Arguments
     /// `parent_dir`: The pointer to parent directory
     /// `name`: File name
+    /// # Return Value
+    /// A pair of a short name slice and a list of long name slices
+    /// # Warning
+    /// This function will lock the `file_content` of the parent directory, may cause deadlock
     fn gen_name_slice(
         parent_dir: &Arc<Self>,
         name: &String,
@@ -1021,6 +1168,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// `name`: File name
     /// `fst_clus`: The first cluster of constructing file
     /// `file_type`: The file type of constructing file
+    /// # Return Value
+    /// A pair of a short directory entry and a list of long name entries
+    /// # Warning
+    /// This function will lock the `file_content` of the parent directory, may cause deadlock
     fn gen_dir_ent(
         parent_dir: &Arc<Self>,
         name: &String,
@@ -1053,6 +1204,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// `parent_dir`: the parent directory inode pointer
     /// `ent`: the short entry as the source of information
     /// `offset`: the offset of the short directory entry in the `parent_dir`
+    /// # Return Value
+    /// Pointer to Inode
     pub fn from_ent(parent_dir: &Arc<Self>, ent: &FATShortDirEnt, offset: u32) -> Arc<Self> {
         Self::new(
             ent.get_first_clus(),
@@ -1072,13 +1225,20 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
 
     /// Fill out an empty directory with only the '.' & '..' entries.
+    /// # Arguments
+    /// `parent_dir`: the pointer of parent directory inode 
+    /// `current_dir`: the pointer of new directory inode
+    /// `current_lock`: the lock of new directory inode's file content
+    /// `fst_clus`: the first cluster number of current file
+    /// # Warning
+    /// This function will lock the `file_content` of the parent directory, may cause deadlock
     fn fill_empty_dir(
-        parent_dir: &Arc<Inode<T, F>>,
-        current_dir: &Arc<Inode<T, F>>,
-        current_lock: MutexGuard<FileContent<T>>,
+        parent_dir: &Arc<Self>,
+        current_dir: &Arc<Self>,
+        mut current_lock: MutexGuard<FileContent<T>>,
         fst_clus: u32,
     ) {
-        let mut iter = current_dir.dir_iter(current_lock, None, DirIterMode::Enum, FORWARD);
+        let mut iter = current_dir.dir_iter(&mut current_lock, None, DirIterMode::Enum, FORWARD);
         let mut short_name: [u8; 11] = [' ' as u8; 11];
         //.
         iter.next();
@@ -1096,7 +1256,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         iter.write_to_current_ent(&FATDirEnt {
             short_entry: FATShortDirEnt::from_name(
                 short_name,
-                parent_dir.get_file_clus(),
+                parent_dir.get_first_clus().unwrap(),
                 DiskInodeType::Directory,
             ),
         });
@@ -1109,12 +1269,16 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 // rename
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Rename file, move current file to target directory and set new name 
-    /// # NOTE: 
     /// This operation doesn't care about if this is invalid, just move current file to target directory
     /// This operation doesn't guarantee file consistence, but we won't read the file again, we just need to modify the memory, this won't affect much(may wrong?).
     /// # Arguments
     /// `new_parent_dir`: The target directory
-    /// `name`: Tarrget file name
+    /// `name`: Target file name
+    /// # Return Value
+    /// If successful, it will return the new file inode
+    /// Otherwise, it will return Error.
+    /// # Warning
+    /// This function will lock the `file_content` of the current file and the parent directory, may cause deadlock
     pub fn rename(
         &self,
         new_parent_dir: &Arc<Self>,
@@ -1161,18 +1325,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
 // ls and find local
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
-    ////
-    #[inline(always)]
     /// ls - General Purose file filterer
-    /// # Argument/Modes
-    /// Apart from `None` mode, all modes will quit IMMEDIATELY returning a vector of one after the first successful match.
-    /// Modes are conveyed through enum `DirFilter`. Four modes are provided, namely:
-    /// * `Name(String)`: Used for exact match of names.
-    /// * `FstClus(u64)`: First Cluster matching. Note that this shouldn't be used for zero-sized files for they MAY contain NO by specification.
-    /// For this mode, it returns an Err(()) for the next of reaching the last item.
-    /// * `DirentBegOffset(u32)`: Search should begin with the
-    /// * `None`: List all files in `self`.
-    ///
     /// # WARNING
     /// The definition of OFFSET is CHANGED for this item.
     /// It should point to the NEXT USED entry whether it as a long entry whenever possible or a short entry if no long ones exist.
@@ -1182,16 +1335,24 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// The iterator stops at the last available item when it reaches the end,
     /// returning `None` from then on,
     /// so relying on the offset of the last item to decide whether it has reached an end is not recommended.
+    #[inline(always)]
     pub fn ls(&self) -> Result<Vec<(String, FATShortDirEnt)>, ()> {
         if !self.is_dir() {
             return Err(());
         }
-        let lock = self.file_content.lock();
+        let mut lock = self.file_content.lock();
         Ok(self
-            .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
+            .dir_iter(&mut lock, None, DirIterMode::Used, FORWARD)
             .walk()
             .collect())
     }
+    /// find `req_name` in current directory file
+    /// # Argument
+    /// `req_name`: required file name
+    /// # Return value
+    /// On success, the function returns `Ok(_)`. On failure, multiple chances exist: either the Vec is empty, or the Result is `Err(())`.
+    /// # WARNING
+    /// This function will lock self's `file_content`, may cause deadlock
     pub fn find_local(
         &self,
         req_name: String,
@@ -1200,9 +1361,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             return Err(());
         }
         log::debug!("[find_local] name: {:?}", req_name);
-        let lock = self.file_content.lock();
+        let mut lock = self.file_content.lock();
         let mut walker = self
-            .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
+            .dir_iter(&mut lock, None, DirIterMode::Used, FORWARD)
             .walk();
         match walker.find(|(name, _)| name.as_str() == req_name.as_str()) {
             Some((name, short_ent)) => {
@@ -1220,6 +1381,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 // metadata
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Return the `stat` structure to `self` file.
+    /// # Return value
+    /// (file size, access time, modify time, create time, inode number)
     pub fn stat(&self) -> (i64, i64, i64, i64, u64) {
         let time = self.time.lock();
         (
@@ -1236,6 +1399,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// # Argument
     /// `offset` The offset within the `self` directory.
     /// `length` The length of required vector
+    /// # Return value
+    /// On success, the function returns `Ok(file name, file size, first cluster, file type)`. 
+    /// On failure, multiple chances exist: either the Vec is empty, or the Result is `Err(())`.
     pub fn dirent_info(
         &self,
         offset: u32,
@@ -1244,10 +1410,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         if !self.is_dir() {
             return Err(());
         }
-        let lock = self.file_content.lock();
+        let mut lock = self.file_content.lock();
         let size = lock.size;
         let mut walker = self
-            .dir_iter(lock, None, DirIterMode::UsedIter, FORWARD)
+            .dir_iter(&mut lock, None, DirIterMode::Used, FORWARD)
             .walk();
         walker.iter.set_iter_offset(offset);
         let mut v = Vec::with_capacity(length);
