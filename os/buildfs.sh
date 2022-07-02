@@ -20,6 +20,8 @@ fi
 sudo mount ${U_FAT32} ${U_FAT32_DIR}/fs
 
 # build root
+sudo mkdir -p ${U_FAT32_DIR}/fs/lib
+sudo cp ../user/lib/libc.so ${U_FAT32_DIR}/fs/lib
 sudo mkdir -p ${U_FAT32_DIR}/fs/etc
 sudo mkdir -p ${U_FAT32_DIR}/fs/bin
 sudo mkdir -p ${U_FAT32_DIR}/fs/root
