@@ -240,18 +240,41 @@ impl PageCache {
         block_ids: Vec<usize>, 
         block_device: &Arc<dyn BlockDevice>
     ) {
-        assert!(block_ids.len() <= PAGE_BUFFERS);
-        for (i, block_id) in block_ids.iter().enumerate() {
-            let buf = unsafe {
-                self.page_ptr
-                    .as_mut_ptr()
-                    .add(i * BUFFER_SIZE)
-                    .cast::<[u8; BUFFER_SIZE]>()
-                    .as_mut()
-                    .unwrap()
-            };
-            block_device.read_block(*block_id, buf);
+        if block_ids.is_empty() {
+            return;
         }
+        assert!(block_ids.len() <= PAGE_BUFFERS);
+
+        let mut start_block_id = usize::MAX;
+        let mut con_length = 0;
+        let mut start_buf_id = 0;
+        for block_id in block_ids.iter() {
+            if con_length == 0 {
+                start_block_id = *block_id;
+                con_length = 1;
+            }
+            else if *block_id != start_block_id + con_length {
+                let buf = unsafe {
+                    core::slice::from_raw_parts_mut(
+                        self.page_ptr.as_mut_ptr().add(start_buf_id * BUFFER_SIZE), 
+                        con_length * BUFFER_SIZE
+                    )
+                };
+                block_device.read_block(start_block_id, buf);
+                start_buf_id += con_length;
+                start_block_id = *block_id;
+                con_length = 1;
+            } else {
+                con_length += 1;
+            }
+        }
+        let buf = unsafe {
+            core::slice::from_raw_parts_mut(
+                self.page_ptr.as_mut_ptr().add(start_buf_id * BUFFER_SIZE), 
+                con_length * BUFFER_SIZE
+            )
+        };
+        block_device.read_block(start_block_id, buf);
     }
 
     pub fn write_back(
@@ -259,17 +282,41 @@ impl PageCache {
         block_ids: Vec<usize>,
         block_device: &Arc<dyn BlockDevice>
     ) {
-        for (i, block_id) in block_ids.iter().enumerate() {
-            let buf = unsafe {
-                self.page_ptr
-                    .as_ptr()
-                    .add(i * BUFFER_SIZE)
-                    .cast::<[u8; BUFFER_SIZE]>()
-                    .as_ref()
-                    .unwrap()
-            };
-            block_device.write_block(*block_id, buf);
+        if block_ids.is_empty() {
+            return;
         }
+
+        let mut start_block_id = usize::MAX;
+        let mut con_length = 0;
+        let mut start_buf_id = 0;
+        for block_id in block_ids.iter() {
+            if con_length == 0 {
+                start_block_id = *block_id;
+                con_length = 1;
+            }
+            else if *block_id != start_block_id + con_length {
+                let buf = unsafe {
+                    core::slice::from_raw_parts(
+                        self.page_ptr.as_ptr().add(start_buf_id * BUFFER_SIZE), 
+                        con_length * BUFFER_SIZE
+                    )
+                };
+                block_device.write_block(start_block_id, buf);
+
+                start_buf_id += con_length;
+                start_block_id = *block_id;
+                con_length = 1;
+            } else {
+                con_length += 1;
+            }
+        }
+        let buf = unsafe {
+            core::slice::from_raw_parts(
+                self.page_ptr.as_ptr().add(start_buf_id * BUFFER_SIZE), 
+                con_length * BUFFER_SIZE
+            )
+        };
+        block_device.write_block(start_block_id, buf);
     }
 }
 

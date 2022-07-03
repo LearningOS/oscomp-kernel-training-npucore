@@ -4,6 +4,7 @@ use crate::mm::{
     StepByOne, VirtAddr,
 };
 use alloc::{sync::Arc, vec::Vec};
+use easy_fs::BLOCK_SZ;
 use lazy_static::*;
 use spin::Mutex;
 use virtio_drivers::{VirtIOBlk, VirtIOHeader};
@@ -18,17 +19,23 @@ lazy_static! {
 }
 
 impl BlockDevice for VirtIOBlock {
-    fn read_block(&self, block_id: usize, buf: &mut [u8]) {
-        self.0
-            .lock()
-            .read_block(block_id, buf)
-            .expect("Error when reading VirtIOBlk");
+    fn read_block(&self, mut block_id: usize, buf: &mut [u8]) {
+        for buf in buf.chunks_mut(BLOCK_SZ) {
+            self.0
+                .lock()
+                .read_block(block_id, buf)
+                .expect("Error when reading VirtIOBlk");
+            block_id += 1;
+        }
     }
-    fn write_block(&self, block_id: usize, buf: &[u8]) {
-        self.0
-            .lock()
-            .write_block(block_id, buf)
-            .expect("Error when writing VirtIOBlk");
+    fn write_block(&self, mut block_id: usize, buf: &[u8]) {
+        for buf in buf.chunks(BLOCK_SZ) {
+            self.0
+                .lock()
+                .write_block(block_id, buf)
+                .expect("Error when writing VirtIOBlk");
+            block_id += 1;
+        }
     }
 }
 
