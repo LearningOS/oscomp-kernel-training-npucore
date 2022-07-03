@@ -120,11 +120,11 @@ impl<T: CacheManager, F: CacheManager> Drop for Inode<T, F> {
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Constructor for Inodes
     /// # Arguments
-    /// `fst_clus`: The first cluster of the file
-    /// `file_type`: The type of the inode determined by the file
-    /// `size`: NOTE: the `size` field should be set to `None` for a directory
-    /// `parent_dir`: parent directory
-    /// `fs`: The pointer to the file system
+    /// + `fst_clus`: The first cluster of the file
+    /// + `file_type`: The type of the inode determined by the file
+    /// + `size`: NOTE: the `size` field should be set to `None` for a directory
+    /// + `parent_dir`: parent directory
+    /// + `fs`: The pointer to the file system
     /// # Return Value
     /// Pointer to Inode
     pub fn new(
@@ -203,7 +203,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Get first cluster of inode.
     /// # Arguments
-    /// `lock`: The lock of target file content
+    /// + `lock`: The lock of target file content
     /// # Return Value
     /// If cluster list isn't empty, it will return the first cluster list number.
     /// Otherwise it will return None.
@@ -221,7 +221,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Get inode number of inode.
     /// For convenience, treat the first sector number as the inode number.
     /// # Arguments
-    /// `lock`: The lock of target file content
+    /// + `lock`: The lock of target file content
     /// # Return Value
     /// If cluster list isn't empty, it will return the first sector number.
     /// Otherwise it will return None. 
@@ -244,8 +244,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Get first block id corresponding to the inner cache index
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `inner_cache_id`: The index of inner cache
+    /// + `lock`: The lock of target file content
+    /// + `inner_cache_id`: The index of inner cache
     /// # Return Value
     /// If `inner_cache_id` is valid, it will return the first block id
     /// Otherwise it will return None
@@ -266,8 +266,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Get a list of `block_id` represented by the given cache index.
     /// # Arguments
-    /// `clus_list`: The cluster list
-    /// `inner_cache_id`: Index of T's file caches (usually 4096 size per cache)
+    /// + `clus_list`: The cluster list
+    /// + `inner_cache_id`: Index of T's file caches (usually 4096 size per cache)
     /// # Return Value
     /// List of `block_id`
     fn get_neighboring_sec(
@@ -294,7 +294,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Open the root directory
     /// # Arguments
-    /// `efs`: The pointer to inner file system
+    /// + `efs`: The pointer to inner file system
     /// # Return Value
     /// A pointer to Inode
     pub fn root_inode(efs: &Arc<EasyFileSystem<F>>) -> Arc<Self> {
@@ -315,8 +315,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Allocate the required cluster.
     /// It will allocate as much as possible and then append to `clus_list` in `lock`.
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `alloc_num`: Required number of clusters
+    /// + `lock`: The lock of target file content
+    /// + `alloc_num`: Required number of clusters
     fn alloc_clus(
         &self, 
         lock: &mut MutexGuard<FileContent<T>>, 
@@ -333,8 +333,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Release a certain number of clusters from `clus_list` in `lock`.
     /// `clus_list` will be emptied when the quantity to be freed exceeds the available quantity.
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `dealloc_num`: The number of clusters that need to be released
+    /// + `lock`: The lock of target file content
+    /// + `dealloc_num`: The number of clusters that need to be released
     fn dealloc_clus(
         &self, 
         lock: &mut MutexGuard<FileContent<T>>, 
@@ -353,8 +353,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Change the size of current file.
     /// This operation is ignored if the result size is negative
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `diff`: The change in file size
+    /// + `lock`: The lock of target file content
+    /// + `diff`: The change in file size
     /// # Warning
     /// This function will not modify its parent directory (since we changed the size of the current file), 
     /// we will modify it when it is deleted. 
@@ -414,9 +414,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// It will read from `offset` until the end of the file or buffer can't read more
     /// This operation is ignored if start is greater than or equal to end.
     /// # Arguments    
-    /// `lock`: The lock of target file content
-    /// `offset`: The start offset in file
-    /// `buf`: The buffer to receive data
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The start offset in file
+    /// + `buf`: The buffer to receive data
     /// # Return Value
     /// The number of number of bytes read.
     pub fn read_at_block_cache_lock(
@@ -469,8 +469,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// It will read from `offset` until the end of the file or buffer can't read more
     /// This operation is ignored if start is greater than or equal to end.
     /// # Arguments    
-    /// `offset`: The start offset in file
-    /// `buf`: The buffer to receive data
+    /// + `offset`: The start offset in file
+    /// + `buf`: The buffer to receive data
     /// # Return Value
     /// The number of number of bytes read.
     /// # Warning
@@ -490,9 +490,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// and when the write exceeds the end of file, it will modify file's size.
     /// If hard disk space id low, it will try to write as much data as possible.
     /// # Arguments    
-    /// `lock`: The lock of target file content
-    /// `offset`: The start offset in file
-    /// `buf`: The buffer to write data
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The start offset in file
+    /// + `buf`: The buffer to write data
     /// # Return Value
     /// The number of number of bytes write.
     pub fn write_at_block_cache_lock(
@@ -552,8 +552,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// and when the write exceeds the end of file, it will modify file's size.
     /// If hard disk space id low, it will try to write as much data as possible.
     /// # Arguments    
-    /// `offset`: The start offset in file
-    /// `buf`: The buffer to write data
+    /// + `offset`: The start offset in file
+    /// + `buf`: The buffer to write data
     /// # Return Value
     /// The number of number of bytes write.
     /// # Warning
@@ -570,7 +570,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
     /// Get a page cache corresponding to `inner_cache_id`.
     /// # Arguments    
-    /// `inner_cache_id`: The index of inner cache
+    /// + `inner_cache_id`: The index of inner cache
     /// # Return Value
     /// Pointer to page cache
     /// # Warning
@@ -585,8 +585,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
     /// Get a page cache corresponding to `inner_cache_id`.
     /// # Arguments    
-    /// `lock`: The lock of target file content
-    /// `inner_cache_id`: The index of inner cache
+    /// + `lock`: The lock of target file content
+    /// + `inner_cache_id`: The index of inner cache
     /// # Return Value
     /// Pointer to page cache
     pub fn get_single_cache_lock(
@@ -626,10 +626,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// A Constructor for `DirIter`(See `dir_iter.rs/DirIter` for details).
     /// # Arguments    
-    /// `lock`: The lock of target file content
-    /// `offset`: The start offset of iterator
-    /// `mode`: The mode of iterator
-    /// `forward`: The direction of the iterator iteration
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The start offset of iterator
+    /// + `mode`: The mode of iterator
+    /// + `forward`: The direction of the iterator iteration
     /// # Return Value
     /// Pointer to iterator
     fn dir_iter<'a, 'b>(
@@ -665,7 +665,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Check if current file is an empty directory
     /// If a file contains only "." and "..", we consider it to be an empty directory 
     /// # Arguments    
-    /// `lock`: The lock of target file content
+    /// + `lock`: The lock of target file content
     /// # Return Value
     /// Bool result
     pub fn is_empty_dir_lock(
@@ -685,7 +685,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Expand directory file's size(a cluster)
     /// # Arguments
-    /// `lock`: The lock of target file content
+    /// + `lock`: The lock of target file content
     /// # Return Value
     /// Default is Ok
     fn expand_dir_size(
@@ -699,7 +699,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Shrink directory file's size to fit `hint`.
     /// For directory files, it has at least one cluster, which should be noted.
     /// # Arguments
-    /// `lock`: The lock of target file content
+    /// + `lock`: The lock of target file content
     /// # Return Value
     /// Default is Ok
     fn shrink_dir_size(
@@ -719,8 +719,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Allocate directory entries required for new file.
     /// The allocated directory entries is a contiguous segment.
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `alloc_num`: Required number of directory entries
+    /// + `lock`: The lock of target file content
+    /// + `alloc_num`: Required number of directory entries
     /// # Return Value
     /// It will return lock anyway.
     /// If successful, it will also return the offset of the last allocated entry.
@@ -762,8 +762,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Get a directory entries.
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `offset`: The offset of entry
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The offset of entry
     /// # Return Value
     /// If successful, it will return a `FATDirEnt`(See `layout.rs/FATDirEnt` for details)
     /// Otherwise, it will return Error
@@ -786,9 +786,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Write the directory entry back to the file contents.
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `offset`: The offset of file to write
-    /// `dir_ent`: The buffer needs to write back
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The offset of file to write
+    /// + `dir_ent`: The buffer needs to write back
     /// # Return Value
     /// If successful, it will return Ok.
     /// Otherwise, it will return Error.
@@ -811,8 +811,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Get directory entries, including short and long entries
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `offset`: The offset of short entry
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The offset of short entry
     /// # Return Value
     /// If successful, it returns a pair of a short directory entry and a long directory entry list.
     /// Otherwise, it will return Error.
@@ -865,8 +865,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Delete derectory entries, including short and long entries.
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `offset`: The offset of short entry
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The offset of short entry
     /// # Return Value
     /// If successful, it will return Ok.
     /// Otherwise, it will return Error.
@@ -937,9 +937,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Create new disk space for derectory entries, including short and long entries.
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `short_ent`: short entry
-    /// `long_ents`: list of long entries 
+    /// + `lock`: The lock of target file content
+    /// + `short_ent`: short entry
+    /// + `long_ents`: list of long entries 
     /// # Return Value
     /// If successful, it will return Ok.
     /// Otherwise, it will return Error.
@@ -974,8 +974,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Modify current directory file's ".." directory entry
     /// # Arguments
-    /// `lock`: The lock of target file content
-    /// `parent_dir_clus_num`: The first cluster number of the parent directory
+    /// + `lock`: The lock of target file content
+    /// + `parent_dir_clus_num`: The first cluster number of the parent directory
     /// # Return Value
     /// If successful, it will return Ok.
     /// Otherwise, it will return Error.
@@ -1025,7 +1025,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// deallocating both the directory entries (whether long or short),
     /// and the occupied clusters.
     /// # Arguments
-    /// `trash`: the pointer to Inode needs to be deleted 
+    /// + `trash`: the pointer to Inode needs to be deleted 
     /// # Return Value
     /// If successful, it will return Ok.
     /// Otherwise, it will return Error.
@@ -1066,10 +1066,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Create a file or a directory from the parent.
     /// The parent directory will write the new file directory entries.
     /// # Arguments
-    /// `parent_dir`: the pointer to parent directory inode
-    /// `parent_lock`: the lock of parent's file content
-    /// `name`: new file's name
-    /// `file_type`: new file's file type
+    /// + `parent_dir`: the pointer to parent directory inode
+    /// + `parent_lock`: the lock of parent's file content
+    /// + `name`: new file's name
+    /// + `file_type`: new file's file type
     /// # Return Value
     /// If successful, it will return the new file inode
     /// Otherwise, it will return Error.
@@ -1126,8 +1126,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Construct a \[u16,13\] corresponding to the `long_ent_num`'th 13-u16 or shorter name slice
     /// _NOTE_: the first entry is of number 0 for `long_ent_num`
     /// # Arguments
-    /// `name`: File name
-    /// `long_ent_index`: The index of long entry(start from 0)
+    /// + `name`: File name
+    /// + `long_ent_index`: The index of long entry(start from 0)
     /// # Return Value
     /// A long name slice
     fn gen_long_name_slice(
@@ -1146,9 +1146,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
     /// Construct a \[u8,11\] corresponding to the short directory entry name
     /// # Arguments
-    /// `parent_dir`: The pointer to parent directory
-    /// `parent_lock`: the lock of parent's file content
-    /// `name`: File name
+    /// + `parent_dir`: The pointer to parent directory
+    /// + `parent_lock`: the lock of parent's file content
+    /// + `name`: File name
     /// # Return Value
     /// A short name slice
     /// # Warning
@@ -1172,9 +1172,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     }
     /// Construct short and long entries name slices
     /// # Arguments
-    /// `parent_dir`: The pointer to parent directory
-    /// `parent_lock`: the lock of parent's file content
-    /// `name`: File name
+    /// + `parent_dir`: The pointer to parent directory
+    /// + `parent_lock`: the lock of parent's file content
+    /// + `name`: File name
     /// # Return Value
     /// A pair of a short name slice and a list of long name slices
     /// # Warning
@@ -1197,11 +1197,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
     /// Construct short and long entries
     /// # Arguments
-    /// `parent_dir`: The pointer to parent directory
-    /// `parent_lock`: the lock of parent's file content
-    /// `name`: File name
-    /// `fst_clus`: The first cluster of constructing file
-    /// `file_type`: The file type of constructing file
+    /// + `parent_dir`: The pointer to parent directory
+    /// + `parent_lock`: the lock of parent's file content
+    /// + `name`: File name
+    /// + `fst_clus`: The first cluster of constructing file
+    /// + `file_type`: The file type of constructing file
     /// # Return Value
     /// A pair of a short directory entry and a list of long name entries
     /// # Warning
@@ -1237,9 +1237,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
     /// Create a file from directory entry.
     /// # Arguments
-    /// `parent_dir`: the parent directory inode pointer
-    /// `ent`: the short entry as the source of information
-    /// `offset`: the offset of the short directory entry in the `parent_dir`
+    /// + `parent_dir`: the parent directory inode pointer
+    /// + `ent`: the short entry as the source of information
+    /// + `offset`: the offset of the short directory entry in the `parent_dir`
     /// # Return Value
     /// Pointer to Inode
     pub fn from_ent(parent_dir: &Arc<Self>, ent: &FATShortDirEnt, offset: u32) -> Arc<Self> {
@@ -1262,13 +1262,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
     /// Fill out an empty directory with only the '.' & '..' entries.
     /// # Arguments
-    /// `parent_dir`: the pointer of parent directory inode 
-    /// `parent_lock`: the lock of parent's file content
-    /// `current_dir`: the pointer of new directory inode
-    /// `current_lock`: the lock of new directory inode's file content
-    /// `fst_clus`: the first cluster number of current file
-    /// # Warning
-    /// This function will lock the `file_content` of the parent directory, may cause deadlock
+    /// + `parent_dir`: the pointer of parent directory inode 
+    /// + `parent_lock`: the lock of parent's file content
+    /// + `current_dir`: the pointer of new directory inode
+    /// + `current_lock`: the lock of new directory inode's file content
+    /// + `fst_clus`: the first cluster number of current file
     fn fill_empty_dir(
         parent_dir: &Arc<Self>,
         parent_lock: &mut MutexGuard<FileContent<T>>,
@@ -1310,16 +1308,14 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// This operation doesn't care about if this is invalid, just move current file to target directory
     /// This operation doesn't guarantee file consistence, but we won't read the file again, we just need to modify the memory, this won't affect much(may wrong?).
     /// # Arguments
-    /// `lock`: The lock of current file content
-    /// `old_parent_lock`: The lock of old parent's file content
-    /// `new_parent_dir`: The target parent directory
-    /// `new_parent_lock`: The lock of new parent's file content
-    /// `name`: Target file name
+    /// + `lock`: The lock of current file content
+    /// + `old_parent_lock`: The lock of old parent's file content
+    /// + `new_parent_dir`: The target parent directory
+    /// + `new_parent_lock`: The lock of new parent's file content
+    /// + `name`: Target file name
     /// # Return Value
     /// If successful, it will return the new file inode
     /// Otherwise, it will return Error.
-    /// # Warning
-    /// This function will lock the `file_content` of the current file and the parent directory, may cause deadlock
     pub fn rename_lock(
         &self,
         lock: &mut MutexGuard<FileContent<T>>,
@@ -1371,7 +1367,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// ls - General Purose file filterer
     /// # Arguments
-    /// `lock`: The lock of current file content
+    /// + `lock`: The lock of current file content
     /// # WARNING
     /// The definition of OFFSET is CHANGED for this item.
     /// It should point to the NEXT USED entry whether it as a long entry whenever possible or a short entry if no long ones exist.
@@ -1395,13 +1391,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             .collect())
     }
     /// find `req_name` in current directory file
-    /// # Argument
-    /// `lock`: The lock of current file content
-    /// `req_name`: required file name
+    /// # Arguments
+    /// + `lock`: The lock of current file content
+    /// + `req_name`: required file name
     /// # Return value
     /// On success, the function returns `Ok(_)`. On failure, multiple chances exist: either the Vec is empty, or the Result is `Err(())`.
-    /// # WARNING
-    /// This function will lock self's `file_content`, may cause deadlock
     pub fn find_local_lock(
         &self,
         lock: &mut MutexGuard<FileContent<T>>,
@@ -1434,8 +1428,8 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         self.time.lock()
     }
     /// Return the `stat` structure to `self` file.
-    /// # Argument
-    /// `lock`: The lock of current file content
+    /// # Arguments
+    /// + `lock`: The lock of current file content
     /// # Return value
     /// (file size, access time, modify time, create time, inode number)
     pub fn stat_lock(
@@ -1454,10 +1448,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
     /// Get a dirent information from the `self` at `offset`
     /// Return `None` if `self` is not a directory.
-    /// # Argument
-    /// `lock`: The lock of current file content
-    /// `offset` The offset within the `self` directory.
-    /// `length` The length of required vector
+    /// # Arguments
+    /// + `lock`: The lock of current file content
+    /// + `offset` The offset within the `self` directory.
+    /// + `length` The length of required vector
     /// # Return value
     /// On success, the function returns `Ok(file name, file size, first cluster, file type)`. 
     /// On failure, multiple chances exist: either the Vec is empty, or the Result is `Err(())`.
