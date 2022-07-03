@@ -51,7 +51,7 @@ impl<F: CacheManager> EasyFileSystem<F> {
 impl<F: CacheManager> EasyFileSystem<F> {
     /// For a given cluster number, calculate its first sector
     /// # Arguments
-    /// `clus_num`: cluster number
+    /// + `clus_num`: cluster number
     /// # Return Value
     /// sector number
     #[inline(always)]
@@ -63,9 +63,9 @@ impl<F: CacheManager> EasyFileSystem<F> {
         start_block + offset_blocks
     }
     /// Open the filesystem object.
-    /// # Argument
-    /// `block_device`: pointer of hardware device
-    /// `index_cache_mgr`: fat cache manager
+    /// # Arguments
+    /// + `block_device`: pointer of hardware device
+    /// + `index_cache_mgr`: fat cache manager
     pub fn open(
         block_device: Arc<dyn BlockDevice>,
         index_cache_mgr: Arc<spin::Mutex<F>>,

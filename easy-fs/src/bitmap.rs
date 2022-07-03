@@ -3,11 +3,10 @@ use crate::{
     layout::BAD_BLOCK,
 };
 
-use super::{BlockDevice, BLOCK_SZ};
+use super::{BlockDevice};
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
 use spin::{Mutex, MutexGuard};
 
-const BLOCK_BITS: usize = BLOCK_SZ * 8;
 const VACANT_CLUS_CACHE_SIZE: usize = 64;
 const FAT_ENTRY_FREE: u32 = 0;
 const FAT_ENTRY_RESERVED_TO_END: u32 = 0x0FFF_FFF8;
@@ -33,8 +32,8 @@ pub struct Fat<T> {
 impl<T: CacheManager> Fat<T> {
     /// Get the next cluster number pointed by current fat entry.
     /// # Arguments
-    /// `current_clus_num`: current cluster number
-    /// `block_device`: pointer of block device
+    /// + `current_clus_num`: current cluster number
+    /// + `block_device`: pointer of block device
     /// # Return value
     /// Next cluster number
     pub fn get_next_clus_num(
@@ -59,8 +58,8 @@ impl<T: CacheManager> Fat<T> {
     }
     /// Get all cluster numbers after the current cluster number
     /// # Arguments
-    /// `current_clus_num`: current cluster number
-    /// `block_device`: pointer of block device
+    /// + `current_clus_num`: current cluster number
+    /// + `block_device`: pointer of block device
     /// # Return value
     /// List of cluster numbers
     pub fn get_all_clus_num(
@@ -81,10 +80,10 @@ impl<T: CacheManager> Fat<T> {
 
     /// Constructor for fat
     /// # Argument
-    /// `rsvd_sec_cnt`: size in bytes of BPB
-    /// `byts_per_sec`: bytes per sector
-    /// `clus`: the total numebr of FAT entries
-    /// `fat_cache_mgr`: fat cache manager
+    /// + `rsvd_sec_cnt`: size in bytes of BPB
+    /// + `byts_per_sec`: bytes per sector
+    /// + `clus`: the total numebr of FAT entries
+    /// + `fat_cache_mgr`: fat cache manager
     /// # Return value
     /// Fat
     pub fn new(
@@ -106,7 +105,7 @@ impl<T: CacheManager> Fat<T> {
 
     /// For a given cluster number, calculate its sector ID in the fat region
     /// # Argument
-    /// `clus_num`: cluster number
+    /// + `clus_num`: cluster number
     /// # Return value
     /// sector ID
     #[inline(always)]
@@ -117,7 +116,7 @@ impl<T: CacheManager> Fat<T> {
     #[inline(always)]
     /// For a given cluster number, calculate its offset in the sector of the fat region
     /// # Argument
-    /// `clus_num`: cluster number
+    /// + `clus_num`: cluster number
     /// # Return value
     /// offset
     pub fn this_fat_ent_offset(&self, clus_num: u32) -> usize {
@@ -127,9 +126,9 @@ impl<T: CacheManager> Fat<T> {
     /// Assign the cluster entry to `current` to `next`
     /// If `current` is None, ignore this operation
     /// # Argument
-    /// `block_device`: pointer of block device
-    /// `current`: current cluster number
-    /// `next`: next cluster to set
+    /// + `block_device`: pointer of block device
+    /// + `current`: current cluster number
+    /// + `next`: next cluster to set
     fn set_next_clus(
         &self, 
         block_device: &Arc<dyn BlockDevice>, 
@@ -160,9 +159,9 @@ impl<T: CacheManager> Fat<T> {
 
     /// Allocate as many clusters (but not greater than alloc_num) as possible.
     /// # Argument
-    /// `block_device`: The target block_device.
-    /// `alloc_num`: The number of clusters to allocate.
-    /// `last`: The preceding cluster of the one to be allocated.
+    /// + `block_device`: The target block_device.
+    /// + `alloc_num`: The number of clusters to allocate.
+    /// + `last`: The preceding cluster of the one to be allocated.
     /// # Return value
     /// List of cluster numbers
     pub fn alloc(
@@ -190,9 +189,9 @@ impl<T: CacheManager> Fat<T> {
     
     /// Find and allocate an cluster from data area.
     /// # Argument
-    /// `block_device`: The target block_device.
-    /// `last`: The preceding cluster of the one to be allocated.
-    /// `hlock`: The lock of hint(Fat). 
+    /// + `block_device`: The target block_device.
+    /// + `last`: The preceding cluster of the one to be allocated.
+    /// + `hlock`: The lock of hint(Fat). 
     /// # Return value
     /// If successful, return allocated cluster number
     /// otherwise, return None
@@ -234,8 +233,8 @@ impl<T: CacheManager> Fat<T> {
 
     /// Find next free cluster from data area.
     /// # Argument
-    /// `start`: The cluster id to traverse to find the next free cluster
-    /// `block_device`: The target block_device.
+    /// + `start`: The cluster id to traverse to find the next free cluster
+    /// + `block_device`: The target block_device.
     /// # Return value
     /// If successful, return free cluster number
     /// otherwise, return None
@@ -259,8 +258,8 @@ impl<T: CacheManager> Fat<T> {
 
     /// Free multiple clusters from the data area.
     /// # Argument
-    /// `block_device`: Pointer to block_device.
-    /// `cluster_list`: List of clusters that need to be freed
+    /// + `block_device`: Pointer to block_device.
+    /// + `cluster_list`: List of clusters that need to be freed
     pub fn free(
         &self, 
         block_device: &Arc<dyn BlockDevice>, 

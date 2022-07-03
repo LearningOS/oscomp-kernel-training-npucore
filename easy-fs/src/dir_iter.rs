@@ -5,11 +5,11 @@ use alloc::string::{String, ToString};
 use spin::MutexGuard;
 
 /// `DirIterMode` describe `DirIter`'s iterate mode
-/// `Long`: Iterate to the next long directory entry
-/// `Short`: Iterate to the next short directory entry
-/// `Used`: Iterate to the next used(long or short) directory entry
-/// `Unused`: Iterate to the next unused(not long and not short) directory entry
-/// `Enum`: Iterate to the next arbitrary directory entry 
+/// + `Long`: Iterate to the next long directory entry
+/// + `Short`: Iterate to the next short directory entry
+/// + `Used`: Iterate to the next used(long or short) directory entry
+/// + `Unused`: Iterate to the next unused(not long and not short) directory entry
+/// + `Enum`: Iterate to the next arbitrary directory entry 
 #[allow(unused)]
 pub enum DirIterMode {
     Long,
@@ -44,11 +44,11 @@ pub struct DirIter<'a,'b, T: CacheManager, F: CacheManager> {
 impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
     /// Constructor for `DirIter`
     /// # Arguments    
-    /// `lock`: The lock of target file content
-    /// `offset`: The start of offset
-    /// `mode`: The iterative mode
-    /// `direction`: The iterative direction
-    /// `inode`: The pointer of target file inode
+    /// + `lock`: The lock of target file content
+    /// + `offset`: The start of offset
+    /// + `mode`: The iterative mode
+    /// + `direction`: The iterative direction
+    /// + `inode`: The pointer of target file inode
     /// # Return Value
     /// An `DirIter`
     pub fn new(
@@ -74,7 +74,7 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
     #[inline(always)]
     /// Sets the offset to make the first iteration of the iterator to the target `offset`
     /// # Arguments
-    /// `offset`: The target offset we want after the first iteration
+    /// + `offset`: The target offset we want after the first iteration
     pub fn set_iter_offset(
         &mut self, 
         offset: u32
@@ -109,7 +109,7 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
     }
     /// Write `ent` to the directory entry corresponding to iterator.
     /// # Arguments
-    /// `ent`: The directory entry we want to write to
+    /// + `ent`: The directory entry we want to write to
     /// # Warning
     /// If write failed, it will panic
     pub fn write_to_current_ent(&mut self, ent: &FATDirEnt) {
