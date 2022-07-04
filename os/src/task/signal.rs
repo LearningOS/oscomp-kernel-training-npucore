@@ -393,6 +393,7 @@ pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize
     SUCCESS
 }
 
+#[allow(unused)]
 #[derive(Clone, Copy)]
 pub struct SigInfo {
     si_signo: u32,
@@ -400,6 +401,7 @@ pub struct SigInfo {
     si_code: u32,
 }
 
+#[allow(unused)]
 impl SigInfo {
     const SI_ASYNCNL: u32 = 60u32.wrapping_neg();
     const SI_TKILL: u32 = 6u32.wrapping_neg();
