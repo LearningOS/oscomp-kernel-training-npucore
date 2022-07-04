@@ -7,13 +7,13 @@ mod switch;
 mod task;
 
 use crate::fs::{open, DiskInodeType, File, OpenFlags, open_root_inode};
-use alloc::sync::Arc;
+use alloc::{sync::Arc, string::String};
 pub use context::TaskContext;
 use lazy_static::*;
 use manager::fetch_task;
 pub use signal::*;
 use switch::__switch;
-pub use task::{execve, FdTable, Rusage, TaskControlBlock, TaskStatus};
+pub use task::{execve, FdTable, Rusage, TaskControlBlock, TaskStatus, load_elf_interp};
 
 pub use manager::{
     add_task, find_task_by_pid, procs_count, sleep_interruptible, wake_interruptible,
@@ -200,7 +200,9 @@ impl AuxvEntry {
 
 pub struct ELFInfo {
     pub entry: usize,
+    pub base: usize,
     pub phnum: usize,
     pub phent: usize,
     pub phdr: usize,
+    pub interp: Option<String>,
 }

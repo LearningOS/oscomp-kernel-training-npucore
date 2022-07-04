@@ -228,7 +228,7 @@ impl TaskControlBlock {
     /// Currently used for initproc loading only. bin_path must be used changed if used elsewhere.
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, user_sp, user_heap, elf_info) = MemorySet::from_elf(elf_data);
+        let (memory_set, user_sp, user_heap, elf_info) = MemorySet::from_elf(elf_data).unwrap();
 
         crate::mm::KERNEL_SPACE
             .lock()
@@ -290,9 +290,18 @@ impl TaskControlBlock {
         task_control_block
     }
 
-    pub fn load_elf(&self, elf_data: &[u8], argv_vec: &Vec<String>, envp_vec: &Vec<String>) {
+    pub fn load_elf(&self, elf_data: &[u8], argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> Result<(), isize> {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, mut user_sp, program_break, elf_info) = MemorySet::from_elf(elf_data);
+        let (mut memory_set, mut user_sp, program_break, mut elf_info) = MemorySet::from_elf(elf_data)?;
+        let mut real_entry = elf_info.entry;
+        if let Some(path) = elf_info.interp {
+            let interp_data = crate::task::load_elf_interp(path)?;
+            let interp = xmas_elf::ElfFile::new(interp_data).unwrap();
+            let (_, interp_info) = memory_set.map_elf(&interp)?;
+            KERNEL_SPACE.lock().remove_area_with_start_vpn(VirtAddr::from(interp_data.as_ptr() as usize).ceil()).unwrap();
+            real_entry = interp_info.entry;
+            elf_info.base = interp_info.base;
+        }
         let token = (&memory_set).token();
 
         // go down to the stack page (important!) and align
@@ -370,7 +379,7 @@ impl TaskControlBlock {
             AuxvEntry::new(AuxvType::PHDR, elf_info.phdr),
             AuxvEntry::new(AuxvType::PHENT, elf_info.phent),
             AuxvEntry::new(AuxvType::PHNUM, elf_info.phnum),
-            AuxvEntry::new(AuxvType::BASE, 0),
+            AuxvEntry::new(AuxvType::BASE, elf_info.base),
             AuxvEntry::new(AuxvType::FLAGS, 0),
             AuxvEntry::new(AuxvType::ENTRY, elf_info.entry),
             AuxvEntry::new(AuxvType::UID, 0),
@@ -427,7 +436,7 @@ impl TaskControlBlock {
 
         // initialize trap_cx
         let trap_cx = TrapContext::app_init_context(
-            elf_info.entry,
+            real_entry,
             user_sp,
             KERNEL_SPACE.lock().token(),
             self.kernel_stack.get_top(),
@@ -460,6 +469,7 @@ impl TaskControlBlock {
             }
             None => (),
         });
+        Ok(())
         // **** release current PCB lock
     }
     pub fn fork(self: &Arc<TaskControlBlock>) -> Arc<TaskControlBlock> {
@@ -546,6 +556,44 @@ impl TaskControlBlock {
     }
 }
 
+pub fn load_elf_interp(path: String) -> Result<&'static [u8], isize> {
+    match open(
+        &open_root_inode(),
+        &path,
+        OpenFlags::O_RDONLY,
+        DiskInodeType::File,
+    ) {
+        Ok(file) => {
+            if file.size() < 4 {
+                return Err(ELIBBAD);
+            }
+            let mut magic_number = Box::<[u8; 4]>::new([0; 4]);
+            // this operation may be expensive... I'm not sure
+            file.kread(Some(&mut 0usize), magic_number.as_mut_slice());
+            match magic_number.as_slice() {
+                b"\x7fELF" => {
+                    let buffer_addr = KERNEL_SPACE.lock().last_mmap_area_end();
+                    let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_addr.0 as *mut u8, file.size()) };
+                    let frames = file.get_all_cache_frame();
+
+                    crate::mm::KERNEL_SPACE
+                        .lock()
+                        .insert_program_area(
+                            buffer_addr.into(),
+                            crate::mm::MapPermission::R | crate::mm::MapPermission::W,
+                            frames,
+                        )
+                        .unwrap();
+                    
+                    return Ok(buffer);
+                },
+                _ => Err(ELIBBAD),
+            }
+        }
+        Err(_) => Err(ENOENT),
+    }
+}
+
 fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> isize {
     let buffer = unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, file.size()) };
     let frames = file.get_all_cache_frame();
@@ -562,7 +610,9 @@ fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) 
     let task = current_task().unwrap();
     show_frame_consumption! {
         "task_exec";
-        task.load_elf(buffer, argv_vec, envp_vec);
+        if let Err(errno) = task.load_elf(buffer, argv_vec, envp_vec) {
+            return errno;
+        };
     }
     // remove elf area
     crate::mm::KERNEL_SPACE

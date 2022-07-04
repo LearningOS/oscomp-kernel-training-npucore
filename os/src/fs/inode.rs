@@ -302,6 +302,10 @@ impl OSInode {
         Inode::delete_from_disk(self.inner.inode.clone()).unwrap();
     }
 
+    pub fn get_offset(&self) -> usize {
+        *self.offset.lock()
+    }
+
     pub fn set_offset(&self, off: usize) {
         *self.offset.lock() = off;
     }
@@ -419,6 +423,13 @@ pub fn open(
     const REDIRECT_TO_BUSYBOX: [&str; 3] = ["/touch", "/rm", "/ls"];
     let path = if REDIRECT_TO_BUSYBOX.contains(&path) {
         BUSYBOX_PATH
+    } else {
+        path
+    };
+    const LIBC_PATH: &str = "/lib/libc.so";
+    const REDIRECT_TO_LIBC: [&str; 2] = ["/lib/ld-musl-riscv64.so.1", "/lib/ld-musl-riscv64-sf.so.1"];
+    let path = if REDIRECT_TO_LIBC.contains(&path) {
+        LIBC_PATH
     } else {
         path
     };

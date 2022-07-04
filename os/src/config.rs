@@ -9,8 +9,10 @@ pub const KERNEL_HEAP_SIZE: usize = PAGE_SIZE * 0x200;
 // pub const USER_SIGNAL_STACK_BOTTOM: usize = USER_STACK_TOP - PAGE_SIZE;
 // pub const USER_SIGNAL_STACK_TOP: usize =  USER_SIGNAL_STACK_BOTTOM - USER_SIGNAL_STACK_SIZE;
 // pub const USER_SIGNAL_STACK_SIZE: usize = PAGE_SIZE;
+pub const TASK_SIZE: usize = 0xc000_0000;
+pub const ELF_DYN_BASE: usize = TASK_SIZE / 3 * 2;
 pub const MMAP_BASE: usize = 0x6000_0000;
-pub const MMAP_SIZE: usize = PAGE_SIZE * 512;
+pub const MMAP_END: usize = MEMORY_START;
 // manually make usable memory space equal
 pub const MEMORY_START: usize = 0x8000_0000;
 #[cfg(not(any(feature = "board_k210")))]

@@ -9,7 +9,7 @@ pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 pub use frame_allocator::{frame_alloc, frame_dealloc, unallocated_frames, FrameTracker};
 pub use memory_set::remap_test;
 pub use memory_set::{
-    kernel_token, mmap, munmap, sbrk, MapFlags, MapPermission, MemorySet, KERNEL_SPACE,
+    kernel_token, mmap, sbrk, MapFlags, MapPermission, MemorySet, KERNEL_SPACE,
 };
 use page_table::PTEFlags;
 pub use page_table::{

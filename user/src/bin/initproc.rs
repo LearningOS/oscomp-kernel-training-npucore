@@ -24,6 +24,7 @@ fn main() -> i32 {
         "OLDPWD=/root\0".as_ptr(),
         "_=/bin/bash\0".as_ptr(),
         "PATH=/:/bin\0".as_ptr(),
+        "LD_LIBRARY_PATH=/\0".as_ptr(),
         core::ptr::null(),
     ];
     if fork() == 0 {
