@@ -363,9 +363,9 @@ impl MemorySet {
             _ => return Err(ENOEXEC),
         };
 
+        let mut load_segment_count = 0;
         let mut program_break: Option<usize> = None;
         let mut load_addr: Option<usize> = None; // top va of ELF which points to ELF header
-        let mut load_segment_count = self.heap_area_idx.unwrap_or(0);
         let mut interp: Option<String> = None;
 
         for ph in elf.program_iter() {
@@ -447,7 +447,9 @@ impl MemorySet {
                 _ => {}
             }
         }
-        self.heap_area_idx = Some(load_segment_count);
+        if bias == 0 {
+            self.heap_area_idx = Some(load_segment_count);
+        }
         match (program_break, load_addr) {
             (Some(program_break), Some(load_addr)) => Ok((
                 program_break,
@@ -1208,7 +1210,7 @@ pub fn mmap(
         }
     }
     // the last one is trap context, we insert mmap area to the slot right before trap context (len - 2)
-    let idx = if start_va.0 < MMAP_BASE { inner.memory_set.areas.len() - 3 } else { inner.memory_set.areas.len() - 2 };
+    let idx = if start_va.0 < MMAP_BASE { inner.memory_set.heap_area_idx.unwrap() + 1 } else { inner.memory_set.areas.len() - 2 };
     inner.memory_set.areas.insert(idx, new_area);
     start_va.0
 }
@@ -1247,7 +1249,7 @@ pub fn sbrk(increment: isize) -> usize {
                 heap_area
                     .expand_to(page_table, VirtAddr::from(new_pt))
                     .unwrap();
-                trace!("[sbrk] heap area expended to {:X}", new_pt);
+                trace!("[sbrk] heap area expanded to {:X}", new_pt);
             }
             inner.heap_pt = new_pt;
         }
