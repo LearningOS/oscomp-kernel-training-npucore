@@ -1,15 +1,15 @@
-use core::panic;
 use super::cache_mgr::*;
 use super::{Dirent, File, OpenFlags, Stat, StatMode};
-use crate::mm::{UserBuffer, FrameTracker};
+use crate::mm::{FrameTracker, UserBuffer};
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
 use crate::{drivers::BLOCK_DEVICE, println};
+use core::panic;
 
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::{String, ToString};
-use alloc::sync::{Arc};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use easy_fs::layout::FATDiskInodeType;
 pub use easy_fs::DiskInodeType;
@@ -146,46 +146,51 @@ impl OSInode {
             current_treenode = if let Some(treenode) = result {
                 log::trace!("[open_by_relative_path] found in directory tree");
                 treenode
-            } else if let Some((_, short_ent, offset)) = current_treenode
-                .inode
-                .find_local_lock(&mut current_treenode.inode.lock(), component.to_string())
-                .unwrap()
-            {
-                let new_treenode = Arc::new(DirectoryTreeNode::new(Inode::from_ent(
-                    &current_treenode.inode,
-                    &short_ent,
-                    offset,
-                )));
-                current_treenode
-                    .children
-                    .write()
-                    .insert(component.to_string(), new_treenode.clone());
-                new_treenode
             } else {
-                if components.is_empty() && flags.contains(OpenFlags::O_CREAT) {
-                    return Ok(Arc::new(OSInode::new(readable, writable, {
-                        log::trace!("[open_by_relative_path] create: {}", component);
-                        let new_treenode = Arc::new(DirectoryTreeNode::new(
-                            InodeImpl::create_lock(
-                                &current_treenode.inode,
-                                &mut current_treenode.inode.lock(),
-                                component.to_string(),
-                                type_,
-                            )
-                            .unwrap(),
-                        ));
-                        current_treenode
-                            .children
-                            .write()
-                            .insert(component.to_string(), new_treenode.clone());
-                        log::debug!(
-                            "[create] result: {:?}",
-                            current_treenode.inode.find_local_lock(&mut current_treenode.inode.lock(), component.to_string())
-                        );
-                        new_treenode
-                    })));
+                let find_result = current_treenode
+                    .inode
+                    .find_local_lock(&mut current_treenode.inode.lock(), component.to_string())
+                    .unwrap();
+                if let Some((_, short_ent, offset)) = find_result {
+                    let new_treenode = Arc::new(DirectoryTreeNode::new(Inode::from_ent(
+                        &current_treenode.inode,
+                        &short_ent,
+                        offset,
+                    )));
+                    current_treenode
+                        .children
+                        .write()
+                        .insert(component.to_string(), new_treenode.clone());
+                    new_treenode
                 } else {
-                    return Err(ENOENT);
+                    if components.is_empty() && flags.contains(OpenFlags::O_CREAT) {
+                        return Ok(Arc::new(OSInode::new(readable, writable, {
+                            log::trace!("[open_by_relative_path] create: {}", component);
+                            let new_treenode = Arc::new(DirectoryTreeNode::new(
+                                InodeImpl::create_lock(
+                                    &current_treenode.inode,
+                                    &mut current_treenode.inode.lock(),
+                                    component.to_string(),
+                                    type_,
+                                )
+                                .unwrap(),
+                            ));
+                            current_treenode
+                                .children
+                                .write()
+                                .insert(component.to_string(), new_treenode.clone());
+                            log::debug!(
+                                "[create] result: {:?}",
+                                current_treenode.inode.find_local_lock(
+                                    &mut current_treenode.inode.lock(),
+                                    component.to_string()
+                                )
+                            );
+                            new_treenode
+                        })));
+                    } else {
+                        return Err(ENOENT);
+                    }
                 }
             };
         }
@@ -196,7 +201,9 @@ impl OSInode {
         if flags.contains(OpenFlags::O_TRUNC) {
             let mut file_content = current_treenode.inode.lock();
             let diff = -(file_content.get_file_size() as isize);
-            current_treenode.inode.modify_size_lock(&mut file_content, diff);
+            current_treenode
+                .inode
+                .modify_size_lock(&mut file_content, diff);
         }
         let os_inode = Arc::from(OSInode::new(readable, writable, current_treenode));
         if flags.contains(OpenFlags::O_APPEND) {
@@ -223,7 +230,11 @@ impl OSInode {
         let vec = self
             .inner
             .inode
-            .dirent_info_lock(&mut file_cont_lock, *offset as u32, count / core::mem::size_of::<Dirent>())
+            .dirent_info_lock(
+                &mut file_cont_lock,
+                *offset as u32,
+                count / core::mem::size_of::<Dirent>(),
+            )
             .unwrap();
         if let Some((_, next_offset, _, _)) = vec.last() {
             *offset = *next_offset;
@@ -249,7 +260,7 @@ impl OSInode {
             .inode
             .get_all_cache()
             .iter()
-            .map(|cache|{
+            .map(|cache| {
                 assert!(!cache.is_locked());
                 Some(cache.lock().get_tracker())
             })
@@ -371,9 +382,7 @@ impl OSInode {
 }
 
 lazy_static! {
-    pub static ref FILE_SYSTEM: Arc<
-        EasyFileSystem<BlockCacheManager>,
-    > = EasyFileSystem::open(
+    pub static ref FILE_SYSTEM: Arc<EasyFileSystem<BlockCacheManager>> = EasyFileSystem::open(
         BLOCK_DEVICE.clone(),
         Arc::new(Mutex::new(BlockCacheManager::new()))
     );
@@ -427,7 +436,8 @@ pub fn open(
         path
     };
     const LIBC_PATH: &str = "/lib/libc.so";
-    const REDIRECT_TO_LIBC: [&str; 2] = ["/lib/ld-musl-riscv64.so.1", "/lib/ld-musl-riscv64-sf.so.1"];
+    const REDIRECT_TO_LIBC: [&str; 2] =
+        ["/lib/ld-musl-riscv64.so.1", "/lib/ld-musl-riscv64-sf.so.1"];
     let path = if REDIRECT_TO_LIBC.contains(&path) {
         LIBC_PATH
     } else {
@@ -440,12 +450,10 @@ pub fn open(
     }
 }
 
-pub fn oom()
-{
+pub fn oom() {
     const MAX_FAIL_TIME: usize = 6;
     let mut fail_time = 0;
-    fn dfs(u: &Arc<DirectoryTreeNode>) -> usize
-    {
+    fn dfs(u: &Arc<DirectoryTreeNode>) -> usize {
         let mut dropped = u.inode.oom();
         let read_lock = u.children.try_read();
         if read_lock.is_none() {
@@ -554,20 +562,22 @@ impl File for OSInode {
         let mut file_cont_lock = self.inner.inode.lock();
         match offset {
             Some(offset) => {
-                let len =
-                    self.inner
-                        .inode
-                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
+                let len = self.inner.inode.write_at_block_cache_lock(
+                    &mut file_cont_lock,
+                    *offset,
+                    buffer,
+                );
                 drop(file_cont_lock);
                 *offset += len;
                 len
             }
             None => {
                 let mut offset = self.offset.lock();
-                let len =
-                    self.inner
-                        .inode
-                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
+                let len = self.inner.inode.write_at_block_cache_lock(
+                    &mut file_cont_lock,
+                    *offset,
+                    buffer,
+                );
                 drop(file_cont_lock);
                 *offset += len;
                 len
@@ -575,7 +585,8 @@ impl File for OSInode {
         }
     }
     fn stat(&self) -> Box<Stat> {
-        let (size, atime, mtime, ctime, ino) = self.inner.inode.stat_lock(&mut self.inner.inode.lock());
+        let (size, atime, mtime, ctime, ino) =
+            self.inner.inode.stat_lock(&mut self.inner.inode.lock());
         let st_mod: u32 = {
             if self.inner.inode.is_dir() {
                 (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
