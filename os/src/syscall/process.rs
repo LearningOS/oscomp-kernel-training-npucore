@@ -1,6 +1,6 @@
 use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE, USER_STACK_SIZE};
 use crate::mm::{
-    copy_from_user, copy_to_user, copy_to_user_string, mmap, munmap, sbrk, translated_byte_buffer,
+    copy_from_user, copy_to_user, copy_to_user_string, mmap, sbrk, translated_byte_buffer,
     translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
 };
 use crate::show_frame_consumption;
@@ -657,7 +657,12 @@ pub fn sys_mmap(
 }
 
 pub fn sys_munmap(start: usize, len: usize) -> isize {
-    munmap(start, len) as isize
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    match inner.memory_set.munmap(start, len) {
+        Ok(_) => SUCCESS,
+        Err(errno) => errno,
+    }
 }
 
 pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
