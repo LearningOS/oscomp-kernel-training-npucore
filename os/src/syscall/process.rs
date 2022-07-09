@@ -1,7 +1,7 @@
-use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE, USER_STACK_SIZE};
+use crate::config::{CLOCK_FREQ, PAGE_SIZE, USER_STACK_SIZE};
 use crate::mm::{
-    copy_from_user, copy_to_user, copy_to_user_string, mmap, sbrk, translated_byte_buffer,
-    translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
+    copy_from_user, copy_to_user, copy_to_user_string, translated_byte_buffer, translated_ref,
+    translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
@@ -125,12 +125,7 @@ pub fn sys_nanosleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
         let mut remain = end - TimeSpec::now();
         while !remain.is_zero() {
             let inner = task.acquire_inner_lock();
-            if inner
-                .sigstatus
-                .signal_pending
-                .difference(inner.sigmask)
-                .is_empty()
-            {
+            if inner.sigpending.difference(inner.sigmask).is_empty() {
                 drop(inner);
                 suspend_current_and_run_next();
             } else {
@@ -157,7 +152,7 @@ pub fn sys_setitimer(
         0..=2 => {
             let task = current_task().unwrap();
             let mut inner = task.acquire_inner_lock();
-            let token = inner.get_user_token();
+            let token = task.get_user_token();
             if old_value as usize != 0 {
                 copy_to_user(token, &inner.timer[which], old_value);
                 trace!("[sys_setitimer] *old_value: {:?}", inner.timer[which]);
@@ -166,9 +161,9 @@ pub fn sys_setitimer(
                 copy_from_user(token, new_value, &mut inner.timer[which]);
                 trace!("[sys_setitimer] *new_value: {:?}", inner.timer[which]);
             }
-            0
+            SUCCESS
         }
-        _ => -1,
+        _ => EINVAL,
     }
 }
 
@@ -178,7 +173,7 @@ pub fn sys_get_time_of_day(time_val: *mut TimeVal, time_zone: *mut TimeZone) -> 
     if time_val as usize != 0 {
         copy_to_user(current_user_token(), ans, time_val);
     }
-    0
+    SUCCESS
 }
 
 pub fn sys_get_time() -> isize {
@@ -319,28 +314,34 @@ pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
 }
 
 pub fn sys_sbrk(increment: isize) -> isize {
-    sbrk(increment) as isize
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    let mut memory_set = task.vm.lock();
+    inner.heap_pt = memory_set.sbrk(inner.heap_pt, inner.heap_bottom, increment);
+    inner.heap_pt as isize
 }
 
 pub fn sys_brk(brk_addr: usize) -> isize {
-    let new_addr: usize;
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    let mut memory_set = task.vm.lock();
     if brk_addr == 0 {
-        new_addr = sbrk(0);
+        inner.heap_pt = memory_set.sbrk(inner.heap_pt, inner.heap_bottom, 0);
     } else {
-        let former_addr = sbrk(0);
+        let former_addr = memory_set.sbrk(inner.heap_pt, inner.heap_bottom, 0);
         let grow_size: isize = (brk_addr - former_addr) as isize;
-        new_addr = sbrk(grow_size);
+        inner.heap_pt = memory_set.sbrk(inner.heap_pt, inner.heap_bottom, grow_size);
     }
 
     info!(
         "[sys_brk] brk_addr: {:X}; new_addr: {:X}",
-        brk_addr, new_addr
+        brk_addr, inner.heap_pt
     );
-    new_addr as isize
+    inner.heap_pt as isize
 }
 
 bitflags! {
-    struct CloneFlags: u32 {
+    pub struct CloneFlags: u32 {
         //const CLONE_NEWTIME         =   0x00000080;
         const CLONE_VM              =   0x00000100;
         const CLONE_FS              =   0x00000200;
@@ -379,11 +380,11 @@ bitflags! {
 pub fn sys_clone(
     flags: u32,
     stack: *const u8,
-    ptid: *const u32,
-    tls: *const usize,
-    ctid: *const u32,
+    ptid: *mut u32,
+    tls: usize,
+    ctid: *mut u32,
 ) -> isize {
-    let current_task = current_task().unwrap();
+    let parent = current_task().unwrap();
     // This signal will be sent to its parent when it exits
     // we need to add a field in TCB to support this feature, but not now.
     let exit_signal = match Signals::from_signum((flags & 0xff) as usize) {
@@ -400,21 +401,36 @@ pub fn sys_clone(
         flags, exit_signal, ptid, tls, ctid
     );
     show_frame_consumption! {
-        "fork";
-        let new_task = current_task.fork();
+        "clone";
+        let child = parent.sys_clone(flags);
     }
-    let new_pid = new_task.pid.0;
+    let new_pid = child.pid.0;
     // modify trap context of new_task, because it returns immediately after switching
-    let trap_cx = new_task.acquire_inner_lock().get_trap_cx();
+    let trap_cx = child.acquire_inner_lock().get_trap_cx();
     // we do not have to move to next instruction since we have done it before
     // we also do not need to prepare parameters on stack, musl has done it for us
     if !stack.is_null() {
         trap_cx.x[2] = stack as usize;
     }
+    // set tp
+    if flags.contains(CloneFlags::CLONE_SETTLS) {
+        trap_cx.x[4] = tls;
+    }
+    if flags.contains(CloneFlags::CLONE_PARENT_SETTID) {
+        *translated_refmut(parent.get_user_token(), ptid) = child.pid.0 as u32;
+    }
+    if flags.contains(CloneFlags::CLONE_CHILD_SETTID) {
+        child.acquire_inner_lock().address.set_child_tid = ctid as usize;
+        *translated_refmut(child.get_user_token(), ctid) = child.pid.0 as u32;
+    }
+    if flags.contains(CloneFlags::CLONE_CHILD_CLEARTID) {
+        child.acquire_inner_lock().address.clear_child_tid = ctid as usize;
+        *translated_refmut(child.get_user_token(), ctid) = 0u32;
+    }
     // for child process, fork returns 0
     trap_cx.x[10] = 0;
     // add new task to scheduler
-    add_task(new_task);
+    add_task(child);
     new_pid as isize
 }
 
@@ -469,6 +485,7 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
     let option = WaitOption::from_bits(option).unwrap();
     // info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
     let task = current_task().unwrap();
+    let token = task.get_user_token();
     loop {
         // find a child process
 
@@ -509,7 +526,7 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
             // ++++ release child PCB lock
             if status as usize != 0 {
                 // this may NULL!!!
-                *translated_refmut(inner.memory_set.token(), status) = exit_code;
+                *translated_refmut(token, status) = exit_code;
             }
             return found_pid as isize;
         } else {
@@ -566,7 +583,7 @@ pub fn sys_prlimit(
     if pid == 0 {
         let task = current_task().unwrap();
         let inner = task.acquire_inner_lock();
-        let token = inner.get_user_token();
+        let token = task.get_user_token();
         let resource = Resource::from_primitive(resource);
         info!("[sys_prlimit] pid: {}, resource: {:?}", pid, resource);
 
@@ -639,6 +656,17 @@ pub fn sys_set_tid_address(tidptr: usize) -> isize {
     sys_gettid()
 }
 
+pub fn sys_futex(
+    uaddr: usize,
+    futex_op: u32,
+    val: u32,
+    timeout: *const TimeSpec,
+    uaddr2: usize,
+    val3: u32,
+) -> isize {
+    SUCCESS
+}
+
 pub fn sys_mmap(
     start: usize,
     len: usize,
@@ -647,19 +675,21 @@ pub fn sys_mmap(
     fd: usize,
     offset: usize,
 ) -> isize {
+    let task = current_task().unwrap();
+    let mut memory_set = task.vm.lock();
     let prot = MapPermission::from_bits(((prot as u8) << 1) | (1 << 4)).unwrap();
     let flags = MapFlags::from_bits(flags).unwrap();
     info!(
         "[mmap] start:{:X}; len:{:X}; prot:{:?}; flags:{:?}; fd:{}; offset:{:X}",
         start, len, prot, flags, fd as isize, offset
     );
-    mmap(start, len, prot, flags, fd, offset) as isize
+    memory_set.mmap(start, len, prot, flags, fd, offset) as isize
 }
 
 pub fn sys_munmap(start: usize, len: usize) -> isize {
     let task = current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
-    match inner.memory_set.munmap(start, len) {
+    let result = task.vm.lock().munmap(start, len);
+    match result {
         Ok(_) => SUCCESS,
         Err(errno) => errno,
     }
@@ -667,8 +697,8 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
 
 pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
     let task = current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
-    match inner.memory_set.mprotect(addr, len, prot) {
+    let result = task.vm.lock().mprotect(addr, len, prot);
+    match result {
         Ok(_) => SUCCESS,
         Err(errno) => errno,
     }
@@ -712,18 +742,23 @@ pub fn sys_sigprocmask(how: u32, set: usize, oldset: usize) -> isize {
 }
 
 pub fn sys_sigtimedwait(set: usize, info: usize, timeout: usize) -> isize {
-    sigtimedwait(set as *const Signals, info as *mut SigInfo, timeout as *const TimeSpec)
+    sigtimedwait(
+        set as *const Signals,
+        info as *mut SigInfo,
+        timeout as *const TimeSpec,
+    )
 }
 
 pub fn sys_sigreturn() -> isize {
     // mark not processing signal handler
-    let current_task = current_task().unwrap();
-    info!("[sys_sigreturn] pid: {}", current_task.pid.0);
-    let inner = current_task.acquire_inner_lock();
+    let task = current_task().unwrap();
+    info!("[sys_sigreturn] pid: {}", task.pid.0);
+    let inner = task.acquire_inner_lock();
+    let token = task.get_user_token();
     // restore trap_cx
     let trap_cx = inner.get_trap_cx();
     let sp = trap_cx.x[2];
-    copy_from_user(inner.get_user_token(), sp as *const TrapContext, trap_cx);
+    copy_from_user(token, sp as *const TrapContext, trap_cx);
     return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
 }
 
@@ -731,7 +766,7 @@ pub fn sys_sigreturn() -> isize {
 pub fn sys_times(buf: *mut Times) -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
+    let token = task.get_user_token();
     let times = Times {
         tms_utime: inner.rusage.ru_utime.to_tick(),
         tms_stime: inner.rusage.ru_stime.to_tick(),
@@ -749,8 +784,8 @@ pub fn sys_getrusage(who: isize, usage: *mut Rusage) -> isize {
     }
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
+    let token = task.get_user_token();
     copy_to_user(token, &inner.rusage, usage);
     //info!("[sys_getrusage] who: RUSAGE_SELF, usage: {:?}", inner.rusage);
-    0
+    SUCCESS
 }

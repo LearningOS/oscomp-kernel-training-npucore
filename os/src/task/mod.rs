@@ -7,7 +7,7 @@ mod switch;
 mod task;
 
 use crate::fs::{open, DiskInodeType, File, OpenFlags, open_root_inode};
-use alloc::{sync::Arc, string::String};
+use alloc::{sync::Arc};
 pub use context::TaskContext;
 use lazy_static::*;
 use manager::fetch_task;
@@ -99,7 +99,7 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
 
     inner.children.clear();
     // deallocate user space
-    inner.memory_set.recycle_data_pages();
+    task.vm.lock().recycle_data_pages();
     drop(inner);
     // **** release current PCB lock
     // drop task manually to maintain rc correctly

@@ -1,4 +1,3 @@
-use alloc::collections::BTreeMap;
 use core::fmt::{self, Debug, Error, Formatter};
 use log::{debug, error, info, trace, warn};
 use riscv::register::{scause, stval};
@@ -10,7 +9,7 @@ use crate::task::{block_current_and_run_next, exit_current_and_run_next};
 use crate::timer::TimeSpec;
 use crate::trap::TrapContext;
 
-use super::{current_task, current_user_token, suspend_current_and_run_next};
+use super::{current_task, suspend_current_and_run_next};
 
 bitflags! {
     /// Signal
@@ -178,29 +177,29 @@ impl SigAction {
         }
     }
 }
-#[derive(Clone)]
-pub struct SigStatus {
-    pub signal_pending: Signals,
-    pub signal_handler: BTreeMap<Signals, SigAction>,
-}
+// #[derive(Clone)]
+// pub struct SigStatus {
+//     pub signal_pending: Signals,
+//     pub signal_handler: BTreeMap<Signals, SigAction>,
+// }
 
-impl SigStatus {
-    pub fn new() -> Self {
-        Self {
-            signal_pending: Signals::empty(),
-            signal_handler: BTreeMap::new(),
-        }
-    }
-}
+// impl SigStatus {
+//     pub fn new() -> Self {
+//         Self {
+//             signal_pending: Signals::empty(),
+//             signal_handler: BTreeMap::new(),
+//         }
+//     }
+// }
 
-impl Debug for SigStatus {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.write_fmt(format_args!(
-            "[ signal_pending: ({:?}), signal_handler: ({:?}) ]",
-            self.signal_pending, self.signal_handler
-        ))
-    }
-}
+// impl Debug for SigStatus {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+//         f.write_fmt(format_args!(
+//             "[ signal_pending: ({:?}), signal_handler: ({:?}) ]",
+//             self.signal_pending, self.signal_handler
+//         ))
+//     }
+// }
 
 impl Debug for SigAction {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
@@ -221,7 +220,6 @@ impl Debug for SigAction {
 /// * `oldact`: old action
 pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -> isize {
     let task = current_task().unwrap();
-    let mut inner = task.acquire_inner_lock();
     let result = Signals::from_signum(signum);
     match result {
         Err(_) | Ok(Some(Signals::SIGKILL)) | Ok(Some(Signals::SIGSTOP)) | Ok(None) => {
@@ -230,9 +228,9 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
         }
         Ok(Some(signal)) => {
             trace!("[sigaction] signal: {:?}", signal);
-            let token = inner.get_user_token();
+            let token = task.get_user_token();
             if oldact as usize != 0 {
-                if let Some(sigact) = inner.sigstatus.signal_handler.remove(&signal) {
+                if let Some(sigact) = task.sighand.lock().remove(&signal) {
                     copy_to_user(token, &sigact, oldact);
                     trace!("[sigaction] *oldact: {:?}", sigact);
                 } else {
@@ -249,7 +247,7 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
                 // push to PCB, ignore mask and flags now
                 if !(sigact.handler == SigHandler::SIG_DFL || sigact.handler == SigHandler::SIG_IGN)
                 {
-                    inner.sigstatus.signal_handler.insert(signal, *sigact);
+                    task.sighand.lock().insert(signal, *sigact);
                 };
                 trace!("[sigaction] *act: {:?}", sigact);
             }
@@ -261,27 +259,23 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
 pub fn do_signal() {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    while let Some(signal) = inner
-        .sigstatus
-        .signal_pending
-        .difference(inner.sigmask)
-        .peek_front()
-    {
-        inner.sigstatus.signal_pending.remove(signal);
+    while let Some(signal) = inner.sigpending.difference(inner.sigmask).peek_front() {
+        inner.sigpending.remove(signal);
         trace!(
             "[do_signal] signal: {:?}, pending: {:?}, sigmask: {:?}",
             signal,
-            inner.sigstatus.signal_pending,
+            inner.sigpending,
             inner.sigmask
         );
-        if let Some(act) = inner.sigstatus.signal_handler.get(&signal) {
+        let sighand = task.sighand.lock();
+        if let Some(act) = sighand.get(&signal) {
             {
                 let trap_cx = inner.get_trap_cx();
                 let sp = unsafe { (trap_cx.x[2] as *mut TrapContext).sub(1) };
                 if (sp as usize) < USER_STACK_TOP {
                     trap_cx.sepc = usize::MAX; // we don't have enough space on user stack, return a bad address to kill this program
                 } else {
-                    copy_to_user(inner.get_user_token(), trap_cx, sp as *mut TrapContext); // push trap context into user stack
+                    copy_to_user(task.get_user_token(), trap_cx, sp as *mut TrapContext); // push trap context into user stack
                     trap_cx.set_sp(sp as usize); // update sp, because we've pushed something into stack
                     trap_cx.x[10] = signal.to_signum().unwrap(); // a0 <- signum, parameter.
                     trap_cx.x[1] = SIGNAL_TRAMPOLINE; // ra <- __call_sigreturn, when handler ret, we will go to __call_sigreturn
@@ -311,6 +305,7 @@ pub fn do_signal() {
                         inner.get_trap_cx().sepc,
                     );
                     drop(inner);
+                    drop(sighand);
                     drop(task);
                     exit_current_and_run_next(signal.to_signum().unwrap() as u32);
                 }
@@ -323,6 +318,7 @@ pub fn do_signal() {
                 // stop (or we should say block) current process
                 Signals::SIGTSTP | Signals::SIGTTIN | Signals::SIGTTOU => {
                     drop(inner);
+                    drop(sighand);
                     block_current_and_run_next();
                     // because this loop require `inner`, and we have `drop(inner)` above, so `break` is compulsory
                     // this would cause some signals won't be handled immediately when this process resumes
@@ -333,6 +329,7 @@ pub fn do_signal() {
                 _ => {
                     warn!("[do_signal] process terminated due to {:?}", signal);
                     drop(inner);
+                    drop(sighand);
                     drop(task);
                     exit_current_and_run_next(signal.to_signum().unwrap() as u32);
                 }
@@ -356,7 +353,7 @@ bitflags! {
 pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize {
     let task = current_task().unwrap();
     let mut inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
+    let token = task.get_user_token();
     // If oldset is non-NULL, the previous value of the signal mask is stored in oldset
     if oldset as usize != 0 {
         *translated_refmut(token, oldset) = inner.sigmask;
@@ -447,9 +444,7 @@ impl SigInfo {
 
 pub fn sigtimedwait(set: *const Signals, info: *mut SigInfo, timeout: *const TimeSpec) -> isize {
     let task = current_task().unwrap();
-    let inner = task.acquire_inner_lock();
-    let token = inner.get_user_token();
-    drop(inner);
+    let token = task.get_user_token();
     let set = *translated_ref(token, set);
     let mut timeout_ = TimeSpec::new();
     copy_from_user(token, timeout, &mut timeout_);
@@ -458,17 +453,25 @@ pub fn sigtimedwait(set: *const Signals, info: *mut SigInfo, timeout: *const Tim
     let start = TimeSpec::now();
     loop {
         let inner = task.acquire_inner_lock();
-        if inner.sigstatus.signal_pending.contains(set) {
-            let sig = (inner.sigstatus.signal_pending & set).peek_front().unwrap();
+        if inner.sigpending.contains(set) {
+            let sig = (inner.sigpending & set).peek_front().unwrap();
             let signum = sig.to_signum().unwrap();
             if !info.is_null() {
-                copy_to_user(token, &SigInfo {si_signo: signum as u32, si_errno: 0, si_code: 0}, info);
+                copy_to_user(
+                    token,
+                    &SigInfo {
+                        si_signo: signum as u32,
+                        si_errno: 0,
+                        si_code: 0,
+                    },
+                    info,
+                );
             }
             return signum as isize;
         } else {
             let remain = timeout_ - (TimeSpec::now() - start);
             if remain.is_zero() {
-                return EAGAIN
+                return EAGAIN;
             } else {
                 drop(inner);
                 suspend_current_and_run_next();

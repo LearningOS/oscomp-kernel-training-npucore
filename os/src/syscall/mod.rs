@@ -30,6 +30,7 @@ const SYSCALL_UTIMENSAT: usize = 88;
 const SYSCALL_EXIT: usize = 93;
 const SYSCALL_EXIT_GRUOP: usize = 94;
 const SYSCALL_SET_TID_ADDRESS: usize = 96;
+const SYSCALL_FUTEX: usize = 98;
 const SYSCALL_NANOSLEEP: usize = 101;
 const SYSCALL_GETITIMER: usize = 102;
 const SYSCALL_SETITIMER: usize = 103;
@@ -83,6 +84,7 @@ mod process;
 use fs::*;
 use log::{debug, error, info, trace, warn};
 use process::*;
+pub use process::CloneFlags;
 
 pub fn syscall_name(id: usize) -> &'static str {
     match id {
@@ -120,6 +122,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_EXIT => "exit",
         SYSCALL_EXIT_GRUOP => "exit_GRUOP",
         SYSCALL_SET_TID_ADDRESS => "set_tid_address",
+        SYSCALL_FUTEX => "futex",
         SYSCALL_NANOSLEEP => "nanosleep",
         SYSCALL_GETITIMER => "getitimer",
         SYSCALL_SETITIMER => "setitimer",
@@ -211,9 +214,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3],
             args[4] as *const u8,
         ),
-        SYSCALL_FACCESSAT => {
-            sys_faccessat2(args[0], args[1] as *const u8, args[2] as u32, 0u32)
-        }
+        SYSCALL_FACCESSAT => sys_faccessat2(args[0], args[1] as *const u8, args[2] as u32, 0u32),
         SYSCALL_CHDIR => sys_chdir(args[0] as *const u8),
         SYSCALL_OPEN => sys_openat(AT_FDCWD, args[0] as *const u8, args[1] as u32, 0o777u32),
         SYSCALL_OPENAT => sys_openat(
@@ -282,9 +283,9 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_CLONE => sys_clone(
             args[0] as u32,
             args[1] as *const u8,
-            args[2] as *const u32,
-            args[3] as *const usize,
-            args[4] as *const u32,
+            args[2] as *mut u32,
+            args[3],
+            args[4] as *mut u32,
         ),
         SYSCALL_EXECVE => sys_execve(
             args[0] as *const u8,
@@ -304,6 +305,14 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as *mut RLimit,
         ),
         SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0]),
+        SYSCALL_FUTEX => sys_futex(
+            args[0],
+            args[1] as u32,
+            args[2] as u32,
+            args[3] as *const TimeSpec,
+            args[4],
+            args[5] as u32,
+        ),
         SYSCALL_GETUID => sys_getuid(),
         SYSCALL_GETEUID => sys_geteuid(),
         SYSCALL_GETGID => sys_getgid(),
