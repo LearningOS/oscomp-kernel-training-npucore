@@ -666,27 +666,12 @@ pub fn sys_munmap(start: usize, len: usize) -> isize {
 }
 
 pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
-    if (addr % PAGE_SIZE != 0) || (len % PAGE_SIZE != 0) {
-        // Not align
-        warn!("[sys_mprotect] not align");
-        return EINVAL;
-    }
-    // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
-    let prot = MapPermission::from_bits((prot << 1) as u8).unwrap();
-    warn!(
-        "[sys_mprotect] addr: {:X}, len: {:X}, prot: {:?}",
-        addr, len, prot
-    );
     let task = current_task().unwrap();
-    let memory_set = &mut task.acquire_inner_lock().memory_set;
-    let start_vpn = addr / PAGE_SIZE;
-    let end_vpn = len / PAGE_SIZE;
-    for vpn in start_vpn..end_vpn {
-        if let Err(_) = memory_set.set_pte_flags(vpn.into(), prot) {
-            panic!("[sys_mprotect] No such pte");
-        }
+    let mut inner = task.acquire_inner_lock();
+    match inner.memory_set.mprotect(addr, len, prot) {
+        Ok(_) => SUCCESS,
+        Err(errno) => errno,
     }
-    SUCCESS
 }
 
 pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
