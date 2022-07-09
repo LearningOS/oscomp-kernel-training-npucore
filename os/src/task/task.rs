@@ -292,16 +292,7 @@ impl TaskControlBlock {
 
     pub fn load_elf(&self, elf_data: &[u8], argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> Result<(), isize> {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (mut memory_set, mut user_sp, program_break, mut elf_info) = MemorySet::from_elf(elf_data)?;
-        let mut real_entry = elf_info.entry;
-        if let Some(path) = elf_info.interp {
-            let interp_data = crate::task::load_elf_interp(path)?;
-            let interp = xmas_elf::ElfFile::new(interp_data).unwrap();
-            let (_, interp_info) = memory_set.map_elf(&interp)?;
-            KERNEL_SPACE.lock().remove_area_with_start_vpn(VirtAddr::from(interp_data.as_ptr() as usize).ceil()).unwrap();
-            real_entry = interp_info.entry;
-            elf_info.base = interp_info.base;
-        }
+        let (memory_set, mut user_sp, program_break, elf_info) = MemorySet::from_elf(elf_data)?;
         let token = (&memory_set).token();
 
         // go down to the stack page (important!) and align
@@ -436,7 +427,7 @@ impl TaskControlBlock {
 
         // initialize trap_cx
         let trap_cx = TrapContext::app_init_context(
-            real_entry,
+            if let Some(interp_entry) = elf_info.interp_entry { interp_entry } else { elf_info.entry },
             user_sp,
             KERNEL_SPACE.lock().token(),
             self.kernel_stack.get_top(),
@@ -556,10 +547,10 @@ impl TaskControlBlock {
     }
 }
 
-pub fn load_elf_interp(path: String) -> Result<&'static [u8], isize> {
+pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
     match open(
         &open_root_inode(),
-        &path,
+        path,
         OpenFlags::O_RDONLY,
         DiskInodeType::File,
     ) {
