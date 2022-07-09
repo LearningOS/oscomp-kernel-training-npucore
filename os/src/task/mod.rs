@@ -200,9 +200,9 @@ impl AuxvEntry {
 
 pub struct ELFInfo {
     pub entry: usize,
+    pub interp_entry: Option<usize>,
     pub base: usize,
     pub phnum: usize,
     pub phent: usize,
     pub phdr: usize,
-    pub interp: Option<String>,
 }

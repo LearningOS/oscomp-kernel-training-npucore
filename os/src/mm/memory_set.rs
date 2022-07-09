@@ -363,10 +363,11 @@ impl MemorySet {
             _ => return Err(ENOEXEC),
         };
 
-        let mut load_segment_count = 0;
+        let mut load_segment_count: usize = 0;
         let mut program_break: Option<usize> = None;
+        let mut interp_entry: Option<usize> = None;
+        let mut interp_base: Option<usize> = None;
         let mut load_addr: Option<usize> = None; // top va of ELF which points to ELF header
-        let mut interp: Option<String> = None;
 
         for ph in elf.program_iter() {
             // Map only when the sections that is to be loaded.
@@ -427,7 +428,7 @@ impl MemorySet {
                         };
                     }
                     program_break = Some(VirtAddr::from(end_va.ceil()).0);
-                    load_segment_count = load_segment_count + 1;
+                    load_segment_count += 1;
                     trace!(
                         "[map_elf] start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}",
                         start_va.0,
@@ -442,24 +443,27 @@ impl MemorySet {
                             [ph.offset() as usize..(ph.offset() + ph.file_size() - 1) as usize],
                     );
                     debug!("[map_elf] Found interpreter path: {}", path);
-                    interp = Some(path.to_string());
+                    let interp_data = crate::task::load_elf_interp(&path)?;
+                    let interp = xmas_elf::ElfFile::new(interp_data).unwrap();
+                    let (_, interp_info) = self.map_elf(&interp)?;
+                    interp_entry = Some(interp_info.entry);
+                    interp_base = Some(interp_info.base);
+                    KERNEL_SPACE.lock().remove_area_with_start_vpn(VirtAddr::from(interp_data.as_ptr() as usize).ceil()).unwrap();
                 }
                 _ => {}
             }
         }
-        if bias == 0 {
-            self.heap_area_idx = Some(load_segment_count);
-        }
+        self.heap_area_idx = Some(load_segment_count + self.heap_area_idx.unwrap_or_default());
         match (program_break, load_addr) {
             (Some(program_break), Some(load_addr)) => Ok((
                 program_break,
                 ELFInfo {
                     entry: elf.header.pt2.entry_point() as usize + bias,
-                    base: bias,
+                    interp_entry,
+                    base: if let Some(interp_base) = interp_base { interp_base } else { bias },
                     phnum: elf.header.pt2.ph_count() as usize,
                     phent: elf.header.pt2.ph_entry_size() as usize,
                     phdr: load_addr + elf.header.pt2.ph_offset() as usize,
-                    interp,
                 },
             )),
             _ => Err(ENOEXEC),
@@ -615,8 +619,8 @@ impl MemorySet {
             if let Err(_) = second.unmap(page_table) {
                 warn!("[munmap] Some pages are already unmapped, is it caused by lazy alloc?");
             }
-            self.areas.insert(idx, third);
             self.areas.insert(idx, first);
+            self.areas.insert(idx + 1, third);
         }
         if found_area {
             Ok(())
