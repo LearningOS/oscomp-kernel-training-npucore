@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::fs::{File, FileLike};
 use crate::syscall::errno::*;
 use crate::task::{current_task, ELFInfo};
-use alloc::string::{String, ToString};
+use alloc::string::{String};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::arch::asm;
@@ -569,17 +569,18 @@ impl MemorySet {
         self.areas.iter().for_each(|area|{
             let start_vpn = area.data_frames.vpn_range.get_start();
             let end_vpn = area.data_frames.vpn_range.get_end();
-            debug!("[show_areas] start_vpn: {:?}, end_vpn: {:?}, map_perm: {:?}", start_vpn, end_vpn, area.map_perm);
+            error!("[show_areas] start_vpn: {:?}, end_vpn: {:?}, map_perm: {:?}", start_vpn, end_vpn, area.map_perm);
         })
     }
     pub fn munmap(&mut self, start: usize, len: usize) -> Result<(), isize> {
         let start_va = VirtAddr::from(start);
         let end_va = VirtAddr::from(start + len);
-        let start_vpn = start_va.floor();
-        let end_vpn = end_va.ceil();
         if !start_va.aligned() {
+            warn!("[munmap] Not aligned");
             return Err(EINVAL)
         }
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
         let page_table = &mut self.page_table;
         let mut found_area = false;
         let mut delete: Vec::<usize> = Vec::new();
@@ -621,12 +622,96 @@ impl MemorySet {
             }
             self.areas.insert(idx, first);
             self.areas.insert(idx + 1, third);
+            if idx <= self.heap_area_idx.unwrap() {
+                self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
+            }
         }
         if found_area {
             Ok(())
         } else {
             Err(EINVAL)
         }
+    }
+    pub fn mprotect(&mut self, addr: usize, len: usize, prot: usize) -> Result<(), isize> {
+        let start_va = VirtAddr::from(addr);
+        let end_va = VirtAddr::from(addr + len);
+        // addr is not a multiple of the system page size.
+        if !start_va.aligned() {
+            warn!("[mprotect] Not aligned");
+            return Err(EINVAL)
+        }
+        // here (prot << 1) is identical to BitFlags of X/W/R in pte flags
+        let prot = MapPermission::from_bits(((prot as u8) << 1) | (1 << 4)).unwrap();
+        warn!(
+            "[mprotect] addr: {:X}, len: {:X}, prot: {:?}",
+            addr, len, prot
+        );
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+        let result = self.areas.iter().enumerate().find(|(_, area)| {
+            area.data_frames.vpn_range.get_start() <= start_vpn && start_vpn < area.data_frames.vpn_range.get_end()
+        });
+        match result {
+            Some((idx, _)) => {
+                let area_start_vpn = self.areas[idx].data_frames.vpn_range.get_start();
+                let area_end_vpn = self.areas[idx].data_frames.vpn_range.get_end();
+                // Addresses in the range [addr, addr+len-1] are invalid for the address space of the process,
+                // or specify one or more pages that are not mapped.
+                if end_vpn > area_end_vpn {
+                    warn!("[mprotect] addr: {:X} is not in any MapArea", addr);
+                    return Err(ENOMEM);
+                }
+                let mut area = if start_vpn == area_start_vpn && end_vpn == area_end_vpn {
+                    trace!("[mprotect] change prot of whole area, idx: {}", idx);
+                    self.areas.remove(idx)
+                } else if start_vpn == area_start_vpn {
+                    trace!("[mprotect] change prot of lower part");
+                    let (first, second) = self.areas.remove(idx).into_two(end_vpn).unwrap();
+                    self.areas.insert(idx, second);
+                    if idx <= self.heap_area_idx.unwrap() {
+                        self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
+                    }
+                    first
+                } else if end_vpn == area_end_vpn {
+                    trace!("[mprotect] change prot of higher part");
+                    let (first, second) = self.areas.remove(idx).into_two(start_vpn).unwrap();
+                    self.areas.insert(idx, first);
+                    if idx <= self.heap_area_idx.unwrap() {
+                        self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
+                    }
+                    second
+                } else {
+                    trace!("[mprotect] change prot of internal part, call into_three");
+                    let (first, second, third) = self.areas.remove(idx).into_three(start_vpn, end_vpn).unwrap();
+                    self.areas.insert(idx, first);
+                    self.areas.insert(idx + 1, third);
+                    if idx <= self.heap_area_idx.unwrap() {
+                        self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 2);
+                    }
+                    second
+                };
+                let page_table = &mut self.page_table;
+                let mut has_unmapped_page = false;
+                for vpn in area.data_frames.vpn_range {
+                    // Clear W prot, or CoW pages may be written unexpectedly.
+                    // And those pages will gain W prot by CoW.
+                    if let Err(_) = page_table.set_pte_flags(vpn, prot - MapPermission::W) {
+                        has_unmapped_page = true;
+                    }
+                }
+                if has_unmapped_page {
+                    warn!("[mprotect] Some pages are not mapped, is it caused by lazy alloc?");
+                }
+                // If `prot` contains W, store page fault & CoW will occur.
+                area.map_perm = prot;
+                self.areas.insert(idx + 1, area);
+            },
+            None => {
+                warn!("[mprotect] addr is not a valid pointer");
+                return Err(EINVAL)
+            },
+        }
+        Ok(())
     }
 }
 
@@ -689,10 +774,20 @@ impl MapRangeDict {
         self.data_frames.resize(new_vpn_end.0 - vpn_start.0, None);
         Ok(())
     }
+    pub fn into_two(self, cut: VirtPageNum) -> Result<(Self, Self), ()> {
+        let vpn_start = self.vpn_range.get_start();
+        let vpn_end = self.vpn_range.get_end();
+        if cut <= vpn_start || cut >= vpn_end {
+            return Err(())
+        }
+        let first = MapRangeDict {vpn_range: VPNRange::new(vpn_start, cut), data_frames: self.data_frames[0..cut.0 - vpn_start.0].to_vec()};
+        let second = MapRangeDict {vpn_range: VPNRange::new(cut, vpn_end), data_frames: self.data_frames[cut.0 - vpn_start.0..vpn_end.0 - vpn_start.0].to_vec()};
+        Ok((first, second))
+    }
     pub fn into_three(self, first_cut: VirtPageNum, second_cut: VirtPageNum) -> Result<(Self, Self, Self), ()> {
         let vpn_start = self.vpn_range.get_start();
         let vpn_end = self.vpn_range.get_end();
-        if first_cut <= vpn_start || second_cut >= vpn_end {
+        if first_cut <= vpn_start || second_cut >= vpn_end || first_cut > second_cut {
             return Err(())
         }
         let first = MapRangeDict {vpn_range: VPNRange::new(vpn_start, first_cut), data_frames: self.data_frames[0..first_cut.0 - vpn_start.0].to_vec()};
@@ -1091,8 +1186,23 @@ impl MapArea {
             return Some((start, end));
         }
     }
+    pub fn into_two(self, cut: VirtPageNum) -> Result<(Self, Self), ()> {
+        let second_file: Option<FileLike> = if let Some(FileLike::Regular(file)) = &self.map_file {
+            let new = file.clone();
+            new.set_offset(file.get_offset() + VirtAddr::from(cut).0 - VirtAddr::from(self.data_frames.vpn_range.get_start()).0);
+            Some(crate::mm::memory_set::FileLike::Regular(new))
+        } else {
+            None
+        };
+        let (first_frames, second_frames) = self.data_frames.into_two(cut)?;
+        Ok((
+            MapArea { data_frames: first_frames, map_type: self.map_type, map_perm: self.map_perm, map_file: self.map_file },
+            MapArea { data_frames: second_frames, map_type: self.map_type, map_perm: self.map_perm, map_file: second_file },
+        ))
+    }
     pub fn into_three(self, first_cut: VirtPageNum, second_cut: VirtPageNum) -> Result<(Self, Self, Self), ()> {
         if self.map_file.is_some() {
+            warn!("[into_three] break apart file-back MapArea!");
             return Err(());
         }
         let (first_frames, second_frames, third_frames) = self.data_frames.into_three(first_cut, second_cut)?;
