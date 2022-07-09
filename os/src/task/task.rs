@@ -9,6 +9,7 @@ use crate::fs::{
 use crate::mm::PageTable;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::*;
+use crate::syscall::CloneFlags;
 use crate::task::current_task;
 use crate::timer::TICKS_PER_SEC;
 use crate::timer::{ITimerVal, TimeVal};
@@ -26,32 +27,39 @@ use log::{debug, error, info, trace, warn};
 use riscv::register::scause::{Interrupt, Trap};
 use spin::{Mutex, MutexGuard};
 
+#[derive(Clone)]
+pub struct FsStatus {
+    pub working_inode: Arc<OSInode>,
+    pub working_dir: String,
+}
+
 pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
     pub kernel_stack: KernelStack,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
+    // shareable and mutable
+    pub files: Arc<Mutex<FdTable>>,
+    pub fs: Arc<Mutex<FsStatus>>,
+    pub vm: Arc<Mutex<MemorySet>>,
+    pub sighand: Arc<Mutex<BTreeMap<Signals, SigAction>>>,
 }
 
 pub type FdTable = Vec<Option<FileDescriptor>>;
 pub struct TaskControlBlockInner {
-    pub working_inode: Arc<OSInode>,
-    pub working_dir: String,
     pub sigmask: Signals,
+    pub sigpending: Signals,
     pub trap_cx_ppn: PhysPageNum,
     pub base_size: usize,
     pub task_cx_ptr: usize,
     pub task_status: TaskStatus,
-    pub memory_set: MemorySet,
     pub parent: Option<Weak<TaskControlBlock>>,
     pub children: Vec<Arc<TaskControlBlock>>,
     pub exit_code: u32,
-    pub fd_table: FdTable,
     pub address: ProcAddress,
     pub heap_bottom: usize,
     pub heap_pt: usize,
-    pub sigstatus: SigStatus,
     pub pgid: usize,
     pub rusage: Rusage,
     pub clock: ProcClock,
@@ -133,45 +141,14 @@ impl TaskControlBlockInner {
     pub fn get_trap_cx(&self) -> &'static mut TrapContext {
         self.trap_cx_ppn.get_mut()
     }
-    pub fn get_user_token(&self) -> usize {
-        self.memory_set.token()
-    }
     fn get_status(&self) -> TaskStatus {
         self.task_status
     }
     pub fn is_zombie(&self) -> bool {
         self.get_status() == TaskStatus::Zombie
     }
-    /// Try to alloc the lowest valid fd in `fd_table`
-    pub fn alloc_fd(&mut self) -> Option<usize> {
-        self.alloc_fd_at(0)
-    }
-    /// Try to alloc fd at `hint`, if `hint` is allocated, will alloc lowest valid fd above.
-    pub fn alloc_fd_at(&mut self, hint: usize) -> Option<usize> {
-        // [Warning] temporarily use hardcoded implementation, should adapt to `prlimit()` in future
-        const FD_LIMIT: usize = 128;
-        if hint < self.fd_table.len() {
-            if let Some(fd) = (hint..self.fd_table.len()).find(|fd| self.fd_table[*fd].is_none()) {
-                Some(fd)
-            } else {
-                if self.fd_table.len() < FD_LIMIT {
-                    self.fd_table.push(None);
-                    Some(self.fd_table.len() - 1)
-                } else {
-                    None
-                }
-            }
-        } else {
-            if hint < FD_LIMIT {
-                self.fd_table.resize(hint + 1, None);
-                Some(hint)
-            } else {
-                None
-            }
-        }
-    }
     pub fn add_signal(&mut self, signal: Signals) {
-        self.sigstatus.signal_pending.insert(signal);
+        self.sigpending.insert(signal);
     }
     pub fn update_process_times_enter_trap(&mut self) {
         let now = TimeVal::now();
@@ -248,31 +225,34 @@ impl TaskControlBlock {
         let task_control_block = Self {
             pid: pid_handle,
             kernel_stack,
-            inner: Mutex::new(TaskControlBlockInner {
+            files: Arc::new(Mutex::new(vec![
+                // 0 -> stdin
+                Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
+                // 1 -> stdout
+                Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
+                // 2 -> stderr
+                Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
+            ])),
+            fs: Arc::new(Mutex::new(FsStatus {
                 working_inode: open_root_inode(),
                 working_dir: "/".to_string(),
+            })),
+            vm: Arc::new(Mutex::new(memory_set)),
+            sighand: Arc::new(Mutex::new(BTreeMap::new())),
+            inner: Mutex::new(TaskControlBlockInner {
                 trap_cx_ppn,
                 pgid,
                 sigmask: Signals::empty(),
+                sigpending: Signals::empty(),
                 base_size: user_sp,
                 task_cx_ptr: task_cx_ptr as usize,
                 task_status: TaskStatus::Ready,
-                memory_set,
                 parent: None,
                 children: Vec::new(),
                 exit_code: 0,
-                fd_table: vec![
-                    // 0 -> stdin
-                    Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
-                    // 1 -> stdout
-                    Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
-                    // 2 -> stderr
-                    Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
-                ],
                 address: ProcAddress::new(),
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
-                sigstatus: SigStatus::new(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
                 timer: [ITimerVal::new(); 3],
@@ -290,7 +270,12 @@ impl TaskControlBlock {
         task_control_block
     }
 
-    pub fn load_elf(&self, elf_data: &[u8], argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> Result<(), isize> {
+    pub fn load_elf(
+        &self,
+        elf_data: &[u8],
+        argv_vec: &Vec<String>,
+        envp_vec: &Vec<String>,
+    ) -> Result<(), isize> {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (memory_set, mut user_sp, program_break, elf_info) = MemorySet::from_elf(elf_data)?;
         let token = (&memory_set).token();
@@ -427,7 +412,11 @@ impl TaskControlBlock {
 
         // initialize trap_cx
         let trap_cx = TrapContext::app_init_context(
-            if let Some(interp_entry) = elf_info.interp_entry { interp_entry } else { elf_info.entry },
+            if let Some(interp_entry) = elf_info.interp_entry {
+                interp_entry
+            } else {
+                elf_info.entry
+            },
             user_sp,
             KERNEL_SPACE.lock().token(),
             self.kernel_stack.get_top(),
@@ -446,13 +435,13 @@ impl TaskControlBlock {
             .ppn();
         *inner.get_trap_cx() = trap_cx;
         // substitute memory_set
-        inner.memory_set = memory_set;
+        *self.vm.lock() = memory_set;
         inner.heap_bottom = program_break;
         inner.heap_pt = program_break;
         // flush signal handler
-        inner.sigstatus.signal_handler = BTreeMap::new();
+        *self.sighand.lock() = BTreeMap::new();
         // flush cloexec fd
-        inner.fd_table.iter_mut().for_each(|fd| match fd {
+        self.files.lock().iter_mut().for_each(|fd| match fd {
             Some(file) => {
                 if file.get_cloexec() {
                     *fd = None;
@@ -463,12 +452,19 @@ impl TaskControlBlock {
         Ok(())
         // **** release current PCB lock
     }
-    pub fn fork(self: &Arc<TaskControlBlock>) -> Arc<TaskControlBlock> {
+    pub fn sys_clone(self: &Arc<TaskControlBlock>, flags: CloneFlags) -> Arc<TaskControlBlock> {
         // ---- hold parent PCB lock
         let mut parent_inner = self.acquire_inner_lock();
         // copy user space(include trap context)
-        let memory_set = MemorySet::from_existing_user(&mut parent_inner.memory_set);
+        let memory_set = if flags.contains(CloneFlags::CLONE_VM) {
+            self.vm.clone()
+        } else {
+            Arc::new(Mutex::new(MemorySet::from_existing_user(
+                &mut self.vm.lock(),
+            )))
+        };
         let trap_cx_ppn = memory_set
+            .lock()
             .translate(VirtAddr::from(TRAP_CONTEXT).into())
             .unwrap()
             .ppn();
@@ -478,28 +474,33 @@ impl TaskControlBlock {
         let kernel_stack_top = kernel_stack.get_top();
         // push a goto_trap_return task_cx on the top of kernel stack
         let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
-        // copy fd table
-        let mut new_fd_table: FdTable = Vec::new();
-        for fd in parent_inner.fd_table.iter() {
-            if let Some(file) = fd {
-                new_fd_table.push(Some(file.clone()));
-            } else {
-                new_fd_table.push(None);
-            }
-        }
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
             kernel_stack,
+            files: if flags.contains(CloneFlags::CLONE_FILES) {
+                self.files.clone()
+            } else {
+                Arc::new(Mutex::new(self.files.lock().clone()))
+            },
+            fs: if flags.contains(CloneFlags::CLONE_FS) {
+                self.fs.clone()
+            } else {
+                Arc::new(Mutex::new(self.fs.lock().clone()))
+            },
+            vm: memory_set,
+            sighand: if flags.contains(CloneFlags::CLONE_SIGHAND) {
+                self.sighand.clone()
+            } else {
+                Arc::new(Mutex::new(self.sighand.lock().clone()))
+            },
             inner: Mutex::new(TaskControlBlockInner {
                 //inherited
                 pgid: parent_inner.pgid,
                 base_size: parent_inner.base_size,
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
-                //cloned(usu. still inherited)
-                working_inode: parent_inner.working_inode.clone(),
-                working_dir: parent_inner.working_dir.clone(),
-                sigstatus: parent_inner.sigstatus.clone(),
+                //clone
+                sigpending: parent_inner.sigpending.clone(),
                 //new/empty
                 parent: Some(Arc::downgrade(self)),
                 children: Vec::new(),
@@ -509,11 +510,9 @@ impl TaskControlBlock {
                 timer: [ITimerVal::new(); 3],
                 sigmask: Signals::empty(),
                 //computed
-                fd_table: new_fd_table,
                 task_cx_ptr: task_cx_ptr as usize,
                 task_status: TaskStatus::Ready,
                 trap_cx_ppn,
-                memory_set,
                 //constants
                 exit_code: 0,
             }),
@@ -545,6 +544,37 @@ impl TaskControlBlock {
         let inner = self.acquire_inner_lock();
         inner.pgid
     }
+    /// Try to alloc the lowest valid fd in `fd_table`
+    pub fn alloc_fd(&self, fd_table: &mut MutexGuard<Vec<Option<FileDescriptor>>>) -> Option<usize> {
+        self.alloc_fd_at(0, fd_table)
+    }
+    /// Try to alloc fd at `hint`, if `hint` is allocated, will alloc lowest valid fd above.
+    pub fn alloc_fd_at(&self, hint: usize, fd_table: &mut MutexGuard<Vec<Option<FileDescriptor>>>) -> Option<usize> {
+        // [Warning] temporarily use hardcoded implementation, should adapt to `prlimit()` in future
+        const FD_LIMIT: usize = 128;
+        if hint < fd_table.len() {
+            if let Some(fd) = (hint..fd_table.len()).find(|fd| fd_table[*fd].is_none()) {
+                Some(fd)
+            } else {
+                if fd_table.len() < FD_LIMIT {
+                    fd_table.push(None);
+                    Some(fd_table.len() - 1)
+                } else {
+                    None
+                }
+            }
+        } else {
+            if hint < FD_LIMIT {
+                fd_table.resize(hint + 1, None);
+                Some(hint)
+            } else {
+                None
+            }
+        }
+    }
+    pub fn get_user_token(&self) -> usize {
+        self.vm.lock().token()
+    }
 }
 
 pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
@@ -564,7 +594,9 @@ pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
             match magic_number.as_slice() {
                 b"\x7fELF" => {
                     let buffer_addr = KERNEL_SPACE.lock().last_mmap_area_end();
-                    let buffer = unsafe { core::slice::from_raw_parts_mut(buffer_addr.0 as *mut u8, file.size()) };
+                    let buffer = unsafe {
+                        core::slice::from_raw_parts_mut(buffer_addr.0 as *mut u8, file.size())
+                    };
                     let frames = file.get_all_cache_frame();
 
                     crate::mm::KERNEL_SPACE
@@ -575,9 +607,9 @@ pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
                             frames,
                         )
                         .unwrap();
-                    
+
                     return Ok(buffer);
-                },
+                }
                 _ => Err(ELIBBAD),
             }
         }
@@ -625,12 +657,10 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
         envp_vec.len()
     );
     let task = current_task().unwrap();
-    let inner = task.acquire_inner_lock();
-    let working_inode = inner.working_inode.clone();
-    drop(inner);
+    let working_inode = &task.fs.lock().working_inode;
 
     match open(
-        &working_inode,
+        working_inode,
         path.as_str(),
         OpenFlags::O_RDONLY,
         DiskInodeType::File,
@@ -646,7 +676,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
                 b"\x7fELF" => elf_exec(file, &argv_vec, &envp_vec),
                 b"#!" => {
                     let shell_file = open(
-                        &working_inode,
+                        working_inode,
                         DEFAULT_SHELL,
                         OpenFlags::O_RDONLY,
                         DiskInodeType::File,

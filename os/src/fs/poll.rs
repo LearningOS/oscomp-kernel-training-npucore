@@ -146,18 +146,18 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
         loop {
             let mut i = 0;
             let task = current_task().unwrap();
-            let inner = task.acquire_inner_lock();
             //
+            let fd_table = task.files.lock();
             while i != poll_fd.len() {
                 let j = {
-                    if poll_fd[i].fd as usize >= inner.fd_table.len()
-                        || inner.fd_table[poll_fd[i].fd as usize].is_none()
+                    if poll_fd[i].fd as usize >= fd_table.len()
+                        || fd_table[poll_fd[i].fd as usize].is_none()
                     {
                         None
                     } else {
                         /*should be "poll_fd[i].fd as usize"*/
                         Some(
-                            inner.fd_table[poll_fd[i].fd as usize]
+                            fd_table[poll_fd[i].fd as usize]
                                 .as_ref()
                                 .unwrap()
                                 .clone(),
@@ -179,7 +179,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                             break;
                         }
                     }
-                    super::FileLike::Regular(file) => {}
+                    super::FileLike::Regular(_) => {}
                 };
                 i += 1;
             }
@@ -194,8 +194,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                 break done;
             } else {
                 copy_to_user_array(token, &poll_fd[0], poll_fd_p as *mut PollFd, nfds);
-                drop(inner);
-                drop(task);
+                drop(fd_table);
                 suspend_current_and_run_next();
             }
         }
@@ -342,7 +341,7 @@ pub fn pselect(
     loop {
         let task = current_task().unwrap();
         let inner = task.acquire_inner_lock();
-        let fd_table = &inner.fd_table;
+        let fd_table = task.files.lock();
         ret = 2048;
         macro_rules! do_chk {
             ($f:ident,$func:ident,$fds:ident,$i:ident) => {

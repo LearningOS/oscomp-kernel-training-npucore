@@ -3,10 +3,10 @@ mod context;
 use core::arch::{asm, global_asm};
 
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
-use crate::mm::{MapPermission, PhysPageNum, VirtAddr, VirtPageNum};
+use crate::mm::{VirtAddr};
 use crate::syscall::syscall;
 use crate::task::{
-    current_task, current_trap_cx, current_user_token, do_signal, exit_current_and_run_next,
+    current_task, current_trap_cx, current_user_token, do_signal,
     suspend_current_and_run_next, Signals,
 };
 use crate::timer::set_next_trigger;
@@ -85,9 +85,9 @@ pub fn trap_handler() -> ! {
                 scause.cause()
             );
             // This is where we handle the page fault.
-            if inner.memory_set.do_page_fault(addr).is_err() {
+            if task.vm.lock().do_page_fault(addr).is_err() {
                 inner.add_signal(Signals::SIGSEGV);
-                log::debug!("{:?}", inner.sigstatus);
+                log::debug!("{:?}", inner.sigpending);
             }
         }
         Trap::Exception(Exception::IllegalInstruction) => {

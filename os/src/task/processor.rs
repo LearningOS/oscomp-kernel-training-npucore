@@ -82,7 +82,7 @@ pub fn current_task() -> Option<Arc<TaskControlBlock>> {
 /// leaving the task UNLOCKED.
 pub fn current_user_token() -> usize {
     let task = current_task().unwrap();
-    let token = task.acquire_inner_lock().get_user_token();
+    let token = task.get_user_token();
     token
 }
 
