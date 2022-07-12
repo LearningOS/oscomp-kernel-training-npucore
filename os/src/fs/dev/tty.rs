@@ -234,7 +234,7 @@ impl File for Teletype {
     }
 
     fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
-        todo!()
+        Err(ESPIPE)
     }
 
     fn modify_size(&self, diff: isize) -> Result<(), isize> {
