@@ -168,7 +168,7 @@ pub fn syscall_name(id: usize) -> &'static str {
     }
 }
 use crate::{
-    fs::FdSet,
+    fs::poll::FdSet,
     task::Rusage,
     timer::{ITimerVal, TimeSpec, Times},
 };
@@ -329,7 +329,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[1] as *mut FdSet,
             args[2] as *mut FdSet,
             args[3] as *mut FdSet,
-            args[4] as *const TimeSpec,
+            args[4] as *mut TimeSpec,
             args[5] as *const crate::task::Signals,
         ),
         SYSCALL_PPOLL => sys_ppoll(args[0], args[1], args[2], args[3]),

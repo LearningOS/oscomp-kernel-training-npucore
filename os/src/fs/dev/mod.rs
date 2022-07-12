@@ -1,5 +1,4 @@
-mod pseudo;
-mod tty;
-
-pub use pseudo::*;
-pub use tty::*;
+pub mod tty;
+pub mod zero;
+pub mod null;
+pub mod pipe;

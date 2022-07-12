@@ -84,35 +84,47 @@ pub struct Inode<T: CacheManager, F: CacheManager> {
     /// File Content
     file_content: Mutex<FileContent<T>>,
     /// File type
-    file_type: DiskInodeType,
+    file_type: Mutex<DiskInodeType>,
     /// The parent directory of this inode
     parent_dir: Mutex<Option<(Arc<Self>, u32)>>,
     /// file system
     fs: Arc<EasyFileSystem<F>>,
     /// Struct to hold time related information
     time: Mutex<InodeTime>,
+    /// Info Inode to delete file content
+    deleted: Mutex<bool>,
 }
 
 impl<T: CacheManager, F: CacheManager> Drop for Inode<T, F> {
     /// Before deleting the inode, the file information should be written back to the parent directory
     fn drop(&mut self) {
-        if self.parent_dir.lock().is_none() {
-            return;
+        if *self.deleted.lock() {
+            let mut lock = self.lock();
+            // Clear size
+            let old_size = lock.get_file_size();
+            self.modify_size_lock(&mut lock, -(old_size as isize));
+            // Deallocate clusters
+            let clus_list = mem::take(&mut lock.clus_list);
+            self.fs.fat.free(&self.fs.block_device, clus_list);
+        } else {
+            if self.parent_dir.lock().is_none() {
+                return;
+            }
+            let par_dir_lock = self.parent_dir.lock();
+            let (parent_dir, offset) = par_dir_lock.as_ref().unwrap();
+    
+            let mut par_lock = parent_dir.lock();
+            let dir_ent = parent_dir.get_dir_ent(&mut par_lock, *offset).unwrap();
+            let mut short_dir_ent = *dir_ent.get_short_ent().unwrap();
+            // Modify size
+            let lock = self.lock();
+            short_dir_ent.file_size = lock.size;
+            // Modify time
+            // todo!
+            log::debug!("[Inode drop]: new_ent: {:?}", short_dir_ent);
+            // Write back
+            parent_dir.set_dir_ent(&mut par_lock, *offset, dir_ent).unwrap();
         }
-        let par_dir_lock = self.parent_dir.lock();
-        let (parent_dir, offset) = par_dir_lock.as_ref().unwrap();
-
-        let mut par_lock = parent_dir.lock();
-        let dir_ent = parent_dir.get_dir_ent(&mut par_lock, *offset).unwrap();
-        let mut short_dir_ent = *dir_ent.get_short_ent().unwrap();
-        // Modify size
-        let lock = self.lock();
-        short_dir_ent.file_size = lock.size;
-        // Modify time
-        // todo!
-        log::debug!("[Inode drop]: new_ent: {:?}", short_dir_ent);
-        // Write back
-        parent_dir.set_dir_ent(&mut par_lock, *offset, dir_ent).unwrap();
     }
 }
 
@@ -157,10 +169,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         };
         let inode = Arc::new(Inode {
             file_content,
-            file_type,
+            file_type: Mutex::new(file_type),
             parent_dir,
             fs,
             time: Mutex::new(time),
+            deleted: Mutex::new(false),
         });
         
         // Init hint
@@ -180,19 +193,26 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn lock(&self) -> MutexGuard<FileContent<T>> {
         self.file_content.lock()
     }
+    pub fn get_file_type_lock(&self) -> MutexGuard<DiskInodeType> {
+        self.file_type.lock()
+    }
+    /// Get file type
+    pub fn get_file_type(&self) -> DiskInodeType {
+        *self.file_type.lock()
+    }
     /// Check if file type is directory
     /// # Return Value
     /// Bool result
     #[inline(always)]
     pub fn is_dir(&self) -> bool {
-        self.file_type == DiskInodeType::Directory
+        self.get_file_type() == DiskInodeType::Directory
     }
     /// Check if file type is file
     /// # Return Value
     /// Bool result
     #[inline(always)]
     pub fn is_file(&self) -> bool {
-        self.file_type == DiskInodeType::File
+        self.get_file_type() == DiskInodeType::File
     }
 
     pub fn get_parent_dir(&self) -> Option<Arc<Self>> {
@@ -323,7 +343,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         alloc_num: usize
     ) {
         let clus_list = &mut lock.clus_list;
-        let mut new_clus_list = self.fs.fat.alloc_mult(
+        let mut new_clus_list = self.fs.fat.alloc(
             &self.fs.block_device,
             alloc_num,
             clus_list.last().map(|clus| *clus),
@@ -344,10 +364,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let dealloc_num = dealloc_num.min(clus_list.len());
         let mut dealloc_list = Vec::<u32>::new();
         for _ in 0..dealloc_num {
-            self.fs
-                .fat
-                .dealloc(&self.fs.block_device, clus_list.pop().unwrap())
+            dealloc_list.push(clus_list.pop().unwrap());
         }
+        self.fs
+            .fat
+            .free(&self.fs.block_device, dealloc_list);
     }
     /// Change the size of current file.
     /// This operation is ignored if the result size is negative
@@ -390,6 +411,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             }
         }
         dir_ent.set_size(new_size);
+        lock.file_cache_mgr.notify_new_size(new_size as usize);
     }
 
     /// When memory is low, it is called to free its cache
@@ -1004,9 +1026,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 }
 
 /// Delete
-/// The real delete operation is done by unlink syscall(this maybe a big problem)
-/// So we don't care about atomic deletes in the filesystem
-/// We can recycle resources at will, and don't care about the resource competition of this inode
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// Delete the short and the long entry of `self` from `parent_dir`
     /// # Return Value
@@ -1021,44 +1040,67 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         Err(())
     }
     /// Delete the file from the disk,
+    /// This file doesn't be removed immediately(dropped)
     /// deallocating both the directory entries (whether long or short),
     /// and the occupied clusters.
     /// # Arguments
     /// + `trash`: the pointer to Inode needs to be deleted 
     /// # Return Value
     /// If successful, it will return Ok.
-    /// Otherwise, it will return Error.
+    /// Otherwise, it will return Error with error number.
     /// # Warning
     /// This function will lock trash's `file_content`, may cause deadlock
     /// Make sure Arc has a strong count of 1.
     /// Make sure all its caches are not held by anyone else.
-    pub fn delete_from_disk(trash: Arc<Self>) -> Result<(), ()> {
-        let mut lock = trash.file_content.lock();
-        if trash.is_dir() && !trash.is_empty_dir_lock(&mut lock) {
-            return Err(());
-        }
-        log::debug!("[delete_from_disk] inode: {:?}, type: {:?}", trash.get_inode_num_lock(&lock), trash.file_type);
-        // Clear size
-        lock.size = 0;
-        // Before deallocating the cluster, we should sync cache data with disk.
-        // Or we may found data is written by global cache manager(non-repeatable read in database).
-        // Sync cache
-        let neighbor = |inner_cache_id|{trash.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
-        let block_device = &trash.fs.block_device;
-        for _ in 0..4 {
-            lock.file_cache_mgr.oom(neighbor, block_device);
-        }
-        // Deallocate clusters
-        let clus_list = mem::take(&mut lock.clus_list);
-        trash.fs.fat.mult_dealloc(&trash.fs.block_device, clus_list);
+    /// Make sure target directory file is empty.
+    pub fn unlink_lock(
+        &self,
+        lock: &mut MutexGuard<FileContent<T>>,
+        delete: bool
+    ) -> Result<(), isize> {
+        log::debug!("[delete_from_disk] inode: {:?}, type: {:?}", self.get_inode_num_lock(&lock), self.file_type);
         // Remove directory entries
-        if trash.delete_self_dir_ent().is_err() {
-            return Err(());
+        if self.delete_self_dir_ent().is_err() {
+            panic!()
         }
-        *trash.parent_dir.lock() = None;
+        if delete {
+            *self.deleted.lock() = true;
+        }
+        *self.parent_dir.lock() = None;
         Ok(())
     }
 }
+
+/// Link
+impl<T: CacheManager, F: CacheManager> Inode<T, F> {
+    pub fn link_par_lock(
+        &self,
+        lock: &mut MutexGuard<FileContent<T>>,
+        parent_dir: &Arc<Self>,
+        parent_lock: &mut MutexGuard<FileContent<T>>,
+        name: String,
+    ) -> Result<(), ()> {
+        // Genrate directory entries
+        let (short_ent, long_ents) =  
+            Self::gen_dir_ent(parent_dir, parent_lock, &name, self.get_first_clus_lock(lock).unwrap_or(0), *self.file_type.lock());
+        // Allocate new directory entry
+        let short_ent_offset = 
+            match parent_dir.create_dir_ent(parent_lock, short_ent, long_ents) {
+                Ok(offset) => offset,
+                Err(_) => return Err(()),
+            };
+        // If this is a directory, modify ".."
+        if self.is_dir() && self.modify_parent_dir_entry(
+            lock, parent_dir.get_first_clus_lock(parent_lock).unwrap()
+        ).is_err() {
+            return Err(());
+        }
+        // Modify parent directory
+        *self.parent_dir.lock() = Some((parent_dir.clone(), short_ent_offset));
+        Ok(())
+    }
+}
+
 
 /// Create
 impl<T: CacheManager, F: CacheManager> Inode<T, F> {
@@ -1095,7 +1137,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 if fst_clus.is_empty() {
                     return Err(());
                 }
-                fst_clus.unwrap()
+                fst_clus[0]
             } else {
                 0
             };

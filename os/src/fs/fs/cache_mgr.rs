@@ -426,4 +426,28 @@ impl CacheManager for PageCacheManager {
         *self.allocated_cache.lock() = new_allocated_cache;
         dropped
     }
+
+    fn notify_new_size(
+        &self,
+        new_size: usize
+    ) {
+        let mut lock = self.cache_pool.lock();
+        let new_pages = (new_size + PAGE_SIZE - 1) / PAGE_SIZE;
+        while lock.len() > new_pages {
+            lock.pop().unwrap().map(|cache|{
+                if Arc::strong_count(&cache) > 1 {
+                    panic!("page cache was used by others");
+                }
+            });
+        }
+        lock.shrink_to_fit();
+        
+        let mut new_allocated_cache = Vec::<usize>::new();
+        for inner_cache_id in &*self.allocated_cache.lock() {
+            if *inner_cache_id < new_pages {
+                new_allocated_cache.push(*inner_cache_id);
+            } 
+        }
+        *self.allocated_cache.lock() = new_allocated_cache;
+    }
 }
