@@ -1,10 +1,13 @@
-use crate::fs::File;
+use crate::fs::directory_tree::DirectoryTreeNode;
+use crate::fs::layout::{Stat};
+use crate::fs::file_trait::{File};
 use crate::mm::{copy_from_user, copy_to_user};
 use crate::mm::{translated_ref, translated_refmut, UserBuffer};
 use crate::sbi::console_getchar;
 use crate::syscall::errno::*;
 use crate::task::suspend_current_and_run_next;
 use alloc::sync::Arc;
+use easy_fs::DiskInodeType;
 use lazy_static::lazy_static;
 use log::{info, warn};
 use num_enum::FromPrimitive;
@@ -34,11 +37,6 @@ impl Default for WinSize {
     }
 }
 
-#[derive(Default)]
-pub struct Teletype {
-    inner: Mutex<TeletypeInner>,
-}
-
 pub struct TeletypeInner {
     last_char: u8,
     foreground_pgid: u32,
@@ -57,8 +55,22 @@ impl Default for TeletypeInner {
     }
 }
 
+#[derive(Default)]
+pub struct Teletype {
+    inner: Mutex<TeletypeInner>,
+}
+
+impl Teletype {
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
 // TODO: independ of rust sbi
 impl File for Teletype {
+    fn deep_clone(&self) -> Arc<dyn File> {
+        todo!()
+    }
     fn readable(&self) -> bool {
         true
     }
@@ -67,8 +79,26 @@ impl File for Teletype {
         true
     }
 
+    fn read(&self, offset: Option<&mut usize>, buf: &mut [u8]) -> usize {
+        unimplemented!()   
+    }
+
+    fn write(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
+        let _inner = self.inner.lock();
+        match offset {
+            Some(_) => ESPIPE as usize,
+            None => {
+                match core::str::from_utf8(buffer) {
+                    Ok(content) => print!("{}", content),
+                    Err(_) => warn!("[tty_kwrite] Non-UTF8 charaters: {:?}", buffer),
+                }
+                buffer.len()
+            }
+        }
+    }
+
     #[cfg(feature = "board_k210")]
-    fn r_ready(&self) -> bool {
+    fn read_ready(&self) -> bool {
         let mut inner = self.inner.lock();
         // in this case, user program call pselect() before, should return true
         if inner.last_char == 0 {
@@ -98,7 +128,7 @@ impl File for Teletype {
     }
 
     #[cfg(feature = "board_k210")]
-    fn read(&self, mut buf: UserBuffer) -> usize {
+    fn read_user(&self, mut buf: UserBuffer) -> usize {
         let mut inner = self.inner.lock();
         // block read here, infallible
         unsafe {
@@ -114,7 +144,7 @@ impl File for Teletype {
     }
 
     #[cfg(not(any(feature = "board_k210")))]
-    fn read(&self, buf: UserBuffer) -> usize {
+    fn read_user(&self, buf: UserBuffer) -> usize {
         let mut inner = self.inner.lock();
         // todo: check foreground pgid
         let mut count = 0;
@@ -142,7 +172,7 @@ impl File for Teletype {
         count
     }
 
-    fn write(&self, user_buffer: UserBuffer) -> usize {
+    fn write_user(&self, user_buffer: UserBuffer) -> usize {
         let _inner = self.inner.lock();
         for buffer in user_buffer.buffers.iter() {
             match core::str::from_utf8(*buffer) {
@@ -153,18 +183,86 @@ impl File for Teletype {
         user_buffer.len()
     }
 
-    fn kwrite(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
-        let _inner = self.inner.lock();
-        match offset {
-            Some(_) => ESPIPE as usize,
-            None => {
-                match core::str::from_utf8(buffer) {
-                    Ok(content) => print!("{}", content),
-                    Err(_) => warn!("[tty_kwrite] Non-UTF8 charaters: {:?}", buffer),
-                }
-                buffer.len()
-            }
-        }
+    fn get_stat(&self) -> Stat {
+        Stat::new(
+            5,
+            1,
+            0o100777,
+            1,
+            0x0000000400000040,
+            0,
+            0,
+            0,
+            0,
+        )
+    }
+
+    fn get_file_type(&self) -> DiskInodeType {
+        DiskInodeType::File
+    }
+
+    fn info_dirtree_node(&self, dirnode_ptr: alloc::sync::Weak<crate::fs::directory_tree::DirectoryTreeNode>) {
+        
+    }
+
+    fn get_dirtree_node(&self) -> Option<Arc<DirectoryTreeNode>> {
+        todo!()
+    }
+
+    fn open(&self, flags: crate::fs::layout::OpenFlags, special_use: bool) -> Arc<dyn File> {
+        TTY.clone()
+    }
+
+    fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
+        todo!()
+    }
+
+    fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
+        todo!()
+    }
+
+    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize> where Self: Sized {
+        todo!()
+    }
+
+    fn unlink(&self, delete: bool) -> Result<(), isize> {
+        todo!()
+    }
+
+    fn get_dirent(&self, count: usize) -> alloc::vec::Vec<crate::fs::layout::Dirent> {
+        todo!()
+    }
+
+    fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
+        todo!()
+    }
+
+    fn modify_size(&self, diff: isize) -> Result<(), isize> {
+        todo!()
+    }
+
+    fn truncate_size(&self, new_size: usize) -> Result<(), isize> {
+        todo!()
+    }
+
+    fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) {
+        todo!()
+    }
+
+    fn get_single_cache(&self, offset: usize) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+        todo!()
+    }
+
+    fn get_all_caches(&self) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+        todo!()
+    }
+
+    fn oom(&self) -> usize {
+        0
+    }
+
+    fn hang_up(&self) -> bool {
+        todo!()
     }
 
     fn ioctl(&self, cmd: u32, argp: usize) -> isize {

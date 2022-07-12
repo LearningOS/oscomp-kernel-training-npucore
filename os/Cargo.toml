@@ -22,6 +22,7 @@ embedded-hal = "=1.0.0-alpha.7"
 nb = "1.0"
 log = "0.4"
 num_enum = { version="0.5", default-features = false }
+downcast-rs = { version="1.2.0", default-features = false }
 
 [features]
 board_qemu = []

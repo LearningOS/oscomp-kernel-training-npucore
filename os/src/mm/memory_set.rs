@@ -4,8 +4,9 @@ use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::*;
-use crate::fs::{File, FileLike};
+use crate::fs::file_trait::File;
 use crate::syscall::errno::*;
+use crate::syscall::fs::SeekWhence;
 use crate::task::{current_task, ELFInfo};
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -222,18 +223,10 @@ impl MemorySet {
                         target as *const u8,
                         PAGE_SIZE,
                     ));
-                    match file {
-                        FileLike::Regular(file) => {
-                            let old_offset = file.get_offset();
-                            let virt_offset =
-                                target - VirtAddr::from(area.data_frames.vpn_range.get_start()).0;
-                            file.set_offset(old_offset + virt_offset);
-                            file.read(page);
-                            file.set_offset(old_offset);
-                        }
-                        // map a non-regular file will cause EACCES, so it's impossible here
-                        _ => unreachable!(),
-                    }
+                    let old_offset = file.get_offset();
+                    file.lseek((target - VirtAddr::from(area.data_frames.vpn_range.get_start()).0) as isize, SeekWhence::SEEK_CUR);
+                    file.read_user(page);
+                    file.lseek(old_offset as isize, SeekWhence::SEEK_SET);
                 }
                 // if mapped successfully,
                 // in other words, not previously mapped before last statement(let result = ...)
@@ -692,20 +685,12 @@ impl MemorySet {
                 return EBADF as usize;
             }
             if let Some(fd) = &fd_table[fd] {
-                match &fd.file {
-                    FileLike::Regular(inode) => {
-                        // A file mapping was requested, but fd is not open for reading
-                        if !inode.readable() {
-                            return EACCES as usize;
-                        }
-                        inode.set_offset(offset);
-                    }
-                    // A file descriptor refers to a non-regular file
-                    _ => {
-                        return EACCES as usize;
-                    }
+                let file = fd.file.deep_clone();
+                if !file.readable() {
+                    return EACCES as usize;
                 }
-                new_area.map_file = Some(fd.file.clone());
+                file.lseek(offset as isize, SeekWhence::SEEK_SET);
+                new_area.map_file = Some(file);
             } else {
                 // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
                 return EBADF as usize;
@@ -994,7 +979,7 @@ pub struct MapArea {
     map_type: MapType,
     /// Permissions which are the or of RWXU, where U stands for user.
     map_perm: MapPermission,
-    pub map_file: Option<FileLike>,
+    pub map_file: Option<Arc<dyn File>>,
 }
 
 impl MapArea {
@@ -1004,7 +989,7 @@ impl MapArea {
         end_va: VirtAddr,
         map_type: MapType,
         map_perm: MapPermission,
-        map_file: Option<FileLike>,
+        map_file: Option<Arc<dyn File>>,
     ) -> Self {
         let start_vpn: VirtPageNum = start_va.floor();
         let end_vpn: VirtPageNum = end_va.ceil();
@@ -1023,10 +1008,7 @@ impl MapArea {
     }
     /// Return the reference count to the currently using file if exists.
     pub fn file_ref(&self) -> Option<usize> {
-        let ret = self.map_file.as_ref().map(|x| match &x {
-            &FileLike::Regular(ref i) => Arc::strong_count(i),
-            &FileLike::Abstract(ref i) => Arc::strong_count(i),
-        });
+        let ret = self.map_file.as_ref().map(|x| Arc::strong_count(x));
         info!("[file_ref] {}", ret.unwrap());
         ret
     }
@@ -1371,13 +1353,14 @@ impl MapArea {
         }
     }
     pub fn into_two(self, cut: VirtPageNum) -> Result<(Self, Self), ()> {
-        let second_file: Option<FileLike> = if let Some(FileLike::Regular(file)) = &self.map_file {
-            let new = file.clone();
-            new.set_offset(
-                file.get_offset() + VirtAddr::from(cut).0
-                    - VirtAddr::from(self.data_frames.vpn_range.get_start()).0,
+        let second_file = if let Some(file) = &self.map_file {
+            let new_file = file.deep_clone();
+            new_file.lseek(
+                (file.get_offset() + VirtAddr::from(cut).0
+                    - VirtAddr::from(self.data_frames.vpn_range.get_start()).0) as isize,
+                SeekWhence::SEEK_SET
             );
-            Some(crate::mm::memory_set::FileLike::Regular(new))
+            Some(new_file)
         } else {
             None
         };

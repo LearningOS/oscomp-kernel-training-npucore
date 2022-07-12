@@ -80,4 +80,13 @@ pub trait CacheManager {
     {
         unreachable!()
     }
+    /// When file size changed, we should notify cache manager to drop some cache
+    /// # Argument
+    /// + `new_size`: File's new size
+    fn notify_new_size(
+        &self,
+        _new_size: usize
+    ) {
+        unreachable!()
+    }
 }

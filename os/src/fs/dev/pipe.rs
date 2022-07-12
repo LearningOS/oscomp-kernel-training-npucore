@@ -1,7 +1,11 @@
-use super::File;
-use crate::mm::UserBuffer;
+
+use crate::fs::directory_tree::DirectoryTreeNode;
+use crate::fs::layout::{Stat};
+use crate::syscall::errno::SUCCESS;
+use crate::{mm::UserBuffer, fs::file_trait::File};
 use crate::task::suspend_current_and_run_next;
 use alloc::sync::{Arc, Weak};
+use easy_fs::DiskInodeType;
 use spin::Mutex;
 
 pub struct Pipe {
@@ -120,23 +124,33 @@ pub fn make_pipe() -> (Arc<Pipe>, Arc<Pipe>) {
 }
 
 impl File for Pipe {
+    fn deep_clone(&self) -> Arc<dyn File> {
+        todo!()
+    }
     fn readable(&self) -> bool {
         self.readable
     }
     fn writable(&self) -> bool {
         self.writable
     }
-    fn hang_up(&self) -> bool {
-        // The peer has closed its end.
-        // Or maybe you should only check whether both ends have been closed by the peer.
-        if self.readable {
-            self.buffer.lock().all_write_ends_closed()
-        } else {
-            //writable
-            self.buffer.lock().all_read_ends_closed()
-        }
+    fn read(&self, offset: Option<&mut usize>, buf: &mut [u8]) -> usize {
+        unreachable!()
     }
-    fn read(&self, buf: UserBuffer) -> usize {
+    fn write(&self, offset: Option<&mut usize>, buf: &[u8]) -> usize {
+        unreachable!()
+    }
+    fn r_ready(&self) -> bool {
+        let ring_buffer = self.buffer.lock();
+        let loop_read = ring_buffer.available_read();
+        loop_read > 0
+    }
+
+    fn w_ready(&self) -> bool {
+        let ring_buffer = self.buffer.lock();
+        let loop_write = ring_buffer.available_write();
+        loop_write > 0
+    }
+    fn read_user(&self, buf: UserBuffer) -> usize {
         assert_eq!(self.readable(), true);
         let mut buf_iter = buf.into_iter();
         let mut read_size = 0usize;
@@ -148,12 +162,10 @@ impl File for Pipe {
                 if ring_buffer.all_write_ends_closed() {
                     return read_size; //return后就ring_buffer释放了，锁自然释放
                 }
-                // gdb_print!(SYSCALL_ENABLE,"[pipe] try read");
                 drop(ring_buffer);
                 suspend_current_and_run_next();
                 continue;
             }
-            //gdb_print!(SYSCALL_ENABLE,"[pipe] can read {} bytes\n", loop_read);
             // read at most loop_read bytes
             for i in 0..loop_read {
                 if let Some(byte_ref) = buf_iter.next() {
@@ -161,9 +173,7 @@ impl File for Pipe {
                         *byte_ref = ring_buffer.read_byte();
                     }
                     read_size += 1;
-                    //panic!("[pipe] read");
                 } else {
-                    //panic!("[pipe] read");
                     ring_buffer.count += 1;
                     return read_size;
                 }
@@ -171,26 +181,15 @@ impl File for Pipe {
             return read_size;
         }
     }
-    fn write(&self, buf: UserBuffer) -> usize {
-        //log::info!("[pipe.write] attempt to write...");
-        //        log::warn!("[pipe.write] attempted wr");
+    fn write_user(&self, buf: UserBuffer) -> usize {
         assert_eq!(self.writable(), true);
         let mut buf_iter = buf.into_iter();
         let mut write_size = 0usize;
         loop {
-            //            log::warn!("[pipe.write]attempted lock");
             let mut ring_buffer = self.buffer.lock();
-            //            log::warn!("[pipe.write]attempted lock done.");
             let loop_write = ring_buffer.available_write();
-            //            log::warn!("[pipe.write]size avail:{}", loop_write);
-            //log::info!("[pipe.write] Lock acquired...");
             if loop_write == 0 {
                 drop(ring_buffer);
-                // gdb_print!(SYSCALL_ENABLE,"[pipe] try write");
-
-                // if suspend_current_and_run_next() < 0{
-                //     return write_size;
-                // }
                 continue;
             }
 
@@ -206,27 +205,95 @@ impl File for Pipe {
         }
     }
 
-    fn r_ready(&self) -> bool {
-        let ring_buffer = self.buffer.lock();
-        let loop_read = ring_buffer.available_read();
-        /* log::warn!(
-         *     "r_ready: h{},t{},lhd{}",
-         *     ring_buffer.head,
-         *     ring_buffer.tail,
-         *     loop_read
-         * ); */
-        loop_read > 0
+    fn get_stat(&self) -> Stat {
+        Stat::new(
+            5,
+            1,
+            0o100777,
+            1,
+            0x0000000400000040,
+            0,
+            0,
+            0,
+            0,
+        )
     }
 
-    fn w_ready(&self) -> bool {
-        let ring_buffer = self.buffer.lock();
-        let loop_write = ring_buffer.available_write();
-        /* log::warn!(
-         *     "w_ready: h{},t{},lhd{}",
-         *     ring_buffer.head,
-         *     ring_buffer.tail,
-         *     loop_write
-         * ); */
-        loop_write > 0
+    fn get_file_type(&self) -> DiskInodeType {
+        DiskInodeType::File
     }
+
+    fn info_dirtree_node(&self, dirnode_ptr: Weak<crate::fs::directory_tree::DirectoryTreeNode>) {
+        todo!()
+    }
+
+    fn get_dirtree_node(&self) -> Option<Arc<DirectoryTreeNode>> {
+        todo!()
+    }
+
+    fn open(&self, flags: crate::fs::layout::OpenFlags, special_use: bool) -> Arc<dyn File> {
+        todo!()
+    }
+
+    fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
+        todo!()
+    }
+
+    fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
+        todo!()
+    }
+
+    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize> where Self: Sized {
+        todo!()
+    }
+
+    fn unlink(&self, delete: bool) -> Result<(), isize> {
+        todo!()
+    }
+
+    fn get_dirent(&self, count: usize) -> alloc::vec::Vec<crate::fs::layout::Dirent> {
+        todo!()
+    }
+
+    fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
+        todo!()
+    }
+
+    fn modify_size(&self, diff: isize) -> Result<(), isize> {
+        todo!()
+    }
+
+    fn truncate_size(&self, new_size: usize) -> Result<(), isize> {
+        todo!()
+    }
+
+    fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) {
+        todo!()
+    }
+
+    fn get_single_cache(&self, offset: usize) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+        todo!()
+    }
+
+    fn get_all_caches(&self) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+        todo!()
+    }
+
+    fn oom(&self) -> usize {
+        0
+    }
+
+    fn hang_up(&self) -> bool {
+        // The peer has closed its end.
+        // Or maybe you should only check whether both ends have been closed by the peer.
+        if self.readable {
+            self.buffer.lock().all_write_ends_closed()
+        } else {
+            //writable
+            self.buffer.lock().all_read_ends_closed()
+        }
+    }
+}
+
+impl Pipe {
 }

@@ -3,9 +3,9 @@ use super::AuxvEntry;
 use super::AuxvType;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::fs::{
-    open, open_root_inode, DiskInodeType, File, FileDescriptor, FileLike, OSInode, OpenFlags, TTY,
-};
+use crate::fs::FileDescriptor;
+use crate::fs::OpenFlags;
+use crate::fs::ROOT_FD;
 use crate::mm::PageTable;
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::errno::*;
@@ -29,8 +29,7 @@ use spin::{Mutex, MutexGuard};
 
 #[derive(Clone)]
 pub struct FsStatus {
-    pub working_inode: Arc<OSInode>,
-    pub working_dir: String,
+    pub working_inode: Arc<FileDescriptor>,
 }
 
 pub struct TaskControlBlock {
@@ -227,15 +226,14 @@ impl TaskControlBlock {
             kernel_stack,
             files: Arc::new(Mutex::new(vec![
                 // 0 -> stdin
-                Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
+                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
                 // 1 -> stdout
-                Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
+                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
                 // 2 -> stderr
-                Some(FileDescriptor::new(false, FileLike::Abstract(TTY.clone()))),
+                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
             ])),
             fs: Arc::new(Mutex::new(FsStatus {
-                working_inode: open_root_inode(),
-                working_dir: "/".to_string(),
+                working_inode: Arc::new(ROOT_FD.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true).unwrap()),
             })),
             vm: Arc::new(Mutex::new(memory_set)),
             sighand: Arc::new(Mutex::new(BTreeMap::new())),
@@ -578,26 +576,30 @@ impl TaskControlBlock {
 }
 
 pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
-    match open(
-        &open_root_inode(),
-        path,
-        OpenFlags::O_RDONLY,
-        DiskInodeType::File,
-    ) {
+    match ROOT_FD.open(path, OpenFlags::O_RDONLY, false) {
         Ok(file) => {
-            if file.size() < 4 {
+            if file.get_size() < 4 {
                 return Err(ELIBBAD);
             }
             let mut magic_number = Box::<[u8; 4]>::new([0; 4]);
             // this operation may be expensive... I'm not sure
-            file.kread(Some(&mut 0usize), magic_number.as_mut_slice());
+            file.read(Some(&mut 0usize), magic_number.as_mut_slice());
             match magic_number.as_slice() {
                 b"\x7fELF" => {
                     let buffer_addr = KERNEL_SPACE.lock().last_mmap_area_end();
                     let buffer = unsafe {
-                        core::slice::from_raw_parts_mut(buffer_addr.0 as *mut u8, file.size())
+                        core::slice::from_raw_parts_mut(buffer_addr.0 as *mut u8, file.get_size())
                     };
-                    let frames = file.get_all_cache_frame();
+                    let caches = file.get_all_caches().unwrap();
+                    let frames = 
+                        caches
+                        .iter()
+                        .map(|cache|{
+                            let lock = cache.try_lock();
+                            assert!(lock.is_some());
+                            Some(lock.unwrap().get_tracker())
+                        })
+                        .collect();
 
                     crate::mm::KERNEL_SPACE
                         .lock()
@@ -613,13 +615,22 @@ pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
                 _ => Err(ELIBBAD),
             }
         }
-        Err(_) => Err(ENOENT),
+        Err(errno) => Err(errno),
     }
 }
 
-fn elf_exec(file: Arc<OSInode>, argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> isize {
-    let buffer = unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, file.size()) };
-    let frames = file.get_all_cache_frame();
+fn elf_exec(file: &FileDescriptor, argv_vec: &Vec<String>, envp_vec: &Vec<String>) -> isize {
+    let buffer = unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, file.get_size()) };
+    let caches = file.get_all_caches().unwrap();
+    let frames = 
+        caches
+        .iter()
+        .map(|cache|{
+            let lock = cache.try_lock();
+            assert!(lock.is_some());
+            Some(lock.unwrap().get_tracker())
+        })
+        .collect();
 
     crate::mm::KERNEL_SPACE
         .lock()
@@ -659,36 +670,30 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
     let task = current_task().unwrap();
     let working_inode = &task.fs.lock().working_inode;
 
-    match open(
-        working_inode,
-        path.as_str(),
-        OpenFlags::O_RDONLY,
-        DiskInodeType::File,
-    ) {
+    match ROOT_FD.open(&path, OpenFlags::O_RDONLY, false) {
         Ok(file) => {
-            if file.size() < 4 {
+            if file.get_size() < 4 {
                 return ENOEXEC;
             }
             let mut magic_number = Box::<[u8; 4]>::new([0; 4]);
             // this operation may be expensive... I'm not sure
-            file.kread(Some(&mut 0usize), magic_number.as_mut_slice());
+            file.read(Some(&mut 0usize), magic_number.as_mut_slice());
             match magic_number.as_slice() {
-                b"\x7fELF" => elf_exec(file, &argv_vec, &envp_vec),
+                b"\x7fELF" => elf_exec(&file, &argv_vec, &envp_vec),
                 b"#!" => {
-                    let shell_file = open(
-                        working_inode,
+                    let shell_file = working_inode.open(
                         DEFAULT_SHELL,
                         OpenFlags::O_RDONLY,
-                        DiskInodeType::File,
+                        false,
                     )
                     .unwrap();
                     argv_vec.insert(0, DEFAULT_SHELL.to_string());
-                    elf_exec(shell_file, &argv_vec, &envp_vec)
+                    elf_exec(&shell_file, &argv_vec, &envp_vec)
                 }
                 _ => ENOEXEC,
             }
         }
-        Err(_) => ENOENT,
+        Err(errno) => errno,
     }
 }
 // I think it's a little expensive, so I temporarily move it here

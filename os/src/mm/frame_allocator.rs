@@ -122,7 +122,7 @@ pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     } else {
         crate::show_frame_consumption! {
             "GC";
-            fs::oom();
+            fs::directory_tree::oom();
         };
         FRAME_ALLOCATOR
             .write()

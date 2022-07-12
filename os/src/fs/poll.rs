@@ -1,7 +1,6 @@
 use crate::{
-    fs::File,
     task::{current_user_token, signal::Signals},
-    timer::TimeSpec,
+    timer::TimeSpec, syscall::errno::EINVAL,
 };
 use alloc::vec::Vec;
 use core::ptr::{null, null_mut};
@@ -108,99 +107,76 @@ pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
 /// * On error, -1 is returned, and errno is set appropriately.
 /// * The observed event is written back to the array, with others cleared.
 pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Signals) -> isize {
-    /*support only POLLIN for currently*/
     let oldsig = &mut Signals::empty();
-    let mut has_mask = false;
-    if sigmask as usize != 0 {
-        has_mask = true;
+    if !sigmask.is_null() {
         sigprocmask(SigMaskHow::SIG_SETMASK.bits(), sigmask, oldsig);
     }
-    let mut done: isize = 0;
-    let mut no_abs: bool = true;
-    let mut poll_fd: alloc::vec::Vec<PollFd> = alloc::vec::Vec::with_capacity(nfds);
-    poll_fd.resize(
-        nfds,
-        PollFd {
-            fd: 0,
-            events: PollEvent::empty(),
-            revents: PollEvent::empty(),
-        },
-    );
+
     let token = current_user_token();
-    //    println!("poll_fd:{:?}, Hi!", poll_fd);
+    let mut poll_fd = Vec::<PollFd>::with_capacity(nfds);
     copy_from_user_array(
         token,
         poll_fd_p as *const PollFd,
         poll_fd.as_mut_ptr(),
         nfds,
     );
-    //return 1;
-    //poll_fd.len()
-    log::info!("[ppoll] polling files:");
-    for i in poll_fd.iter_mut() {
-        i.revents = PollEvent::empty();
-        log::info!("[ppoll] {:?}", i);
+
+    unsafe {
+        poll_fd.set_len(nfds);
+    }
+    for poll_fd in poll_fd.iter_mut() {
+        poll_fd.revents = PollEvent::empty();
     }
 
-    if poll_fd.len() != 0 {
-        loop {
-            let mut i = 0;
-            let task = current_task().unwrap();
-            //
-            let fd_table = task.files.lock();
-            while i != poll_fd.len() {
-                let j = {
-                    if poll_fd[i].fd as usize >= fd_table.len()
-                        || fd_table[poll_fd[i].fd as usize].is_none()
-                    {
-                        None
-                    } else {
-                        /*should be "poll_fd[i].fd as usize"*/
-                        Some(
-                            fd_table[poll_fd[i].fd as usize]
-                                .as_ref()
-                                .unwrap()
-                                .clone(),
-                        )
-                    }
-                };
-                match j.unwrap().file {
-                    super::FileLike::Abstract(file) => {
-                        no_abs = false;
-                        if file.hang_up() {
-                            poll_fd[i].revents |= PollEvent::POLLHUP;
-                            done += 1 as isize;
-                            break;
-                        }
-                        if (poll_fd[i].events.contains(PollEvent::POLLIN)) && file.r_ready() {
-                            poll_fd[i].revents |= PollEvent::POLLIN;
-                            //poll_fd[i].revents |= PollEvent::POLLHUP;
-                            done += 1 as isize;
-                            break;
-                        }
-                    }
-                    super::FileLike::Regular(_) => {}
-                };
-                i += 1;
+    let mut done: isize = 0;
+    loop {
+        let task = current_task().unwrap();
+        let fd_table = task.files.lock();
+
+        for poll_fd in poll_fd.iter_mut() {
+            let fd = poll_fd.fd as usize;
+            if fd >= fd_table.len() {
+                continue;
             }
-            if no_abs || done != 0 {
-                if has_mask {
-                    sigprocmask(
-                        SigMaskHow::SIG_SETMASK.bits(),
-                        oldsig,
-                        null_mut::<Signals>(),
-                    );
-                }
-                break done;
-            } else {
-                copy_to_user_array(token, &poll_fd[0], poll_fd_p as *mut PollFd, nfds);
-                drop(fd_table);
-                suspend_current_and_run_next();
+            match &fd_table[fd] {
+                Some(inner) => {
+                    let mut trigger = 0;
+                    if inner.file.hang_up() {
+                        poll_fd.revents |= PollEvent::POLLHUP;
+                        trigger = 1;
+                    }
+                    if poll_fd.events.contains(PollEvent::POLLIN) && inner.file.r_ready() {
+                        poll_fd.revents |= PollEvent::POLLIN;
+                        trigger = 1;
+                    }
+                    if poll_fd.events.contains(PollEvent::POLLOUT) && inner.file.w_ready() {
+                        poll_fd.revents |= PollEvent::POLLOUT;
+                        trigger = 1;
+                    }
+                    done += trigger;
+                },
+                None => {},
             }
         }
-    } else {
-        0
+        if done > 0 {
+            break;
+        }
+        drop(fd_table);
+        drop(task);
+        suspend_current_and_run_next();
     }
+
+    copy_to_user_array(
+        token, 
+        &poll_fd[0], 
+        poll_fd_p as *mut PollFd,
+        nfds
+    );
+
+    if !sigmask.is_null() {
+        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
+    }
+    done
 }
 
 // This may be unsafe since the size of bits is undefined.
@@ -265,7 +241,7 @@ impl Bytes<FdSet> for FdSet {
         let size = core::mem::size_of::<FdSet>();
         unsafe {
             core::slice::from_raw_parts(
-                self as *const _ as *const FdSet as usize as *const u8,
+                self as *const _ as *const u8,
                 size,
             )
         }
@@ -274,7 +250,10 @@ impl Bytes<FdSet> for FdSet {
     fn as_bytes_mut(&mut self) -> &mut [u8] {
         let size = core::mem::size_of::<FdSet>();
         unsafe {
-            core::slice::from_raw_parts_mut(self as *mut _ as *mut FdSet as usize as *mut u8, size)
+            core::slice::from_raw_parts_mut(
+                self as *mut _ as *mut u8, 
+                size
+            )
         }
     }
 }
@@ -308,146 +287,103 @@ impl Bytes<FdSet> for FdSet {
 ///    If timeout is NULL (no timeout), select() can block indefinitely.
 pub fn pselect(
     nfds: usize,
-    read_fds: Option<&mut FdSet>,
-    write_fds: Option<&mut FdSet>,
+    mut read_fds: Option<&mut FdSet>,
+    mut write_fds: Option<&mut FdSet>,
     exception_fds: Option<&mut FdSet>,
-    /*
-
-    */
-    timeout: Option<&TimeSpec>,
+    mut timeout: Option<&mut TimeSpec>,
     sigmask: *const Signals,
 ) -> isize {
-    /*
-        // this piece of code should be in sys_pselect instead of being here.
-        if max(exception_fds.len(), max(read_fds.len(), write_fds.len())) != nfds || nfds < 0 {
-            return -1;
-    }
-     */
-    let mut trg = crate::timer::TimeSpec::now();
-    log::warn!("[pselect] Hi!");
-    if let Some(_) = timeout {
-        trg = *timeout.unwrap() + trg;
-        log::warn!("[pselect] timeout {:?}", timeout.unwrap());
-    }
-    let mut done = false;
-    let start = crate::timer::get_time_sec();
+
+    timeout = timeout.map(|time| {
+        *time = *time + crate::timer::TimeSpec::now();
+        time
+    });
+
     let oldsig = &mut Signals::empty();
-    let mut has_mask = false;
-    if sigmask as usize != 0 {
-        has_mask = true;
+    if !sigmask.is_null() {
         sigprocmask(SigMaskHow::SIG_SETMASK.bits(), sigmask, oldsig);
     }
-    let mut ret = 2048;
+
+    let mut done = 0;
     loop {
         let task = current_task().unwrap();
-        let inner = task.acquire_inner_lock();
         let fd_table = task.files.lock();
-        ret = 2048;
-        macro_rules! do_chk {
-            ($f:ident,$func:ident,$fds:ident,$i:ident) => {
-                if !$f.$func() {
-                    ret = 0;
-                    break;
+        
+        // check read
+        if let Some(ref read_fds) = read_fds {
+            for i in 0..nfds {
+                if !read_fds.is_set(i) {
+                    continue;
                 }
-            };
-        }
-        macro_rules! chk_fds {
-            ($fds:ident,$func:ident,$chk_func:ident,$($ref_info:ident)?) => {
-                if let Some($($ref_info)? j) = $fds {
-                    for i in 0..nfds {
-                        if j.is_set(i) {
-                            //log::warn!("[myselect] i:{}", i);
-                            if let Some(k) = fd_table[i].as_ref() {
-                                match &k.file {
-                                    super::FileLike::Abstract(file) => {
-                                        $chk_func!(file, $func,j,i);
-                                    }
-                                    super::FileLike::Regular(file) => {
-                                        $chk_func!(file, $func,j,i);
-                                    }
-                                }
-                            } else {
-                                log::error!("[myselect] quiting with -1!");
-                                return -1;
-                            }
-                        }
-                    }
-                }
-            };
-        }
-        chk_fds!(read_fds, r_ready, do_chk, ref);
-        chk_fds!(write_fds, w_ready, do_chk, ref);
-        if ret == 2048 {
-            //The SUPPORTED fds are all ready since the ret was NOT assigned.
-            ret = 0;
-            log::warn!("fds are all ready now.");
-            ret += if let Some(ref i) = read_fds {
-                i.set_num()
-            } else {
-                0
-            };
-            ret += if let Some(ref i) = write_fds {
-                i.set_num()
-            } else {
-                0
-            };
-            // 我们曾把exception赋值放在这里,但当时
-            // 似乎有个race:要么
-            // 另外,这里if let 不加ref会导致move, 不知道有没有更好的办法不ref也不move却能
-            break;
-        }
-        ret = 0;
-        match &timeout {
-            None => {}
-            Some(_) => {
-                //log::trace!("{:?} to {:?}", trg, TimeSpec::now());
-                if (trg - TimeSpec::now()).to_ns() == 0 {
-                    ret = 0;
-                    macro_rules! do_chk_end {
-                        ($f:ident,$func:ident,$fds:ident,$i:ident) => {
-                            if !$f.$func() {
-                                $fds.clr($i);
-                            }
-                        };
-                    }
-                    chk_fds!(read_fds, r_ready, do_chk_end,);
-                    chk_fds!(write_fds, w_ready, do_chk_end,);
-                    break;
-                }
-            }
-        }
-        // There SHOULD be ORDER REQ. for dropping?!
-        drop(fd_table);
-        drop(inner);
-        drop(task);
-        suspend_current_and_run_next();
-    }
-    // 这个问题: 由于exception_fds检查未支持,必须在最后
-    if exception_fds.is_some() {
-        match &timeout {
-            Some(_) => {
-                if let Some(i) = exception_fds {
-                    *i = FdSet::empty();
-                }
-                loop {
-                    if (trg - TimeSpec::now()).to_ns() == 0 {
-                        break;
-                    } else {
-                        suspend_current_and_run_next();
+                if let Some(fd) = &fd_table[i] {
+                    if fd.r_ready() {
+                        done += 1;
                     }
                 }
             }
-            None => loop {},
         }
+        // check write
+        if let Some(ref write_fds) = write_fds {
+            for i in 0..nfds {
+                if !write_fds.is_set(i) {
+                    continue;
+                }
+                if let Some(fd) = &fd_table[i] {
+                    if fd.w_ready() {
+                        done += 1;
+                    }
+                }
+            }
+        }
+        // check exception
+        // do nothing
+
+        if done == 0 {
+            // checktime out
+            if let Some(timeout) = &timeout {
+                if crate::timer::TimeSpec::now() >= **timeout {
+                    break;
+                }
+            }
+            drop(fd_table);
+            drop(task);
+            suspend_current_and_run_next();
+            continue;
+        }
+        // count read
+        if let Some(read_fds) = read_fds.as_mut() {
+            for i in 0..nfds {
+                if !read_fds.is_set(i) {
+                    continue;
+                }
+                if let Some(fd) = &fd_table[i] {
+                    if !fd.r_ready() {
+                        read_fds.clr(i);
+                    }
+                }
+            }
+        }
+        // count write
+        if let Some(write_fds) = write_fds.as_mut() {
+            for i in 0..nfds {
+                if !write_fds.is_set(i) {
+                    continue;
+                }
+                if let Some(fd) = &fd_table[i] {
+                    if !fd.w_ready() {
+                        write_fds.clr(i);
+                    }
+                }
+            }
+        }
+        // count exception
+        if let Some(exception_fds) = exception_fds {
+            *exception_fds = FdSet::empty();
+        }
+        break;
     }
-    if has_mask {
-        sigprocmask(
-            SigMaskHow::SIG_SETMASK.bits(),
-            oldsig,
-            null_mut::<Signals>(),
-        );
+    if !sigmask.is_null() {
+        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
     }
-    log::warn!("[pselect] quiting pselect. {}", ret);
-    // look up according to TimeVal
-    ret as isize
+    done as isize
 }

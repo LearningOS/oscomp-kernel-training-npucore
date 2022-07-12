@@ -6,7 +6,6 @@ pub mod signal;
 mod switch;
 mod task;
 
-use crate::fs::{open, DiskInodeType, File, OpenFlags, open_root_inode};
 use alloc::{sync::Arc};
 pub use context::TaskContext;
 use lazy_static::*;
@@ -22,6 +21,8 @@ pub use pid::{pid_alloc, KernelStack, PidHandle};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
 };
+use crate::fs::{OpenFlags, ROOT_FD};
+
 
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
@@ -113,9 +114,9 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
 
 lazy_static! {
     pub static ref INITPROC: Arc<TaskControlBlock> = Arc::new({
-        let inode = open(&open_root_inode(), "initproc", OpenFlags::O_RDONLY, DiskInodeType::File).unwrap();
+        let inode = ROOT_FD.open("initproc", OpenFlags::O_RDONLY, true).unwrap();
         let start: usize = crate::config::MMAP_BASE;
-        let len = inode.size();
+        let len = inode.get_size();
         crate::mm::KERNEL_SPACE.lock().insert_framed_area(
             start.into(),
             (start + len).into(),
@@ -123,7 +124,7 @@ lazy_static! {
         );
         unsafe {
             let buffer = core::slice::from_raw_parts_mut(start as *mut u8, len);
-            inode.kread(None, buffer);
+            inode.read(None, buffer);
             TaskControlBlock::new(buffer)
         }
     });

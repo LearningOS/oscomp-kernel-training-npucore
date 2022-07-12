@@ -90,6 +90,22 @@ impl Sub for TimeSpec {
     }
 }
 
+impl PartialEq for TimeSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.tv_sec == other.tv_sec && self.tv_nsec == other.tv_nsec
+    }
+}
+
+impl PartialOrd for TimeSpec {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        match self.tv_sec.partial_cmp(&other.tv_sec) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        self.tv_nsec.partial_cmp(&other.tv_nsec)
+    }
+}
+
 impl TimeSpec {
     pub fn new() -> Self {
         Self {
