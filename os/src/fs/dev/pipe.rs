@@ -1,7 +1,7 @@
 
 use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::layout::{Stat};
-use crate::syscall::errno::SUCCESS;
+use crate::syscall::errno::*;
 use crate::{mm::UserBuffer, fs::file_trait::File};
 use crate::task::suspend_current_and_run_next;
 use alloc::sync::{Arc, Weak};
@@ -256,7 +256,7 @@ impl File for Pipe {
     }
 
     fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
-        todo!()
+        Err(ESPIPE)
     }
 
     fn modify_size(&self, diff: isize) -> Result<(), isize> {
