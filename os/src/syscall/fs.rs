@@ -490,13 +490,37 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
         dirfd, path, flags,
     );
 
-    let file_descriptor = match __openat(dirfd, &path) {
-        Ok(file_descriptor) => file_descriptor,
-        Err(errno) => return errno,
+    let task = current_task().unwrap();
+    let file_descriptor = match dirfd {
+        AT_FDCWD => {
+            task.fs.lock().working_inode.as_ref().clone()
+        },
+        fd => {
+            let fd_table = task.files.lock();
+            if fd >= fd_table.len() || fd_table[fd].is_none() {
+                return EBADF;
+            }
+            fd_table[fd].as_ref().unwrap().clone()
+        },
     };
 
-    copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
-    SUCCESS
+    // Guess file is a directory
+    match file_descriptor.open(&path, OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, false) {
+        Ok(file_descriptor) => {
+            copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
+            return SUCCESS;
+        },
+        Err(ENOTDIR) => {},
+        Err(errno) => return errno,
+    }
+    // Guess file is a file
+    match file_descriptor.open(&path, OpenFlags::O_RDONLY, false) {
+        Ok(file_descriptor) => {
+            copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
+            return SUCCESS;
+        },
+        Err(errno) => return errno,
+    }
 }
 
 pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
