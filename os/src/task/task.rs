@@ -1,3 +1,4 @@
+use super::pid::kstack_alloc;
 use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
@@ -24,7 +25,7 @@ pub struct FsStatus {
 pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
-    pub kernel_stack: KernelStack,
+    pub kstack: KernelStack,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
     // shareable and mutable
@@ -38,8 +39,7 @@ pub struct TaskControlBlockInner {
     pub sigmask: Signals,
     pub sigpending: Signals,
     pub trap_cx_ppn: PhysPageNum,
-    pub base_size: usize,
-    pub task_cx_ptr: usize,
+    pub task_cx: TaskContext,
     pub task_status: TaskStatus,
     pub parent: Option<Weak<TaskControlBlock>>,
     pub children: Vec<Arc<TaskControlBlock>>,
@@ -122,9 +122,6 @@ impl Debug for Rusage {
 }
 
 impl TaskControlBlockInner {
-    pub fn get_task_cx_ptr2(&self) -> *const usize {
-        &self.task_cx_ptr as *const usize
-    }
     pub fn get_trap_cx(&self) -> &'static mut TrapContext {
         self.trap_cx_ppn.get_mut()
     }
@@ -205,13 +202,11 @@ impl TaskControlBlock {
         // alloc a pid and a kernel stack in kernel space
         let pid_handle = pid_alloc();
         let pgid = pid_handle.0;
-        let kernel_stack = KernelStack::new(&pid_handle);
-        let kernel_stack_top = kernel_stack.get_top();
-        // push a task context which goes to trap_return to the top of kernel stack
-        let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
+        let kstack = kstack_alloc();
+        let kstack_top = kstack.get_top();
         let task_control_block = Self {
             pid: pid_handle,
-            kernel_stack,
+            kstack,
             files: Arc::new(Mutex::new(FdTable::new(vec![
                 // 0 -> stdin
                 Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
@@ -230,8 +225,7 @@ impl TaskControlBlock {
                 pgid,
                 sigmask: Signals::empty(),
                 sigpending: Signals::empty(),
-                base_size: user_sp,
-                task_cx_ptr: task_cx_ptr as usize,
+                task_cx: TaskContext::goto_trap_return(kstack_top),
                 task_status: TaskStatus::Ready,
                 parent: None,
                 children: Vec::new(),
@@ -250,7 +244,7 @@ impl TaskControlBlock {
             elf_info.entry,
             user_sp,
             KERNEL_SPACE.lock().token(),
-            kernel_stack_top,
+            kstack_top,
             trap_handler as usize,
         );
         task_control_block
@@ -274,7 +268,7 @@ impl TaskControlBlock {
             },
             user_sp,
             KERNEL_SPACE.lock().token(),
-            self.kernel_stack.get_top(),
+            self.kstack.get_top(),
             trap_handler as usize,
         );
         // **** hold current PCB lock
@@ -321,13 +315,11 @@ impl TaskControlBlock {
             .ppn();
         // alloc a pid and a kernel stack in kernel space
         let pid_handle = pid_alloc();
-        let kernel_stack = KernelStack::new(&pid_handle);
-        let kernel_stack_top = kernel_stack.get_top();
-        // push a goto_trap_return task_cx on the top of kernel stack
-        let task_cx_ptr = kernel_stack.push_on_top(TaskContext::goto_trap_return());
+        let kstack = kstack_alloc();
+        let kstack_top = kstack.get_top();
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
-            kernel_stack,
+            kstack,
             files: if flags.contains(CloneFlags::CLONE_FILES) {
                 self.files.clone()
             } else {
@@ -347,7 +339,6 @@ impl TaskControlBlock {
             inner: Mutex::new(TaskControlBlockInner {
                 //inherited
                 pgid: parent_inner.pgid,
-                base_size: parent_inner.base_size,
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
                 //clone
@@ -361,9 +352,9 @@ impl TaskControlBlock {
                 timer: [ITimerVal::new(); 3],
                 sigmask: Signals::empty(),
                 //computed
-                task_cx_ptr: task_cx_ptr as usize,
                 task_status: TaskStatus::Ready,
                 trap_cx_ppn,
+                task_cx: TaskContext::goto_trap_return(kstack_top),
                 //constants
                 exit_code: 0,
             }),
@@ -374,7 +365,7 @@ impl TaskControlBlock {
         // **** acquire child PCB lock
         let trap_cx = task_control_block.acquire_inner_lock().get_trap_cx();
         // **** release child PCB lock
-        trap_cx.kernel_sp = kernel_stack_top;
+        trap_cx.kernel_sp = kstack_top;
         // return
         task_control_block
         // ---- release parent PCB lock
