@@ -328,7 +328,7 @@ pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
     let task = current_task().unwrap();
     let mut fd_table = task.files.lock();
     let (pipe_read, pipe_write) = make_pipe();
-    let read_fd = match task.alloc_fd(&mut fd_table) {
+    let read_fd = match fd_table.alloc_fd() {
         Some(fd) => fd,
         None => return EMFILE,
     };
@@ -336,7 +336,7 @@ pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
         flags.contains(OpenFlags::O_CLOEXEC),
         pipe_read,
     ));
-    let write_fd = match task.alloc_fd(&mut fd_table) {
+    let write_fd = match fd_table.alloc_fd() {
         Some(fd) => fd,
         None => return EMFILE,
     };
@@ -392,7 +392,7 @@ pub fn sys_dup(oldfd: usize) -> isize {
     if oldfd >= fd_table.len() || fd_table[oldfd].is_none() {
         return EBADF;
     }
-    let newfd = match task.alloc_fd(&mut fd_table) {
+    let newfd = match fd_table.alloc_fd() {
         Some(fd) => fd,
         None => return EMFILE,
     };
@@ -430,7 +430,7 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: u32) -> isize {
         return EINVAL;
     }
     if newfd >= fd_table.len() {
-        match task.alloc_fd_at(newfd, &mut fd_table) {
+        match fd_table.alloc_fd_at(newfd) {
             // `newfd` is not allocated in this case, so `fd` should never differ from `newfd`
             Some(fd) => assert_eq!(fd, newfd),
             // newfd is out of the allowed range for file descriptors
@@ -585,7 +585,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         Err(errno) => return errno,
     };
 
-    let new_fd = match task.alloc_fd(&mut fd_table) {
+    let new_fd = match fd_table.alloc_fd() {
         Some(fd) => fd,
         None => return EMFILE,
     };
@@ -941,7 +941,7 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
     let file_descriptor = fd_table[fd].as_mut().unwrap();
     match Command::from_primitive(cmd) {
         Command::DUPFD | Command::DUPFD_CLOEXEC => {
-            let newfd = match task.alloc_fd_at(arg, &mut fd_table) {
+            let newfd = match fd_table.alloc_fd_at(arg) {
                 Some(fd) => fd,
                 // cmd is F_DUPFD and arg is negative or is greater than the maximum allowable value
                 None => return EINVAL,

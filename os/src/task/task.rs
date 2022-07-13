@@ -1,9 +1,7 @@
 use super::signal::*;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::fs::FileDescriptor;
-use crate::fs::OpenFlags;
-use crate::fs::ROOT_FD;
+use crate::fs::{FileDescriptor,FdTable,OpenFlags,ROOT_FD};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::CloneFlags;
 use crate::timer::{ITimerVal, TimeVal};
@@ -36,7 +34,6 @@ pub struct TaskControlBlock {
     pub sighand: Arc<Mutex<BTreeMap<Signals, SigAction>>>,
 }
 
-pub type FdTable = Vec<Option<FileDescriptor>>;
 pub struct TaskControlBlockInner {
     pub sigmask: Signals,
     pub sigpending: Signals,
@@ -215,14 +212,14 @@ impl TaskControlBlock {
         let task_control_block = Self {
             pid: pid_handle,
             kernel_stack,
-            files: Arc::new(Mutex::new(vec![
+            files: Arc::new(Mutex::new(FdTable::new(vec![
                 // 0 -> stdin
                 Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
                 // 1 -> stdout
                 Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
                 // 2 -> stderr
                 Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
-            ])),
+            ]))),
             fs: Arc::new(Mutex::new(FsStatus {
                 working_inode: Arc::new(ROOT_FD.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true).unwrap()),
             })),
@@ -397,34 +394,6 @@ impl TaskControlBlock {
     pub fn getpgid(&self) -> usize {
         let inner = self.acquire_inner_lock();
         inner.pgid
-    }
-    /// Try to alloc the lowest valid fd in `fd_table`
-    pub fn alloc_fd(&self, fd_table: &mut MutexGuard<Vec<Option<FileDescriptor>>>) -> Option<usize> {
-        self.alloc_fd_at(0, fd_table)
-    }
-    /// Try to alloc fd at `hint`, if `hint` is allocated, will alloc lowest valid fd above.
-    pub fn alloc_fd_at(&self, hint: usize, fd_table: &mut MutexGuard<Vec<Option<FileDescriptor>>>) -> Option<usize> {
-        // [Warning] temporarily use hardcoded implementation, should adapt to `prlimit()` in future
-        const FD_LIMIT: usize = 128;
-        if hint < fd_table.len() {
-            if let Some(fd) = (hint..fd_table.len()).find(|fd| fd_table[*fd].is_none()) {
-                Some(fd)
-            } else {
-                if fd_table.len() < FD_LIMIT {
-                    fd_table.push(None);
-                    Some(fd_table.len() - 1)
-                } else {
-                    None
-                }
-            }
-        } else {
-            if hint < FD_LIMIT {
-                fd_table.resize(hint + 1, None);
-                Some(hint)
-            } else {
-                None
-            }
-        }
     }
     pub fn get_user_token(&self) -> usize {
         self.vm.lock().token()
