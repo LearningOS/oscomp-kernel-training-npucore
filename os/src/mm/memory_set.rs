@@ -7,7 +7,7 @@ use crate::config::*;
 use crate::fs::file_trait::File;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
-use crate::task::{current_task, AuxvEntry, AuxvType, ELFInfo};
+use crate::task::{current_task, AuxvEntry, AuxvType, ELFInfo, ustack_bottom_from_tid, trap_cx_bottom_from_tid};
 use crate::timer::TICKS_PER_SEC;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -478,7 +478,7 @@ impl MemorySet {
     }
     /// Include sections in elf and trampoline and TrapContext and user stack,
     /// also returns user_sp and entry point.
-    pub fn from_elf(elf_data: &[u8]) -> Result<(Self, usize, usize, ELFInfo), isize> {
+    pub fn from_elf(elf_data: &[u8]) -> Result<(Self, usize, ELFInfo), isize> {
         let mut memory_set = Self::new_bare();
         // map trampoline
         memory_set.map_trampoline();
@@ -488,31 +488,7 @@ impl MemorySet {
         let elf = xmas_elf::ElfFile::new(elf_data).unwrap();
         let (program_break, elf_info) = memory_set.map_elf(&elf)?;
 
-        // Map USER_STACK
-        memory_set.insert_framed_area(
-            USER_STACK_TOP.into(),
-            USER_STACK_BOTTOM.into(),
-            MapPermission::R | MapPermission::W | MapPermission::U,
-        );
-        trace!(
-            "[elf] USER STACK PUSHED. user_stack_top:{:X}; user_stack_bottom:{:X}",
-            USER_STACK_TOP,
-            USER_STACK_BOTTOM
-        );
-
-        // Map TrapContext
-        memory_set.insert_framed_area(
-            TRAP_CONTEXT.into(),
-            TRAMPOLINE.into(),
-            MapPermission::R | MapPermission::W,
-        );
-        trace!(
-            "[elf] TRAP CONTEXT PUSHED. start_va:{:X}; end_va:{:X}",
-            TRAP_CONTEXT,
-            TRAMPOLINE
-        );
-
-        Ok((memory_set, USER_STACK_BOTTOM, program_break, elf_info))
+        Ok((memory_set, program_break, elf_info))
     }
     pub fn from_existing_user(user_space: &mut MemorySet) -> MemorySet {
         let mut memory_set = Self::new_bare();
@@ -868,22 +844,22 @@ impl MemorySet {
     }
     pub fn create_elf_tables(
         &self,
-        user_sp: &mut usize,
+        mut user_sp: usize,
         argv_vec: &Vec<String>,
         envp_vec: &Vec<String>,
         elf_info: &ELFInfo,
-    ) {
+    ) -> usize {
         // go down to the stack page (important!) and align
-        *user_sp -= 2 * core::mem::size_of::<usize>();
+        user_sp -= 2 * core::mem::size_of::<usize>();
 
         // because size of parameters is almost never more than PAGE_SIZE,
         // so I decide to use physical address directly for better performance
         let mut phys_user_sp = PageTable::from_token(self.token())
-            .translate_va(VirtAddr::from(*user_sp))
+            .translate_va(VirtAddr::from(user_sp))
             .unwrap()
             .0;
         // we can add this to a phys addr to get corresponding virt addr
-        let virt_phys_offset = *user_sp - phys_user_sp;
+        let virt_phys_offset = user_sp - phys_user_sp;
         let phys_start = phys_user_sp;
 
         // unsafe code is efficient code! here we go!
@@ -986,7 +962,7 @@ impl MemorySet {
             *(phys_user_sp as *mut usize) = argv_vec.len();
         }
 
-        *user_sp = phys_user_sp + virt_phys_offset;
+        user_sp = phys_user_sp + virt_phys_offset;
 
         // unlikely, if `start` and `end` are in different pages, we should panic
         assert_eq!(phys_start & !0xfff, phys_user_sp & !0xfff);
@@ -1002,6 +978,36 @@ impl MemorySet {
             );
             phys_addr += 2 * core::mem::size_of::<usize>();
         }
+        user_sp
+    }
+    pub fn alloc_user_res(&mut self, tid: usize) {
+        // alloc user stack
+        let ustack_bottom = ustack_bottom_from_tid(tid);
+        let ustack_top = ustack_bottom - USER_STACK_SIZE;
+        self.insert_framed_area(
+            ustack_top.into(),
+            ustack_bottom.into(),
+            MapPermission::R | MapPermission::W | MapPermission::U,
+        );
+        trace!("[alloc_user_res] user stack start_va: {:X}, end_va: {:X}", ustack_top, ustack_bottom);
+        // alloc trap_cx
+        let trap_cx_bottom = trap_cx_bottom_from_tid(tid);
+        let trap_cx_top = trap_cx_bottom + PAGE_SIZE;
+        self.insert_framed_area(
+            trap_cx_bottom.into(),
+            trap_cx_top.into(),
+            MapPermission::R | MapPermission::W,
+        );
+        trace!("[alloc_user_res] trap context start_va: {:X}, end_va: {:X}", trap_cx_bottom, trap_cx_top);
+    }
+
+    pub fn dealloc_user_res(&mut self, tid: usize) {
+        // dealloc ustack manually
+        let ustack_bottom_va: VirtAddr = ustack_bottom_from_tid(tid).into();
+        self.remove_area_with_start_vpn(ustack_bottom_va.into());
+        // dealloc trap_cx manually
+        let trap_cx_bottom_va: VirtAddr = trap_cx_bottom_from_tid(tid).into();
+        self.remove_area_with_start_vpn(trap_cx_bottom_va.into());
     }
 }
 

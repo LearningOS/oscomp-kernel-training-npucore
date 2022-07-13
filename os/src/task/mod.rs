@@ -18,7 +18,7 @@ pub use elf::{AuxvEntry, AuxvType, ELFInfo, load_elf_interp};
 pub use manager::{
     add_task, find_task_by_pid, procs_count, sleep_interruptible, wake_interruptible,
 };
-pub use pid::{pid_alloc, KernelStack, PidHandle};
+pub use pid::{pid_alloc, KernelStack, PidHandle, trap_cx_bottom_from_tid, ustack_bottom_from_tid};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
 };

@@ -1,6 +1,10 @@
+use super::manager::TASK_MANAGER;
+use super::pid::RecycleAllocator;
 use super::pid::kstack_alloc;
 use super::signal::*;
 use super::TaskContext;
+use super::trap_cx_bottom_from_tid;
+use super::ustack_bottom_from_tid;
 use super::{pid_alloc, KernelStack, PidHandle};
 use crate::fs::{FileDescriptor,FdTable,OpenFlags,ROOT_FD};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
@@ -25,10 +29,13 @@ pub struct FsStatus {
 pub struct TaskControlBlock {
     // immutable
     pub pid: PidHandle,
+    pub tid: usize,
+    pub tgid: usize,
     pub kstack: KernelStack,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
     // shareable and mutable
+    pub tid_allocator: Arc<Mutex<RecycleAllocator>>,
     pub files: Arc<Mutex<FdTable>>,
     pub fs: Arc<Mutex<FsStatus>>,
     pub vm: Arc<Mutex<MemorySet>>,
@@ -185,28 +192,43 @@ impl TaskControlBlock {
     pub fn acquire_inner_lock(&self) -> MutexGuard<TaskControlBlockInner> {
         self.inner.lock()
     }
+    pub fn trap_cx_user_va(&self) -> usize {
+        trap_cx_bottom_from_tid(self.tid)
+    }
+    pub fn ustack_bottom_va(&self) -> usize {
+        ustack_bottom_from_tid(self.tid)
+    }
     /// !!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!!!!!!!!
     /// Currently used for initproc loading only. bin_path must be used changed if used elsewhere.
     pub fn new(elf_data: &[u8]) -> Self {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, user_sp, user_heap, elf_info) = MemorySet::from_elf(elf_data).unwrap();
-
+        let (mut memory_set, user_heap, elf_info) = MemorySet::from_elf(elf_data).unwrap();
         crate::mm::KERNEL_SPACE
             .lock()
             .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor())
             .unwrap();
-        let trap_cx_ppn = memory_set
-            .translate(VirtAddr::from(TRAP_CONTEXT).into())
-            .unwrap()
-            .ppn();
+        
+        let tid_allocator = Arc::new(Mutex::new(RecycleAllocator::new()));
         // alloc a pid and a kernel stack in kernel space
         let pid_handle = pid_alloc();
+        let tid = tid_allocator.lock().alloc();
+        let tgid = pid_handle.0;
         let pgid = pid_handle.0;
         let kstack = kstack_alloc();
         let kstack_top = kstack.get_top();
+
+        memory_set.alloc_user_res(tid);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(trap_cx_bottom_from_tid(tid)).into())
+            .unwrap()
+            .ppn();
+        
         let task_control_block = Self {
             pid: pid_handle,
+            tid,
+            tgid,
             kstack,
+            tid_allocator,
             files: Arc::new(Mutex::new(FdTable::new(vec![
                 // 0 -> stdin
                 Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
@@ -221,10 +243,9 @@ impl TaskControlBlock {
             vm: Arc::new(Mutex::new(memory_set)),
             sighand: Arc::new(Mutex::new(BTreeMap::new())),
             inner: Mutex::new(TaskControlBlockInner {
-                trap_cx_ppn,
-                pgid,
                 sigmask: Signals::empty(),
                 sigpending: Signals::empty(),
+                trap_cx_ppn,
                 task_cx: TaskContext::goto_trap_return(kstack_top),
                 task_status: TaskStatus::Ready,
                 parent: None,
@@ -233,6 +254,7 @@ impl TaskControlBlock {
                 address: ProcAddress::new(),
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
+                pgid,
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
                 timer: [ITimerVal::new(); 3],
@@ -242,7 +264,7 @@ impl TaskControlBlock {
         let trap_cx = task_control_block.acquire_inner_lock().get_trap_cx();
         *trap_cx = TrapContext::app_init_context(
             elf_info.entry,
-            user_sp,
+            ustack_bottom_from_tid(tid),
             KERNEL_SPACE.lock().token(),
             kstack_top,
             trap_handler as usize,
@@ -257,8 +279,11 @@ impl TaskControlBlock {
         envp_vec: &Vec<String>,
     ) -> Result<(), isize> {
         // memory_set with elf program headers/trampoline/trap context/user stack
-        let (memory_set, mut user_sp, program_break, elf_info) = MemorySet::from_elf(elf_data)?;
-        memory_set.create_elf_tables(&mut user_sp, argv_vec, envp_vec, &elf_info);
+        let (mut memory_set, program_break, elf_info) = MemorySet::from_elf(elf_data)?;
+        log::trace!("[load_elf] ELF file mapped");
+        memory_set.alloc_user_res(self.tid);
+        let user_sp = memory_set.create_elf_tables(self.ustack_bottom_va(), argv_vec, envp_vec, &elf_info);
+        log::trace!("[load_elf] user sp after pushing parameters: {:X}", user_sp);
         // initialize trap_cx
         let trap_cx = TrapContext::app_init_context(
             if let Some(interp_entry) = elf_info.interp_entry {
@@ -275,7 +300,7 @@ impl TaskControlBlock {
         let mut inner = self.acquire_inner_lock();
         // update trap_cx ppn
         inner.trap_cx_ppn = (&memory_set)
-            .translate(VirtAddr::from(TRAP_CONTEXT).into())
+            .translate(VirtAddr::from(self.trap_cx_user_va()).into())
             .unwrap()
             .ppn();
         *inner.get_trap_cx() = trap_cx;
@@ -294,6 +319,9 @@ impl TaskControlBlock {
             }
             None => (),
         });
+        // destory all other threads
+        TASK_MANAGER.lock().ready_queue.retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
+        TASK_MANAGER.lock().interruptible_queue.retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
         Ok(())
         // **** release current PCB lock
     }
@@ -308,18 +336,38 @@ impl TaskControlBlock {
                 &mut self.vm.lock(),
             )))
         };
-        let trap_cx_ppn = memory_set
-            .lock()
-            .translate(VirtAddr::from(TRAP_CONTEXT).into())
-            .unwrap()
-            .ppn();
+
+        let tid_allocator = if flags.contains(CloneFlags::CLONE_THREAD) {
+            self.tid_allocator.clone()
+        } else {
+            Arc::new(Mutex::new(RecycleAllocator::new()))
+        };
         // alloc a pid and a kernel stack in kernel space
         let pid_handle = pid_alloc();
+        let tid = tid_allocator.lock().alloc();
+        let tgid = if flags.contains(CloneFlags::CLONE_THREAD) {
+            self.tgid
+        } else {
+            pid_handle.0
+        };
         let kstack = kstack_alloc();
         let kstack_top = kstack.get_top();
+
+        if flags.contains(CloneFlags::CLONE_THREAD) {
+            memory_set.lock().alloc_user_res(tid);
+        }
+        let trap_cx_ppn = memory_set
+            .lock()
+            .translate(VirtAddr::from(self.trap_cx_user_va()).into())
+            .unwrap()
+            .ppn();
+        
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
+            tid,
+            tgid,
             kstack,
+            tid_allocator,
             files: if flags.contains(CloneFlags::CLONE_FILES) {
                 self.files.clone()
             } else {
@@ -337,30 +385,40 @@ impl TaskControlBlock {
                 Arc::new(Mutex::new(self.sighand.lock().clone()))
             },
             inner: Mutex::new(TaskControlBlockInner {
-                //inherited
+                // inherited
                 pgid: parent_inner.pgid,
                 heap_bottom: parent_inner.heap_bottom,
                 heap_pt: parent_inner.heap_pt,
-                //clone
+                // clone
                 sigpending: parent_inner.sigpending.clone(),
-                //new/empty
-                parent: Some(Arc::downgrade(self)),
+                // new
                 children: Vec::new(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
                 address: ProcAddress::new(),
                 timer: [ITimerVal::new(); 3],
                 sigmask: Signals::empty(),
-                //computed
-                task_status: TaskStatus::Ready,
+                // compute
                 trap_cx_ppn,
                 task_cx: TaskContext::goto_trap_return(kstack_top),
-                //constants
+                parent: if flags.contains(CloneFlags::CLONE_PARENT) | flags.contains(CloneFlags::CLONE_THREAD) {
+                    parent_inner.parent.clone()
+                } else {
+                    Some(Arc::downgrade(self))
+                },
+                // constants
+                task_status: TaskStatus::Ready,
                 exit_code: 0,
             }),
         });
         // add child
-        parent_inner.children.push(task_control_block.clone());
+        if flags.contains(CloneFlags::CLONE_PARENT) | flags.contains(CloneFlags::CLONE_THREAD) {
+            if let Some(grandparent) = &parent_inner.parent {
+                grandparent.upgrade().unwrap().acquire_inner_lock().children.push(task_control_block.clone());
+            }
+        } else {
+            parent_inner.children.push(task_control_block.clone());
+        }
         // modify kernel_sp in trap_cx
         // **** acquire child PCB lock
         let trap_cx = task_control_block.acquire_inner_lock().get_trap_cx();
@@ -388,6 +446,13 @@ impl TaskControlBlock {
     }
     pub fn get_user_token(&self) -> usize {
         self.vm.lock().token()
+    }
+}
+
+impl Drop for TaskControlBlock {
+    fn drop(&mut self) {
+        self.vm.lock().dealloc_user_res(self.tid);
+        self.tid_allocator.lock().dealloc(self.tid);
     }
 }
 

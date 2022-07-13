@@ -2,7 +2,7 @@ mod context;
 
 use core::arch::{asm, global_asm};
 
-use crate::config::{TRAMPOLINE, TRAP_CONTEXT};
+use crate::config::{TRAMPOLINE};
 use crate::mm::{VirtAddr};
 use crate::syscall::syscall;
 use crate::task::{
@@ -119,8 +119,10 @@ pub fn trap_handler() -> ! {
 pub fn trap_return() -> ! {
     do_signal();
     set_user_trap_entry();
-    let trap_cx_ptr = TRAP_CONTEXT;
-    let user_satp = current_user_token();
+    let task = current_task().unwrap();
+    let trap_cx_ptr = task.trap_cx_user_va();
+    let user_satp = task.get_user_token();
+    drop(task);
     let restore_va = __restore as usize - __alltraps as usize + TRAMPOLINE;
     unsafe {
         asm!(

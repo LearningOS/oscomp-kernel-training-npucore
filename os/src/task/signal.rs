@@ -5,7 +5,7 @@ use riscv::register::{scause, stval};
 use crate::config::*;
 use crate::mm::{copy_from_user, copy_to_user, translated_ref, translated_refmut};
 use crate::syscall::errno::*;
-use crate::task::{block_current_and_run_next, exit_current_and_run_next};
+use crate::task::{block_current_and_run_next, exit_current_and_run_next, ustack_bottom_from_tid};
 use crate::timer::TimeSpec;
 use crate::trap::TrapContext;
 
@@ -272,8 +272,12 @@ pub fn do_signal() {
             {
                 let trap_cx = inner.get_trap_cx();
                 let sp = unsafe { (trap_cx.x[2] as *mut TrapContext).sub(1) };
-                if (sp as usize) < USER_STACK_TOP {
-                    trap_cx.sepc = usize::MAX; // we don't have enough space on user stack, return a bad address to kill this program
+                if (sp as usize) < task.ustack_bottom_va() - USER_STACK_SIZE {
+                    error!("[do_signal] User stack will overflow after push trap context! Send SIGSEGV.");
+                    drop(inner);
+                    drop(sighand);
+                    drop(task);
+                    exit_current_and_run_next(Signals::SIGSEGV.to_signum().unwrap() as u32);
                 } else {
                     copy_to_user(task.get_user_token(), trap_cx, sp as *mut TrapContext); // push trap context into user stack
                     trap_cx.set_sp(sp as usize); // update sp, because we've pushed something into stack
