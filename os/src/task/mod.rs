@@ -114,7 +114,7 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
 
 lazy_static! {
     pub static ref INITPROC: Arc<TaskControlBlock> = Arc::new({
-        let inode = ROOT_FD.open("initproc", OpenFlags::O_RDONLY, true).unwrap();
+        let inode = ROOT_FD.open("initproc", OpenFlags::O_RDONLY, true, false).unwrap();
         let start: usize = crate::config::MMAP_BASE;
         let len = inode.get_size();
         crate::mm::KERNEL_SPACE.lock().insert_framed_area(

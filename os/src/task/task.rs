@@ -226,14 +226,14 @@ impl TaskControlBlock {
             kernel_stack,
             files: Arc::new(Mutex::new(vec![
                 // 0 -> stdin
-                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
+                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false, false).unwrap()),
                 // 1 -> stdout
-                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
+                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false, false).unwrap()),
                 // 2 -> stderr
-                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
+                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false, false).unwrap()),
             ])),
             fs: Arc::new(Mutex::new(FsStatus {
-                working_inode: Arc::new(ROOT_FD.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true).unwrap()),
+                working_inode: Arc::new(ROOT_FD.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true, false).unwrap()),
             })),
             vm: Arc::new(Mutex::new(memory_set)),
             sighand: Arc::new(Mutex::new(BTreeMap::new())),
@@ -576,7 +576,7 @@ impl TaskControlBlock {
 }
 
 pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
-    match ROOT_FD.open(path, OpenFlags::O_RDONLY, false) {
+    match ROOT_FD.open(path, OpenFlags::O_RDONLY, false, false) {
         Ok(file) => {
             if file.get_size() < 4 {
                 return Err(ELIBBAD);
@@ -670,7 +670,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
     let task = current_task().unwrap();
     let working_inode = &task.fs.lock().working_inode;
 
-    match working_inode.open(&path, OpenFlags::O_RDONLY, false) {
+    match working_inode.open(&path, OpenFlags::O_RDONLY, false, false) {
         Ok(file) => {
             if file.get_size() < 4 {
                 return ENOEXEC;
@@ -685,6 +685,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
                         DEFAULT_SHELL,
                         OpenFlags::O_RDONLY,
                         false,
+                        false
                     )
                     .unwrap();
                     argv_vec.insert(0, DEFAULT_SHELL.to_string());
