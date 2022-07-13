@@ -358,7 +358,7 @@ impl TaskControlBlock {
         }
         let trap_cx_ppn = memory_set
             .lock()
-            .translate(VirtAddr::from(self.trap_cx_user_va()).into())
+            .translate(VirtAddr::from(trap_cx_bottom_from_tid(tid)).into())
             .unwrap()
             .ppn();
         
@@ -419,10 +419,11 @@ impl TaskControlBlock {
         } else {
             parent_inner.children.push(task_control_block.clone());
         }
-        // modify kernel_sp in trap_cx
-        // **** acquire child PCB lock
         let trap_cx = task_control_block.acquire_inner_lock().get_trap_cx();
-        // **** release child PCB lock
+        if flags.contains(CloneFlags::CLONE_THREAD) {
+            *trap_cx = *parent_inner.get_trap_cx();
+        }
+        // modify kernel_sp in trap_cx
         trap_cx.kernel_sp = kstack_top;
         // return
         task_control_block
