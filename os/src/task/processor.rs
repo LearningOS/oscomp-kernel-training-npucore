@@ -1,98 +1,95 @@
-use super::TaskControlBlock;
 use super::__switch;
 use super::{fetch_task, TaskStatus};
+use super::{TaskContext, TaskControlBlock};
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
-use core::cell::RefCell;
+use spin::Mutex;
 use lazy_static::*;
 
 pub struct Processor {
-    inner: RefCell<ProcessorInner>,
-}
-
-unsafe impl Sync for Processor {}
-
-struct ProcessorInner {
     current: Option<Arc<TaskControlBlock>>,
-    idle_task_cx_ptr: usize,
+    idle_task_cx: TaskContext,
 }
 
 impl Processor {
     pub fn new() -> Self {
         Self {
-            inner: RefCell::new(ProcessorInner {
-                current: None,
-                idle_task_cx_ptr: 0,
-            }),
+            current: None,
+            idle_task_cx: TaskContext::zero_init(),
         }
     }
-    fn get_idle_task_cx_ptr2(&self) -> *const usize {
-        let inner = self.inner.borrow();
-        &inner.idle_task_cx_ptr as *const usize
+    fn get_idle_task_cx_ptr(&mut self) -> *mut TaskContext {
+        &mut self.idle_task_cx as *mut _
     }
-
-    pub fn run(&self) {
-        loop {
-            if let Some(task) = fetch_task() {
-                let idle_task_cx_ptr2 = self.get_idle_task_cx_ptr2();
-                // acquire
-                let mut task_inner = task.acquire_inner_lock();
-                let next_task_cx_ptr2 = task_inner.get_task_cx_ptr2();
-                task_inner.task_status = TaskStatus::Running;
-                drop(task_inner);
-                // release
-                self.inner.borrow_mut().current = Some(task);
-                unsafe {
-                    __switch(idle_task_cx_ptr2, next_task_cx_ptr2);
-                }
-            }
-        }
-    }
-    pub fn take_current(&self) -> Option<Arc<TaskControlBlock>> {
-        self.inner.borrow_mut().current.take()
+    pub fn take_current(&mut self) -> Option<Arc<TaskControlBlock>> {
+        self.current.take()
     }
     pub fn current(&self) -> Option<Arc<TaskControlBlock>> {
-        self.inner
-            .borrow()
-            .current
-            .as_ref()
-            .map(|task| Arc::clone(task))
+        self.current.as_ref().map(Arc::clone)
     }
 }
 
 lazy_static! {
-    pub static ref PROCESSOR: Processor = Processor::new();
+    pub static ref PROCESSOR: Mutex<Processor> = Mutex::new(Processor::new());
 }
 
 pub fn run_tasks() {
-    PROCESSOR.run();
+    loop {
+        let mut processor = PROCESSOR.lock();
+        if let Some(task) = fetch_task() {
+            let idle_task_cx_ptr = processor.get_idle_task_cx_ptr();
+            // access coming task TCB exclusively
+            let next_task_cx_ptr = {
+                let mut task_inner = task.acquire_inner_lock();
+                task_inner.task_status = TaskStatus::Running;
+                &task_inner.task_cx as *const TaskContext
+            };
+            processor.current = Some(task);
+            // release processor manually
+            drop(processor);
+            unsafe {
+                __switch(idle_task_cx_ptr, next_task_cx_ptr);
+            }
+        } else {
+            println!("no tasks available in run_tasks");
+        }
+    }
 }
 
 pub fn take_current_task() -> Option<Arc<TaskControlBlock>> {
-    PROCESSOR.take_current()
+    PROCESSOR.lock().take_current()
 }
 
 pub fn current_task() -> Option<Arc<TaskControlBlock>> {
-    PROCESSOR.current()
+    PROCESSOR.lock().current()
 }
-/// Get current user token.
-/// # Prerequisite
-/// The task must NOT be locked before use.
-/// However, the task lock will be released after the call,
-/// leaving the task UNLOCKED.
+
 pub fn current_user_token() -> usize {
-    let task = current_task().unwrap();
-    let token = task.get_user_token();
-    token
+    current_task().unwrap().get_user_token()
 }
 
 pub fn current_trap_cx() -> &'static mut TrapContext {
-    current_task().unwrap().acquire_inner_lock().get_trap_cx()
+    current_task()
+        .unwrap()
+        .acquire_inner_lock()
+        .get_trap_cx()
 }
 
-pub fn schedule(switched_task_cx_ptr2: *const usize) {
-    let idle_task_cx_ptr2 = PROCESSOR.get_idle_task_cx_ptr2();
+// pub fn current_trap_cx_user_va() -> usize {
+//     current_task()
+//         .unwrap()
+//         .acquire_inner_lock()
+//         .res
+//         .trap_cx_user_va()
+// }
+
+pub fn current_kstack_top() -> usize {
+    current_task().unwrap().kstack.get_top()
+}
+
+pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
+    let idle_task_cx_ptr = PROCESSOR.lock().get_idle_task_cx_ptr();
     unsafe {
-        __switch(switched_task_cx_ptr2, idle_task_cx_ptr2);
+        __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
 }

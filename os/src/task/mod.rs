@@ -31,7 +31,7 @@ pub fn suspend_current_and_run_next() {
 
     // ---- hold current PCB lock
     let mut task_inner = task.acquire_inner_lock();
-    let task_cx_ptr2 = task_inner.get_task_cx_ptr2();
+    let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
     // Change status to Ready
     task_inner.task_status = TaskStatus::Ready;
     drop(task_inner);
@@ -40,7 +40,7 @@ pub fn suspend_current_and_run_next() {
     // push back to ready queue.
     add_task(task);
     // jump to scheduling cycle
-    schedule(task_cx_ptr2);
+    schedule(task_cx_ptr);
 }
 
 pub fn block_current_and_run_next() {
@@ -49,7 +49,7 @@ pub fn block_current_and_run_next() {
 
     // ---- hold current PCB lock
     let mut task_inner = task.acquire_inner_lock();
-    let task_cx_ptr2 = task_inner.get_task_cx_ptr2();
+    let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
     // Change status to Interruptible
     task_inner.task_status = TaskStatus::Interruptible;
     drop(task_inner);
@@ -58,7 +58,7 @@ pub fn block_current_and_run_next() {
     // push to interruptible queue of scheduler, so that it won't be scheduled.
     sleep_interruptible(task);
     // jump to scheduling cycle
-    schedule(task_cx_ptr2);
+    schedule(task_cx_ptr);
 }
 
 pub fn exit_current_and_run_next(exit_code: u32) -> ! {
@@ -108,8 +108,8 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     log::info!("[sys_exit] Pid {} exited with {}", task.pid.0, exit_code);
     drop(task);
     // we do not have to save task context
-    let _unused: usize = 0;
-    schedule(&_unused as *const _);
+    let mut _unused = TaskContext::zero_init();
+    schedule(&mut _unused as *mut _);
     panic!("Unreachable");
 }
 
