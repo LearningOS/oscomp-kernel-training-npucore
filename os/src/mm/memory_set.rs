@@ -7,7 +7,8 @@ use crate::config::*;
 use crate::fs::file_trait::File;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
-use crate::task::{current_task, ELFInfo};
+use crate::task::{current_task, AuxvEntry, AuxvType, ELFInfo};
+use crate::timer::TICKS_PER_SEC;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -224,7 +225,11 @@ impl MemorySet {
                         PAGE_SIZE,
                     ));
                     let old_offset = file.get_offset();
-                    file.lseek((target - VirtAddr::from(area.data_frames.vpn_range.get_start()).0) as isize, SeekWhence::SEEK_CUR);
+                    file.lseek(
+                        (target - VirtAddr::from(area.data_frames.vpn_range.get_start()).0)
+                            as isize,
+                        SeekWhence::SEEK_CUR,
+                    );
                     file.read_user(page);
                     file.lseek(old_offset as isize, SeekWhence::SEEK_SET);
                 }
@@ -861,6 +866,143 @@ impl MemorySet {
         }
         Ok(())
     }
+    pub fn create_elf_tables(
+        &self,
+        user_sp: &mut usize,
+        argv_vec: &Vec<String>,
+        envp_vec: &Vec<String>,
+        elf_info: &ELFInfo,
+    ) {
+        // go down to the stack page (important!) and align
+        *user_sp -= 2 * core::mem::size_of::<usize>();
+
+        // because size of parameters is almost never more than PAGE_SIZE,
+        // so I decide to use physical address directly for better performance
+        let mut phys_user_sp = PageTable::from_token(self.token())
+            .translate_va(VirtAddr::from(*user_sp))
+            .unwrap()
+            .0;
+        // we can add this to a phys addr to get corresponding virt addr
+        let virt_phys_offset = *user_sp - phys_user_sp;
+        let phys_start = phys_user_sp;
+
+        // unsafe code is efficient code! here we go!
+        fn copy_to_user_string_unchecked(src: &str, dst: *mut u8) {
+            let size = src.len();
+            unsafe {
+                core::slice::from_raw_parts_mut(dst, size)
+                    .copy_from_slice(core::slice::from_raw_parts(src.as_ptr(), size));
+                // adapt to C-style string
+                *dst.add(size) = b'\0';
+            }
+        }
+
+        // we don't care about the order of env...
+        let mut envp_user = Vec::<*const u8>::new();
+        for env in envp_vec.iter() {
+            phys_user_sp -= env.len() + 1;
+            envp_user.push((phys_user_sp + virt_phys_offset) as *const u8);
+            copy_to_user_string_unchecked(env, phys_user_sp as *mut u8);
+        }
+        envp_user.push(core::ptr::null());
+
+        // we don't care about the order of arg, too...
+        let mut argv_user = Vec::<*const u8>::new();
+        for arg in argv_vec.iter() {
+            phys_user_sp -= arg.len() + 1;
+            argv_user.push((phys_user_sp + virt_phys_offset) as *const u8);
+            copy_to_user_string_unchecked(arg, phys_user_sp as *mut u8);
+        }
+        argv_user.push(core::ptr::null());
+
+        // align downward to usize (64bit)
+        phys_user_sp &= !0x7;
+
+        // 16 random bytes
+        phys_user_sp -= 2 * core::mem::size_of::<usize>();
+        // should be virt addr!
+        let random_bits_ptr = phys_user_sp + virt_phys_offset;
+        unsafe {
+            *(phys_user_sp as *mut usize) = 0xdeadbeefcafebabe;
+            *(phys_user_sp as *mut usize).add(1) = 0xdeadbeefcafebabe;
+        }
+
+        // padding
+        phys_user_sp -= core::mem::size_of::<usize>();
+        unsafe {
+            *(phys_user_sp as *mut usize) = 0x0000000000000000;
+        }
+
+        let auxv = [
+            // AuxvEntry::new(AuxvType::SYSINFO_EHDR, vDSO_mapping);
+            // AuxvEntry::new(AuxvType::L1I_CACHESIZE, 0);
+            // AuxvEntry::new(AuxvType::L1I_CACHEGEOMETRY, 0);
+            // AuxvEntry::new(AuxvType::L1D_CACHESIZE, 0);
+            // AuxvEntry::new(AuxvType::L1D_CACHEGEOMETRY, 0);
+            // AuxvEntry::new(AuxvType::L2_CACHESIZE, 0);
+            // AuxvEntry::new(AuxvType::L2_CACHEGEOMETRY, 0);
+            // `0x112d` means IMADZifenciC, aka gc
+            AuxvEntry::new(AuxvType::HWCAP, 0x112d),
+            AuxvEntry::new(AuxvType::PAGESZ, PAGE_SIZE),
+            AuxvEntry::new(AuxvType::CLKTCK, TICKS_PER_SEC),
+            AuxvEntry::new(AuxvType::PHDR, elf_info.phdr),
+            AuxvEntry::new(AuxvType::PHENT, elf_info.phent),
+            AuxvEntry::new(AuxvType::PHNUM, elf_info.phnum),
+            AuxvEntry::new(AuxvType::BASE, elf_info.base),
+            AuxvEntry::new(AuxvType::FLAGS, 0),
+            AuxvEntry::new(AuxvType::ENTRY, elf_info.entry),
+            AuxvEntry::new(AuxvType::UID, 0),
+            AuxvEntry::new(AuxvType::EUID, 0),
+            AuxvEntry::new(AuxvType::GID, 0),
+            AuxvEntry::new(AuxvType::EGID, 0),
+            AuxvEntry::new(AuxvType::SECURE, 0),
+            AuxvEntry::new(AuxvType::RANDOM, random_bits_ptr as usize),
+            AuxvEntry::new(
+                AuxvType::EXECFN,
+                argv_user.first().copied().unwrap() as usize,
+            ),
+            AuxvEntry::new(AuxvType::NULL, 0),
+        ];
+        phys_user_sp -= auxv.len() * core::mem::size_of::<AuxvEntry>();
+        unsafe {
+            core::slice::from_raw_parts_mut(phys_user_sp as *mut AuxvEntry, auxv.len())
+                .copy_from_slice(auxv.as_slice());
+        }
+
+        phys_user_sp -= envp_user.len() * core::mem::size_of::<usize>();
+        unsafe {
+            core::slice::from_raw_parts_mut(phys_user_sp as *mut *const u8, envp_user.len())
+                .copy_from_slice(envp_user.as_slice());
+        }
+
+        phys_user_sp -= argv_user.len() * core::mem::size_of::<usize>();
+        unsafe {
+            core::slice::from_raw_parts_mut(phys_user_sp as *mut *const u8, argv_user.len())
+                .copy_from_slice(argv_user.as_slice());
+        }
+
+        phys_user_sp -= core::mem::size_of::<usize>();
+        unsafe {
+            *(phys_user_sp as *mut usize) = argv_vec.len();
+        }
+
+        *user_sp = phys_user_sp + virt_phys_offset;
+
+        // unlikely, if `start` and `end` are in different pages, we should panic
+        assert_eq!(phys_start & !0xfff, phys_user_sp & !0xfff);
+
+        // print user stack
+        let mut phys_addr = phys_user_sp & !0xf;
+        while phys_start >= phys_addr {
+            info!(
+                "0x{:0>16X}:    {:0>16X}  {:0>16X}",
+                phys_addr + virt_phys_offset,
+                unsafe { *(phys_addr as *mut usize) },
+                unsafe { *((phys_addr + core::mem::size_of::<usize>()) as *mut usize) }
+            );
+            phys_addr += 2 * core::mem::size_of::<usize>();
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1357,8 +1499,9 @@ impl MapArea {
             let new_file = file.deep_clone();
             new_file.lseek(
                 (file.get_offset() + VirtAddr::from(cut).0
-                    - VirtAddr::from(self.data_frames.vpn_range.get_start()).0) as isize,
-                SeekWhence::SEEK_SET
+                    - VirtAddr::from(self.data_frames.vpn_range.get_start()).0)
+                    as isize,
+                SeekWhence::SEEK_SET,
             );
             Some(new_file)
         } else {
