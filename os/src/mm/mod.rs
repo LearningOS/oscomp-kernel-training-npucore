@@ -63,21 +63,3 @@ macro_rules! ptr_to_opt_ref {
     };
 }
 
-#[macro_export]
-/// Convert user pointer `trg:*mut T` to `Some(trg as &mut T)` or `None` if null.
-macro_rules! ptr_to_opt_ref_mut {
-    ($trg:ident) => {
-        if $trg != null_mut() {
-            Some(translated_refmut(current_user_token(), $trg))
-        } else {
-            None
-        }
-    };
-    ($token:ident,$trg:ident) => {
-        if $trg != null_mut() {
-            Some(translated_refmut($token, $trg))
-        } else {
-            None
-        }
-    };
-}
