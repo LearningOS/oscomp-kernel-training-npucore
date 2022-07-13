@@ -74,6 +74,12 @@ bitflags! {
         const   SIGPWR      = 1 << (29);
         /// Bad system call.
         const   SIGSYS      = 1 << (30);
+        /// RT signal for pthread
+        const   SIGTIMER    = 1 << (31);
+        /// RT signal for pthread
+        const   SIGCANCEL   = 1 << (32);
+        /// RT signal for pthread
+        const   SIGSYNCCALL = 1 << (33);
     }
 }
 
