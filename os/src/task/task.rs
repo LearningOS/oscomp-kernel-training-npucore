@@ -670,7 +670,7 @@ pub fn execve(path: String, mut argv_vec: Vec<String>, envp_vec: Vec<String>) ->
     let task = current_task().unwrap();
     let working_inode = &task.fs.lock().working_inode;
 
-    match ROOT_FD.open(&path, OpenFlags::O_RDONLY, false) {
+    match working_inode.open(&path, OpenFlags::O_RDONLY, false) {
         Ok(file) => {
             if file.get_size() < 4 {
                 return ENOEXEC;
