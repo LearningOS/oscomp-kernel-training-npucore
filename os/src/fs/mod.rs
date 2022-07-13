@@ -12,6 +12,8 @@ pub use {
     self::dev::zero::*,
     self::dev::pipe::*,
 };
+use core::{ops::{Index, IndexMut}, slice::{Iter, IterMut}};
+
 pub use self::layout::*;
 
 use lazy_static::*;
@@ -26,6 +28,7 @@ lazy_static!{
         self::directory_tree::ROOT.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true).unwrap()
     ));
 }
+
 #[derive(Clone)]
 pub struct FileDescriptor {
     cloexec: bool,
@@ -202,4 +205,83 @@ impl FileDescriptor {
     }
 }
 
+#[derive(Clone)]
+pub struct FdTable {
+    inner: Vec<Option<FileDescriptor>>,
+    limit: usize,
+}
 
+impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> Index<I>
+    for FdTable
+{
+    type Output = I::Output;
+
+    #[inline(always)]
+    fn index(&self, index: I) -> &Self::Output {
+        &self.inner[index]
+    }
+}
+
+impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> IndexMut<I>
+    for FdTable
+{
+    #[inline(always)]
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        &mut self.inner[index]
+    }
+}
+
+impl FdTable {
+    pub const SYSTEM_FD_LIMIT: usize = 256;
+    pub const DEFAULT_FD_LIMIT: usize = 64;
+    pub fn new(inner: Vec<Option<FileDescriptor>>) -> Self {
+        Self {
+            inner,
+            limit: FdTable::DEFAULT_FD_LIMIT,
+        }
+    }
+    pub fn get_limit(&self) -> usize {
+        self.limit
+    }
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit;
+    }
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+    #[inline(always)]
+    pub fn iter(&self) -> Iter<Option<FileDescriptor>> {
+        self.inner.iter()
+    }
+    #[inline(always)]
+    pub fn iter_mut(&mut self) -> IterMut<Option<FileDescriptor>> {
+        self.inner.iter_mut()
+    }
+    /// Try to alloc the lowest valid fd in `fd_table`
+    pub fn alloc_fd(&mut self) -> Option<usize> {
+        self.alloc_fd_at(0)
+    }
+    /// Try to alloc fd at `hint`, if `hint` is allocated, will alloc lowest valid fd above.
+    pub fn alloc_fd_at(&mut self, hint: usize) -> Option<usize> {
+        if hint < self.inner.len() {
+            if let Some(fd) = (hint..self.inner.len()).find(|fd| self.inner[*fd].is_none()) {
+                Some(fd)
+            } else {
+                if self.inner.len() < self.limit {
+                    self.inner.push(None);
+                    Some(self.inner.len() - 1)
+                } else {
+                    None
+                }
+            }
+        } else {
+            if hint < self.limit {
+                self.inner.resize(hint + 1, None);
+                Some(hint)
+            } else {
+                None
+            }
+        }
+    }
+}
