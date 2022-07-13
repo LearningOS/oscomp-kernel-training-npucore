@@ -1,7 +1,8 @@
-use crate::config::{CLOCK_FREQ, PAGE_SIZE, USER_STACK_SIZE};
+use crate::config::{CLOCK_FREQ, PAGE_SIZE, USER_STACK_SIZE, MMAP_BASE};
+use crate::fs::OpenFlags;
 use crate::mm::{
     copy_from_user, copy_to_user, copy_to_user_string, translated_byte_buffer, translated_ref,
-    translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
+    translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer, VirtAddr,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
@@ -15,7 +16,8 @@ use crate::timer::{
     NSEC_PER_SEC,
 };
 use crate::trap::TrapContext;
-use alloc::string::String;
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -439,7 +441,9 @@ pub fn sys_execve(
     mut argv: *const *const u8,
     mut envp: *const *const u8,
 ) -> isize {
-    let token = current_user_token();
+    const DEFAULT_SHELL: &str = "/bin/bash";
+    let task = current_task().unwrap();
+    let token = task.get_user_token();
     let path = translated_str(token, pathname);
     let mut argv_vec: Vec<String> = Vec::new();
     let mut envp_vec: Vec<String> = Vec::new();
@@ -467,7 +471,76 @@ pub fn sys_execve(
             }
         }
     }
-    crate::task::execve(path, argv_vec, envp_vec)
+    debug!(
+        "[exec] argv: {:?} /* {} vars */, envp: {:?} /* {} vars */",
+        argv_vec,
+        argv_vec.len(),
+        envp_vec,
+        envp_vec.len()
+    );
+    let working_inode = &task.fs.lock().working_inode;
+
+    match working_inode.open(&path, OpenFlags::O_RDONLY, false) {
+        Ok(file) => {
+            if file.get_size() < 4 {
+                return ENOEXEC;
+            }
+            let mut magic_number = Box::<[u8; 4]>::new([0; 4]);
+            // this operation may be expensive... I'm not sure
+            file.read(Some(&mut 0usize), magic_number.as_mut_slice());
+            let elf = match magic_number.as_slice() {
+                b"\x7fELF" => file,
+                b"#!" => {
+                    let shell_file = working_inode.open(
+                        DEFAULT_SHELL,
+                        OpenFlags::O_RDONLY,
+                        false,
+                    )
+                    .unwrap();
+                    argv_vec.insert(0, DEFAULT_SHELL.to_string());
+                    shell_file
+                }
+                _ => return ENOEXEC,
+            };
+
+            let buffer = unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, elf.get_size()) };
+            let caches = elf.get_all_caches().unwrap();
+            let frames = 
+                caches
+                .iter()
+                .map(|cache|{
+                    let lock = cache.try_lock();
+                    assert!(lock.is_some());
+                    Some(lock.unwrap().get_tracker())
+                })
+                .collect();
+
+            crate::mm::KERNEL_SPACE
+                .lock()
+                .insert_program_area(
+                    MMAP_BASE.into(),
+                    crate::mm::MapPermission::R | crate::mm::MapPermission::W,
+                    frames,
+                )
+                .unwrap();
+
+            let task = current_task().unwrap();
+            show_frame_consumption! {
+                "load_elf";
+                if let Err(errno) = task.load_elf(buffer, &argv_vec, &envp_vec) {
+                    return errno;
+                };
+            }
+            // remove elf area
+            crate::mm::KERNEL_SPACE
+                .lock()
+                .remove_area_with_start_vpn(VirtAddr::from(MMAP_BASE).floor())
+                .unwrap();
+            // should return 0 in success
+            SUCCESS
+        }
+        Err(errno) => errno,
+    }
 }
 
 bitflags! {

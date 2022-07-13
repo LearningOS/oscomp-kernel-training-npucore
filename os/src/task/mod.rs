@@ -1,4 +1,5 @@
 mod context;
+mod elf;
 mod manager;
 mod pid;
 mod processor;
@@ -12,8 +13,8 @@ use lazy_static::*;
 use manager::fetch_task;
 pub use signal::*;
 use switch::__switch;
-pub use task::{execve, FdTable, Rusage, TaskControlBlock, TaskStatus, load_elf_interp};
-
+pub use task::{FdTable, Rusage, TaskControlBlock, TaskStatus};
+pub use elf::{AuxvEntry, AuxvType, ELFInfo, load_elf_interp};
 pub use manager::{
     add_task, find_task_by_pid, procs_count, sleep_interruptible, wake_interruptible,
 };
@@ -132,78 +133,4 @@ lazy_static! {
 
 pub fn add_initproc() {
     add_task(INITPROC.clone());
-}
-
-#[derive(Clone, Copy)]
-#[allow(non_camel_case_types, unused)]
-#[repr(usize)]
-pub enum AuxvType {
-    NULL = 0,
-    IGNORE = 1,
-    EXECFD = 2,
-    PHDR = 3,
-    PHENT = 4,
-    PHNUM = 5,
-    PAGESZ = 6,
-    BASE = 7,
-    FLAGS = 8,
-    ENTRY = 9,
-    NOTELF = 10,
-    UID = 11,
-    EUID = 12,
-    GID = 13,
-    EGID = 14,
-    PLATFORM = 15,
-    HWCAP = 16,
-    CLKTCK = 17,
-    FPUCW = 18,
-    DCACHEBSIZE = 19,
-    ICACHEBSIZE = 20,
-    UCACHEBSIZE = 21,
-    IGNOREPPC = 22,
-    SECURE = 23,
-    BASE_PLATFORM = 24,
-    RANDOM = 25,
-    HWCAP2 = 26,
-    EXECFN = 31,
-    SYSINFO = 32,
-    SYSINFO_EHDR = 33,
-    L1I_CACHESHAPE = 34,
-    L1D_CACHESHAPE = 35,
-    L2_CACHESHAPE = 36,
-    L3_CACHESHAPE = 37,
-    L1I_CACHESIZE = 40,
-    L1I_CACHEGEOMETRY = 41,
-    L1D_CACHESIZE = 42,
-    L1D_CACHEGEOMETRY = 43,
-    L2_CACHESIZE = 44,
-    L2_CACHEGEOMETRY = 45,
-    L3_CACHESIZE = 46,
-    L3_CACHEGEOMETRY = 47,
-    MINSIGSTKSZ = 51,
-}
-
-#[derive(Clone, Copy)]
-#[allow(unused)]
-pub struct AuxvEntry {
-    auxv_type: AuxvType,
-    auxv_val: usize,
-}
-
-impl AuxvEntry {
-    fn new(auxv_type: AuxvType, auxv_val: usize) -> Self {
-        Self {
-            auxv_type,
-            auxv_val,
-        }
-    }
-}
-
-pub struct ELFInfo {
-    pub entry: usize,
-    pub interp_entry: Option<usize>,
-    pub base: usize,
-    pub phnum: usize,
-    pub phent: usize,
-    pub phdr: usize,
 }
