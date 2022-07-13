@@ -504,7 +504,7 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
         },
     };
 
-    match file_descriptor.open(&path, OpenFlags::O_RDONLY, false, true) {
+    match file_descriptor.open(&path, OpenFlags::O_RDONLY, false) {
         Ok(file_descriptor) => {
             copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
             SUCCESS
@@ -580,7 +580,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         },
     };
 
-    let new_file_descriptor = match file_descriptor.open(&path, flags, false, false) {
+    let new_file_descriptor = match file_descriptor.open(&path, flags, false) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -884,7 +884,7 @@ fn __openat(dirfd: usize, path: &str) -> Result<FileDescriptor, isize> {
             fd_table[fd].as_ref().unwrap().clone()
         },
     };
-    file_descriptor.open(path, OpenFlags::O_RDONLY, false, false)
+    file_descriptor.open(path, OpenFlags::O_RDONLY, false)
 }
 
 #[allow(non_camel_case_types)]
@@ -1046,22 +1046,8 @@ pub fn sys_faccessat2(dirfd: usize, pathname: *const u8, mode: u32, flags: u32) 
 
     // Do not check user's authority, because user group is not implemented yet.
     // All existing files can be accessed.
-    let task = current_task().unwrap();
-    let file_descriptor = match dirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
-        fd => {
-            let fd_table = task.files.lock();
-            if fd >= fd_table.len() || fd_table[fd].is_none() {
-                return EBADF;
-            }
-            fd_table[fd].as_ref().unwrap().clone()
-        },
-    };
-
-    match file_descriptor.open(&pathname, OpenFlags::O_RDONLY, false, true) {
-        Ok(file_descriptor) => {SUCCESS},
+    match __openat(dirfd, pathname.as_str()) {
+        Ok(_) => SUCCESS,
         Err(errno) => errno,
     }
 }

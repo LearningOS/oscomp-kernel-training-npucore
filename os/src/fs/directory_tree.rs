@@ -201,7 +201,6 @@ impl DirectoryTreeNode {
         path: &str,
         flags: OpenFlags,
         special_use: bool,
-        ignore_file_type: bool,
     ) -> Result<Arc<dyn File>, isize> {
         if path == "" {
             return Err(ENOENT);
@@ -287,7 +286,7 @@ impl DirectoryTreeNode {
             return Err(EISDIR);
         }
 
-        if !ignore_file_type && inode.file.is_dir() && !flags.contains(OpenFlags::O_DIRECTORY) {
+        if !inode.file.is_dir() && flags.contains(OpenFlags::O_DIRECTORY) {
             return Err(ENOTDIR);
         }
 
