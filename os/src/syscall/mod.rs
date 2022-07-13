@@ -181,7 +181,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         // SYSCALL_READ,
         // SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
-        // SYSCALL_WRITEV,
+        SYSCALL_READV,
+        SYSCALL_WRITEV,
         SYSCALL_WAIT4,
         //        SYSCALL_WAITPID,
         SYSCALL_GETPPID,
@@ -339,6 +340,13 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as u32,
             args[3] as u32,
         ),
+        SYSCALL_RENAMEAT2 => sys_renameat2(
+            args[0], 
+            args[1] as *const u8, 
+            args[2], 
+            args[3] as *const u8, 
+            args[4] as u32,
+        ),
         _ => {
             error!(
                 "Unsupported syscall:{} ({}), calling over arguments:",
@@ -346,7 +354,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
                 syscall_id
             );
             for i in 0..args.len() {
-                debug!("args[{}]: {:X}", i, args[i]);
+                error!("args[{}]: {:X}", i, args[i]);
             }
             info!("Exiting.");
             sys_exit(1)

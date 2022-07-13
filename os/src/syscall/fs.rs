@@ -201,7 +201,7 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
                     unsafe {
                         temp.set_len(iovec.iov_len);
                     }
-                    info!(
+                    debug!(
                         "[sys_writev] Iterating... content: {:?}, iovlen: {}",
                         core::str::from_utf8(temp.as_slice()),
                         iovec.iov_len
@@ -504,22 +504,12 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
         },
     };
 
-    // Guess file is a directory
-    match file_descriptor.open(&path, OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, false) {
+    match file_descriptor.open(&path, OpenFlags::O_RDONLY, false, true) {
         Ok(file_descriptor) => {
             copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
-            return SUCCESS;
+            SUCCESS
         },
-        Err(ENOTDIR) => {},
-        Err(errno) => return errno,
-    }
-    // Guess file is a file
-    match file_descriptor.open(&path, OpenFlags::O_RDONLY, false) {
-        Ok(file_descriptor) => {
-            copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
-            return SUCCESS;
-        },
-        Err(errno) => return errno,
+        Err(errno) => errno,
     }
 }
 
@@ -590,7 +580,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         },
     };
 
-    let new_file_descriptor = match file_descriptor.open(&path, flags, false) {
+    let new_file_descriptor = match file_descriptor.open(&path, flags, false, false) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -601,6 +591,53 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     };
     fd_table[new_fd] = Some(new_file_descriptor);
     new_fd as isize
+}
+
+pub fn sys_renameat2(olddirfd: usize, oldpath: *const u8, newdirfd: usize, newpath: *const u8, flags: u32) -> isize {
+    let task = current_task().unwrap();
+    let token = task.get_user_token();
+    let oldpath = translated_str(token, oldpath);
+    let newpath = translated_str(token, newpath);
+
+    info!(
+        "[sys_renameat2] olddirfd: {}, oldpath:{}, newdirfd: {}, newpath: {}, flags:{}",
+        olddirfd, oldpath, newdirfd, newpath, flags
+    );
+
+    let old_file_descriptor = match olddirfd {
+        AT_FDCWD => {
+            task.fs.lock().working_inode.as_ref().clone()
+        },
+        fd => {
+            let fd_table = task.files.lock();
+            if fd >= fd_table.len() || fd_table[fd].is_none() {
+                return EBADF;
+            }
+            fd_table[fd].as_ref().unwrap().clone()
+        },
+    };
+    let new_file_descriptor = match newdirfd {
+        AT_FDCWD => {
+            task.fs.lock().working_inode.as_ref().clone()
+        },
+        fd => {
+            let fd_table = task.files.lock();
+            if fd >= fd_table.len() || fd_table[fd].is_none() {
+                return EBADF;
+            }
+            fd_table[fd].as_ref().unwrap().clone()
+        },
+    };
+
+    match FileDescriptor::rename(
+        &old_file_descriptor,
+        &oldpath,
+        &new_file_descriptor,
+        &newpath
+    ) {
+        Ok(_) => SUCCESS,
+        Err(errno) => errno,
+    }
 }
 
 pub fn sys_ioctl(fd: usize, cmd: u32, arg: usize) -> isize {
@@ -847,7 +884,7 @@ fn __openat(dirfd: usize, path: &str) -> Result<FileDescriptor, isize> {
             fd_table[fd].as_ref().unwrap().clone()
         },
     };
-    file_descriptor.open(path, OpenFlags::O_RDONLY, false)
+    file_descriptor.open(path, OpenFlags::O_RDONLY, false, false)
 }
 
 #[allow(non_camel_case_types)]
@@ -1009,8 +1046,22 @@ pub fn sys_faccessat2(dirfd: usize, pathname: *const u8, mode: u32, flags: u32) 
 
     // Do not check user's authority, because user group is not implemented yet.
     // All existing files can be accessed.
-    match __openat(dirfd, pathname.as_str()) {
-        Ok(_) => SUCCESS,
+    let task = current_task().unwrap();
+    let file_descriptor = match dirfd {
+        AT_FDCWD => {
+            task.fs.lock().working_inode.as_ref().clone()
+        },
+        fd => {
+            let fd_table = task.files.lock();
+            if fd >= fd_table.len() || fd_table[fd].is_none() {
+                return EBADF;
+            }
+            fd_table[fd].as_ref().unwrap().clone()
+        },
+    };
+
+    match file_descriptor.open(&pathname, OpenFlags::O_RDONLY, false, true) {
+        Ok(file_descriptor) => {SUCCESS},
         Err(errno) => errno,
     }
 }

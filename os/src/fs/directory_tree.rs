@@ -1,3 +1,5 @@
+use core::cell::RefCell;
+
 use alloc::{sync::{Arc, Weak}, collections::{BTreeMap}, string::{String, ToString}, vec::Vec};
 use easy_fs::{EasyFileSystem, DiskInodeType, CacheManager};
 use spin::{RwLock, Mutex, RwLockWriteGuard};
@@ -199,6 +201,7 @@ impl DirectoryTreeNode {
         path: &str,
         flags: OpenFlags,
         special_use: bool,
+        ignore_file_type: bool,
     ) -> Result<Arc<dyn File>, isize> {
         if path == "" {
             return Err(ENOENT);
@@ -284,7 +287,7 @@ impl DirectoryTreeNode {
             return Err(EISDIR);
         }
 
-        if inode.file.is_dir() && !flags.contains(OpenFlags::O_DIRECTORY) {
+        if !ignore_file_type && inode.file.is_dir() && !flags.contains(OpenFlags::O_DIRECTORY) {
             return Err(ENOTDIR);
         }
 
@@ -435,19 +438,25 @@ impl DirectoryTreeNode {
             Ok(inode) => inode,
             Err(errno) => return Err(errno),
         };
+        type ChildLockType<'a> = RwLockWriteGuard<'a, BTreeMap<String, Arc<DirectoryTreeNode>>>;
 
-        let mut old_lock: RwLockWriteGuard<BTreeMap<String, Arc<DirectoryTreeNode>>>;
-        let mut new_lock: RwLockWriteGuard<BTreeMap<String, Arc<DirectoryTreeNode>>>;
+        let old_lock: Arc<Mutex<ChildLockType<'_>>>;
+        let new_lock: Arc<Mutex<ChildLockType<'_>>>;
+
+
         // Be careful about the lock ordering
-        if old_comps < new_comps {
-            old_lock = old_par_inode.children.write();
-            new_lock = new_par_inode.children.write();
+        if old_comps == new_comps {
+            old_lock = Arc::new(Mutex::new(old_par_inode.children.write()));
+            new_lock = old_lock.clone();
+        } else if old_comps < new_comps {
+            old_lock = Arc::new(Mutex::new(old_par_inode.children.write()));
+            new_lock = Arc::new(Mutex::new(new_par_inode.children.write()));
         } else {
-            new_lock = new_par_inode.children.write();
-            old_lock = old_par_inode.children.write();
+            new_lock = Arc::new(Mutex::new(new_par_inode.children.write()));
+            old_lock = Arc::new(Mutex::new(old_par_inode.children.write()));
         }
 
-        let old_inode = match old_par_inode.try_to_open_subfile(old_last_comp, &mut old_lock) {
+        let old_inode = match old_par_inode.try_to_open_subfile(old_last_comp, &mut (*old_lock.lock())) {
             Ok(inode) => inode,
             Err(errno) => return Err(errno),
         };
@@ -459,9 +468,9 @@ impl DirectoryTreeNode {
         if old_inode.filesystem.fs_id != new_par_inode.filesystem.fs_id {
             return Err(EXDEV);
         }
-
-        let key = (*new_last_comp).to_string();
-        match new_par_inode.try_to_open_subfile(new_last_comp, &mut new_lock) {
+        let old_key = old_last_comp.to_string();
+        let new_key = new_last_comp.to_string();
+        match new_par_inode.try_to_open_subfile(new_last_comp, &mut (*new_lock.lock())) {
             Ok(new_inode) => {
                 if new_inode.file.is_dir() && !old_inode.file.is_dir() {
                     return Err(EISDIR);
@@ -474,7 +483,7 @@ impl DirectoryTreeNode {
                 }
                 // delete
                 match new_par_inode.file.unlink(true) {
-                    Ok(_) => {new_lock.remove(&key);},
+                    Ok(_) => {new_lock.lock().remove(&new_key);},
                     Err(errno) => return Err(errno),
                 }
             },
@@ -482,7 +491,7 @@ impl DirectoryTreeNode {
             Err(errno) => return Err(errno),
         }
 
-        let value = old_lock.remove(&key).unwrap();
+        let value = old_lock.lock().remove(&old_key).unwrap();
         match old_inode.file.unlink(false) {
             Ok(_) => {},
             Err(errno) => return Err(errno),
@@ -496,7 +505,7 @@ impl DirectoryTreeNode {
             FS::Null => return Err(EACCES),
         }
         *value.father.lock() = Arc::downgrade(&new_par_inode.get_arc());
-        new_lock.insert(key, value);
+        new_lock.lock().insert(new_key, value);
         
         Ok(())
     }
