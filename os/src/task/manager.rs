@@ -38,6 +38,13 @@ impl TaskManager {
             .find(|task| task.pid.0 == pid)
             .cloned()
     }
+    pub fn find_by_tgid(&self, tgid: usize) -> Option<Arc<TaskControlBlock>> {
+        self.ready_queue
+            .iter()
+            .chain(self.interruptible_queue.iter())
+            .find(|task| task.tgid == tgid)
+            .cloned()
+    }
     pub fn ready_count(&self) -> u16 {
         self.ready_queue.len() as u16
     }
@@ -81,12 +88,24 @@ pub fn wake_interruptible(task: Arc<TaskControlBlock>) {
     manager.add(task.clone());
 }
 
+/// # Warning
+/// `pid` here is unique, user will regard it as `tid`
 pub fn find_task_by_pid(pid: usize) -> Option<Arc<TaskControlBlock>> {
     let task = current_task().unwrap();
     if task.pid.0 == pid {
         Some(task)
     } else {
         TASK_MANAGER.lock().find_by_pid(pid)
+    }
+}
+
+/// Return arbitrary task with `tgid`.
+pub fn find_task_by_tgid(tgid: usize) -> Option<Arc<TaskControlBlock>> {
+    let task = current_task().unwrap();
+    if task.tgid == tgid {
+        Some(task)
+    } else {
+        TASK_MANAGER.lock().find_by_tgid(tgid)
     }
 }
 

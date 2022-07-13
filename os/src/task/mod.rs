@@ -16,7 +16,7 @@ use switch::__switch;
 pub use task::{Rusage, TaskControlBlock, TaskStatus};
 pub use elf::{AuxvEntry, AuxvType, ELFInfo, load_elf_interp};
 pub use manager::{
-    add_task, find_task_by_pid, procs_count, sleep_interruptible, wake_interruptible,
+    add_task, find_task_by_pid, find_task_by_tgid, procs_count, sleep_interruptible, wake_interruptible,
 };
 pub use pid::{pid_alloc, KernelStack, PidHandle, trap_cx_bottom_from_tid, ustack_bottom_from_tid};
 pub use processor::{

@@ -8,7 +8,7 @@ use crate::show_frame_consumption;
 use crate::syscall::errno::*;
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
-    exit_current_and_run_next, find_task_by_pid, procs_count, signal::*,
+    exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
     suspend_current_and_run_next, wake_interruptible, Rusage, TaskStatus,
 };
 use crate::timer::{
@@ -85,7 +85,10 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
         Err(_) => return EINVAL,
     };
     if pid > 0 {
-        if let Some(task) = find_task_by_pid(pid) {
+        // [Warning] in current implementation,
+        // signal will be sent to an arbitrary task with target `pid` (`tgid` more precisely).
+        // But manual also require that the target task should not mask this signal.
+        if let Some(task) = find_task_by_tgid(pid) {
             if let Some(signal) = signal {
                 let mut inner = task.acquire_inner_lock();
                 inner.add_signal(signal);
@@ -102,6 +105,36 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
     } else if pid == 0 {
         todo!()
     } else if (pid as isize) == -1 {
+        todo!()
+    } else {
+        // (pid as isize) < -1
+        todo!()
+    }
+}
+
+pub fn sys_tkill(tid: usize, sig: usize) -> isize {
+    let signal = match Signals::from_signum(sig) {
+        Ok(signal) => signal,
+        Err(_) => return EINVAL,
+    };
+    if tid > 0 {
+        if let Some(task) = find_task_by_pid(tid) {
+            if let Some(signal) = signal {
+                let mut inner = task.acquire_inner_lock();
+                inner.add_signal(signal);
+                // wake up target process if it is sleeping
+                if inner.task_status == TaskStatus::Interruptible {
+                    inner.task_status = TaskStatus::Ready;
+                    wake_interruptible(task.clone());
+                }
+            }
+            SUCCESS
+        } else {
+            ESRCH
+        }
+    } else if tid == 0 {
+        todo!()
+    } else if (tid as isize) == -1 {
         todo!()
     } else {
         // (pid as isize) < -1
@@ -241,7 +274,7 @@ pub fn sys_getegid() -> isize {
 // Fortunately, that won't make difference when we just try to run busybox sh so far.
 pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
     /* An attempt.*/
-    let task = crate::task::find_task_by_pid(pid);
+    let task = crate::task::find_task_by_tgid(pid);
     match task {
         Some(task) => task.setpgid(pgid),
         None => -1,
@@ -250,7 +283,7 @@ pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
 
 pub fn sys_getpgid(pid: usize) -> isize {
     /* An attempt.*/
-    let task = crate::task::find_task_by_pid(pid);
+    let task = crate::task::find_task_by_tgid(pid);
     match task {
         Some(task) => task.getpgid() as isize,
         None => -1,

@@ -38,6 +38,7 @@ const SYSCALL_CLOCK_GETTIME: usize = 113;
 const SYSCALL_SYSLOG: usize = 116;
 const SYSCALL_YIELD: usize = 124;
 const SYSCALL_KILL: usize = 129;
+const SYSCALL_TKILL: usize = 130;
 const SYSCALL_SIGACTION: usize = 134;
 const SYSCALL_SIGPROCMASK: usize = 135;
 const SYSCALL_SIGTIMEDWAIT: usize = 137;
@@ -130,6 +131,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_SYSLOG => "syslog",
         SYSCALL_YIELD => "yield",
         SYSCALL_KILL => "kill",
+        SYSCALL_TKILL => "tkill",
         SYSCALL_SIGACTION => "sigaction",
         SYSCALL_SIGPROCMASK => "sigprocmask",
         SYSCALL_SIGTIMEDWAIT => "sigtimedwait",
@@ -253,6 +255,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_EXIT_GRUOP => sys_exit(args[0] as u32),
         SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0], args[1] as *mut u64),
         SYSCALL_KILL => sys_kill(args[0], args[1]),
+        SYSCALL_TKILL => sys_tkill(args[0], args[1]),
         SYSCALL_SYSLOG => sys_syslog(args[0] as u32, args[1] as *mut u8, args[2] as u32),
         SYSCALL_YIELD => sys_yield(),
         SYSCALL_SIGACTION => sys_sigaction(args[0], args[1], args[2]),
