@@ -6,8 +6,8 @@ use lazy_static::*;
 use spin::Mutex;
 
 pub struct TaskManager {
-    ready_queue: VecDeque<Arc<TaskControlBlock>>,
-    interruptible_queue: VecDeque<Arc<TaskControlBlock>>,
+    pub ready_queue: VecDeque<Arc<TaskControlBlock>>,
+    pub interruptible_queue: VecDeque<Arc<TaskControlBlock>>,
 }
 
 /// A simple FIFO scheduler.

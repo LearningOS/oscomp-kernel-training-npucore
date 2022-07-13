@@ -1,6 +1,6 @@
 use crate::{
     syscall::errno::EINVAL,
-    task::{current_user_token, signal::Signals},
+    task::{current_trap_cx, current_user_token, signal::Signals},
     timer::TimeSpec,
 };
 use alloc::vec::Vec;
@@ -289,7 +289,10 @@ pub fn pselect(
         None
     };
 
-    let oldsig = &mut Signals::empty();
+    // push to the top of TrapContext page, make use of redundant space
+    let oldsig = ((current_task().unwrap().trap_cx_user_va() + crate::config::PAGE_SIZE)
+        as *mut Signals)
+        .wrapping_sub(1);
     if !sigmask.is_null() {
         sigprocmask(SigMaskHow::SIG_SETMASK.bits(), sigmask, oldsig);
     }
