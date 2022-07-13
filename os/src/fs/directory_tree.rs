@@ -202,6 +202,7 @@ impl DirectoryTreeNode {
         flags: OpenFlags,
         special_use: bool,
     ) -> Result<Arc<dyn File>, isize> {
+        log::debug!("[open]: cwd: {}, path: {}", self.get_cwd(), path);
         if path == "" {
             return Err(ENOENT);
         }
@@ -220,7 +221,6 @@ impl DirectoryTreeNode {
         } else {
             path
         };
-        
         let inode = if path.starts_with("/") {
             &**ROOT
         } else {

@@ -54,7 +54,7 @@ impl VirtIOBlk<'_> {
     /// Split buf into bufs(because buf may use 2 pages)
     pub fn get_bufs_ref(buf: &[u8]) -> Vec<&[u8]>{
         let bottom = buf.as_ptr() as usize;
-        let top = bottom + BLK_SIZE;
+        let top = bottom + buf.len();
         if bottom / 4096 * 4096 != (top - 1) / 4096 * 4096 {
             let page_limit = bottom / 4096 * 4096 + 4096;
             let buf1 = slice_from_raw_parts(buf.as_ptr(), page_limit - bottom);
@@ -73,7 +73,7 @@ impl VirtIOBlk<'_> {
     /// Split buf into bufs(because buf may use 2 pages)
     pub fn get_bufs_mut(buf: &mut [u8]) -> Vec<&mut [u8]>{
         let bottom = buf.as_ptr() as usize;
-        let top = bottom + BLK_SIZE;
+        let top = bottom + buf.len();
         if bottom / 4096 * 4096 != (top - 1) / 4096 * 4096 {
             let page_limit = bottom / 4096 * 4096 + 4096;
             let buf1 = slice_from_raw_parts_mut(buf.as_mut_ptr(), page_limit - bottom);
