@@ -118,7 +118,6 @@ impl DirectoryTreeNode {
         if lock.len() == 0 && !self.file.is_dir() {
             return Err(ENOTDIR);
         }
-        log::error!("try to open {}", name);
         match lock.get(&name.to_string()) {
             Some(inode) => {
                 Ok(inode.clone())
@@ -148,7 +147,6 @@ impl DirectoryTreeNode {
     ) -> Result<Arc<Self>, isize> {
         let mut current_inode = self.get_arc();
         for component in components {
-            log::error!("current: {}", current_inode.name);
             if *component == ".." {
                 let lock = current_inode.father.lock();
                 let par_inode = lock.upgrade().unwrap().clone();
@@ -172,7 +170,6 @@ impl DirectoryTreeNode {
                 current_inode = son_inode;
             }
         }
-        log::error!("current: {}", current_inode.name);
         Ok(current_inode)
     }
     pub fn cd_path(
@@ -235,11 +232,9 @@ impl DirectoryTreeNode {
             Err(errno) => return Err(errno),
         };
         let inode = if let Some(last_comp) = last_comp {
-            log::error!("last_comp: {}", last_comp);
             let mut lock = inode.children.write();
             match inode.try_to_open_subfile(last_comp, &mut lock) {
                 Ok(inode) => {
-                    log::error!("ok!!!");
                     if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
                         return Err(EEXIST);
                     }
@@ -289,9 +284,9 @@ impl DirectoryTreeNode {
             return Err(EISDIR);
         }
 
-        // if inode.file.is_dir() && !flags.contains(OpenFlags::O_DIRECTORY) {
-        //     return Err(ENOTDIR);
-        // }
+        if inode.file.is_dir() && !flags.contains(OpenFlags::O_DIRECTORY) {
+            return Err(ENOTDIR);
+        }
 
         if special_use {
             *inode.spe_usage.lock() += 1;
@@ -505,12 +500,6 @@ impl DirectoryTreeNode {
         
         Ok(())
     }
-    pub fn get_dirent(&self, count: usize) -> Result<Vec<Dirent>, isize> {
-        if !self.file.is_dir() {
-            return Err(ENOTDIR);
-        }
-        Ok(self.file.get_dirent(count))
-    }
 }
 
 pub fn oom() {
@@ -549,7 +538,9 @@ pub fn init_fs()
 }
 fn init_device_directory()
 {
-    ROOT.mkdir("/dev").unwrap();
+    match ROOT.mkdir("/dev") {
+        _ => {}
+    }
     
     let dev_inode = match ROOT.cd_path("/dev") {
         Ok(inode) => inode,
@@ -582,5 +573,7 @@ fn init_device_directory()
 }
 fn init_tmp_directory()
 {
-    ROOT.mkdir("/tmp").unwrap();
+    match ROOT.mkdir("/tmp") {
+        _ => {}
+    }
 }

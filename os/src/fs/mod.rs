@@ -52,19 +52,15 @@ impl FileDescriptor {
         };
         Some(inode.get_cwd())
     }
-    /// Just used for pwd
+    /// Just used for cwd
     pub fn cd(
         &self,
         path: &str
     ) -> Result<Arc<Self>, isize> {
-        let fd = match self.open(path, OpenFlags::O_DIRECTORY | OpenFlags::O_RDONLY, true) {
-            Ok(fd) => fd,
-            Err(errno) => return Err(errno),
-        };
-        if !fd.file.is_dir() {
-            return Err(ENOTDIR);
+        match self.open(path, OpenFlags::O_DIRECTORY | OpenFlags::O_RDONLY, true) {
+            Ok(fd) => Ok(Arc::new(fd)),
+            Err(errno) => Err(errno),
         }
-        Ok(Arc::new(fd))
     }
     pub fn readable(&self) -> bool {
         self.file.readable()
@@ -171,6 +167,9 @@ impl FileDescriptor {
         DirectoryTreeNode::rename(&old_abs_path,&new_abs_path)
     }
     pub fn get_dirent(&self, count: usize) -> Result<Vec<Dirent>, isize> {
+        if !self.file.is_dir() {
+            return Err(ENOTDIR);
+        }
         Ok(self.file.get_dirent(count))
     }
     pub fn get_offset(&self) -> usize {

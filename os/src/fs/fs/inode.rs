@@ -12,7 +12,7 @@ use alloc::sync::{Weak, Arc};
 use alloc::vec::Vec;
 use easy_fs::layout::FATDiskInodeType;
 pub use easy_fs::DiskInodeType;
-use easy_fs::{CacheManager, Inode};
+use easy_fs::{Inode};
 use spin::{Mutex};
 
 pub type InodeImpl = Inode<PageCacheManager, BlockCacheManager>;
@@ -22,6 +22,7 @@ pub struct OSInode {
     writable: bool,
     /// See `DirectoryTreeNode` for more details
     special_use: bool,
+    append: bool,
     inner: Arc<InodeImpl>,
     offset: Mutex<usize>,
     dirnode_ptr: Arc<Mutex<Weak<DirectoryTreeNode>>>,
@@ -32,7 +33,8 @@ impl OSInode {
         Arc::new(Self { 
             readable: true, 
             writable: true, 
-            special_use: true, 
+            special_use: true,
+            append: false, 
             inner: root_inode, 
             offset: Mutex::new(0), 
             dirnode_ptr: Arc::new(Mutex::new(Weak::new()))
@@ -65,6 +67,7 @@ impl File for OSInode {
             readable: self.readable,
             writable: self.writable,
             special_use: self.special_use,
+            append: self.append,
             inner: self.inner.clone(),
             offset: Mutex::new(*self.offset.lock()),
             dirnode_ptr: self.dirnode_ptr.clone(),
@@ -127,6 +130,9 @@ impl File for OSInode {
             }
             None => {
                 let mut offset = self.offset.lock();
+                if self.append {
+                    *offset = file_cont_lock.get_file_size() as usize;
+                }
                 let len = self.inner.write_at_block_cache_lock(
                     &mut file_cont_lock,
                     *offset,
@@ -166,6 +172,9 @@ impl File for OSInode {
 
         let mut offset = self.offset.lock();
         let mut file_cont_lock = self.inner.lock();
+        if self.append {
+            *offset = file_cont_lock.get_file_size() as usize;
+        }
         for slice in buf.buffers.iter() {
             let write_size =
                 self.inner
@@ -203,12 +212,11 @@ impl File for OSInode {
     }   
 
     fn open(&self, flags: OpenFlags, special_use: bool) -> Arc<dyn File> {
-        let readable = flags.contains(OpenFlags::O_RDONLY) || flags.contains(OpenFlags::O_RDWR);
-        let writable = flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR);
         Arc::new(Self {
-            readable, 
-            writable, 
+            readable: flags.contains(OpenFlags::O_RDONLY) || flags.contains(OpenFlags::O_RDWR), 
+            writable: flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR), 
             special_use,
+            append: flags.contains(OpenFlags::O_APPEND),
             inner: self.inner.clone(),
             offset: Mutex::new(0),
             dirnode_ptr: self.dirnode_ptr.clone(),
@@ -221,6 +229,7 @@ impl File for OSInode {
                 readable: true,
                 writable: true,
                 special_use: false,
+                append: false,
                 inner: Inode::from_ent(&self.inner, &short_ent, offset),
                 offset: Mutex::new(0),
                 dirnode_ptr: Arc::new(Mutex::new(Weak::new())),
@@ -237,6 +246,7 @@ impl File for OSInode {
                 readable: true,
                 writable: true,
                 special_use: false,
+                append: false,
                 inner,
                 offset: Mutex::new(0),
                 dirnode_ptr: Arc::new(Mutex::new(Weak::new())),
