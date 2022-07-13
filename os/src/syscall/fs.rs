@@ -1,19 +1,19 @@
 use crate::fs::poll::pselect;
 use crate::fs::{make_pipe, OpenFlags, StatMode};
-use crate::fs::{poll::{ppoll, FdSet}, Dirent, FileDescriptor, Null, Stat, Zero, TTY};
+use crate::fs::{
+    poll::{ppoll, FdSet},
+    Dirent, FileDescriptor, Null, Stat, Zero, TTY,
+};
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
-    translated_byte_buffer_append_to_existing_vec, translated_ref, translated_refmut,
-    translated_str, MapPermission, UserBuffer,
+    translated_byte_buffer_append_to_existing_vec, translated_refmut, translated_str,
+    MapPermission, UserBuffer,
 };
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
-use crate::{move_ptr_to_opt, ptr_to_opt_ref, ptr_to_opt_ref_mut};
-use alloc::sync::Arc;
+use alloc::alloc::{alloc, dealloc, Layout};
 use alloc::vec::Vec;
-use easy_fs::DiskInodeType;
 use core::mem::size_of;
-use core::ptr::{null, null_mut};
 use log::{debug, error, info, trace, warn};
 use num_enum::FromPrimitive;
 
@@ -75,7 +75,11 @@ pub fn sys_lseek(fd: usize, offset: usize, whence: u32) -> isize {
     if fd >= fd_table.len() || fd_table[fd].is_none() {
         return EBADF;
     }
-    match fd_table[fd].as_ref().unwrap().lseek(offset as isize, whence) {
+    match fd_table[fd]
+        .as_ref()
+        .unwrap()
+        .lseek(offset as isize, whence)
+    {
         Ok(pos) => pos as isize,
         Err(errno) => errno,
     }
@@ -359,16 +363,14 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
     let token = task.get_user_token();
 
     let file_descriptor = match fd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
     let dirent_vec = match file_descriptor.get_dirent(count) {
         Ok(vec) => vec,
@@ -492,23 +494,21 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
 
     let task = current_task().unwrap();
     let file_descriptor = match dirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
 
     match file_descriptor.open(&path, OpenFlags::O_RDONLY, false) {
         Ok(file_descriptor) => {
             copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
             SUCCESS
-        },
+        }
         Err(errno) => errno,
     }
 }
@@ -519,18 +519,20 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
 
     info!("[syscall_fstat] fd = {}", fd);
     let file_descriptor = match fd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
-    copy_to_user(token, file_descriptor.get_stat().as_ref(), statbuf as *mut Stat);
+    copy_to_user(
+        token,
+        file_descriptor.get_stat().as_ref(),
+        statbuf as *mut Stat,
+    );
     SUCCESS
 }
 
@@ -544,9 +546,9 @@ pub fn sys_chdir(path: *const u8) -> isize {
 
     match lock.working_inode.cd(&path) {
         Ok(new_working_inode) => {
-           lock.working_inode = new_working_inode;
-           SUCCESS
-        },
+            lock.working_inode = new_working_inode;
+            SUCCESS
+        }
         Err(errno) => errno,
     }
 }
@@ -569,15 +571,13 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     );
     let mut fd_table = task.files.lock();
     let file_descriptor = match dirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
 
     let new_file_descriptor = match file_descriptor.open(&path, flags, false) {
@@ -593,7 +593,13 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     new_fd as isize
 }
 
-pub fn sys_renameat2(olddirfd: usize, oldpath: *const u8, newdirfd: usize, newpath: *const u8, flags: u32) -> isize {
+pub fn sys_renameat2(
+    olddirfd: usize,
+    oldpath: *const u8,
+    newdirfd: usize,
+    newpath: *const u8,
+    flags: u32,
+) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
     let oldpath = translated_str(token, oldpath);
@@ -605,35 +611,31 @@ pub fn sys_renameat2(olddirfd: usize, oldpath: *const u8, newdirfd: usize, newpa
     );
 
     let old_file_descriptor = match olddirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
     let new_file_descriptor = match newdirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
 
     match FileDescriptor::rename(
         &old_file_descriptor,
         &oldpath,
         &new_file_descriptor,
-        &newpath
+        &newpath,
     ) {
         Ok(_) => SUCCESS,
         Err(errno) => errno,
@@ -670,16 +672,14 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
         StatMode::from_bits(mode)
     );
     let file_descriptor = match dirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
     match file_descriptor.mkdir(&path) {
         Ok(_) => SUCCESS,
@@ -712,16 +712,14 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
     );
 
     let file_descriptor = match dirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return EBADF;
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
     match file_descriptor.delete(&path, flags.contains(UnlinkatFlags::AT_REMOVEDIR)) {
         Ok(_) => SUCCESS,
@@ -873,16 +871,14 @@ pub fn sys_utimensat(
 fn __openat(dirfd: usize, path: &str) -> Result<FileDescriptor, isize> {
     let task = current_task().unwrap();
     let file_descriptor = match dirfd {
-        AT_FDCWD => {
-            task.fs.lock().working_inode.as_ref().clone()
-        },
+        AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() || fd_table[fd].is_none() {
                 return Err(EBADF);
             }
             fd_table[fd].as_ref().unwrap().clone()
-        },
+        }
     };
     file_descriptor.open(path, OpenFlags::O_RDONLY, false)
 }
@@ -981,18 +977,54 @@ pub fn sys_pselect(
     timeout: *mut TimeSpec,
     sigmask: *const crate::task::signal::Signals,
 ) -> isize {
+    pub fn copy_from_user_refmut<T: Copy>(
+        token: usize,
+        user_ptr: *mut T,
+    ) -> Option<&'static mut T> {
+        if !user_ptr.is_null() {
+            let layout = Layout::new::<T>();
+            let kernel_ptr = unsafe { alloc(layout).cast::<T>() };
+            copy_from_user(token, user_ptr, kernel_ptr);
+            unsafe { kernel_ptr.as_mut() }
+        } else {
+            None
+        }
+    }
+    pub fn write_back_and_release<T: Copy + core::fmt::Debug>(
+        token: usize,
+        kernel_ref: Option<&'static mut T>,
+        user_ptr: *mut T,
+    ) {
+        if let Some(kernel_ref) = kernel_ref {
+            error!("fds: {:?}", kernel_ref);
+            copy_to_user(token, kernel_ref, user_ptr);
+            let layout = Layout::new::<T>();
+            unsafe { dealloc((kernel_ref as *mut T).cast::<u8>(), layout) };
+        }
+    }
     if (nfds as isize) < 0 {
         return -1;
     }
     let token = current_user_token();
-    pselect(
+    let mut kread_fds = copy_from_user_refmut(token, read_fds);
+    let mut kwrite_fds = copy_from_user_refmut(token, write_fds);
+    let mut kexception_fds = copy_from_user_refmut(token, exception_fds);
+    let ktimeout = copy_from_user_refmut(token, timeout);
+    let ret = pselect(
         nfds,
-        ptr_to_opt_ref_mut!(token, read_fds),
-        ptr_to_opt_ref_mut!(token, write_fds),
-        ptr_to_opt_ref_mut!(token, exception_fds),
-        ptr_to_opt_ref_mut!(token, timeout),
+        &mut kread_fds,
+        &mut kwrite_fds,
+        &mut kexception_fds,
+        &ktimeout,
         sigmask,
-    )
+    );
+    error!("read:");
+    write_back_and_release(token, kread_fds, read_fds);
+    error!("write:");
+    write_back_and_release(token, kwrite_fds, write_fds);
+    error!("exception:");
+    write_back_and_release(token, kexception_fds, exception_fds);
+    ret
 }
 
 /// umask() sets the calling process's file mode creation mask (umask) to

@@ -180,7 +180,7 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
 }
 
 // This may be unsafe since the size of bits is undefined.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 /// Bitmap used by `pselect()` and `select` to indicate the event to wait for.
 pub struct FdSet {
@@ -287,17 +287,18 @@ impl Bytes<FdSet> for FdSet {
 ///    If timeout is NULL (no timeout), select() can block indefinitely.
 pub fn pselect(
     nfds: usize,
-    mut read_fds: Option<&mut FdSet>,
-    mut write_fds: Option<&mut FdSet>,
-    exception_fds: Option<&mut FdSet>,
-    mut timeout: Option<&mut TimeSpec>,
+    read_fds: &mut Option<&mut FdSet>,
+    write_fds: &mut Option<&mut FdSet>,
+    exception_fds: &mut Option<&mut FdSet>,
+    timeout: &Option<&mut TimeSpec>,
     sigmask: *const Signals,
 ) -> isize {
 
-    timeout = timeout.map(|time| {
-        *time = *time + crate::timer::TimeSpec::now();
-        time
-    });
+    let timeout: Option<TimeSpec> = if let Some(ref timeout) = timeout {
+        Some(**timeout + crate::timer::TimeSpec::now())
+    } else {
+        None
+    };
 
     let oldsig = &mut Signals::empty();
     if !sigmask.is_null() {
@@ -340,8 +341,8 @@ pub fn pselect(
 
         if done == 0 {
             // checktime out
-            if let Some(timeout) = &timeout {
-                if crate::timer::TimeSpec::now() >= **timeout {
+            if let Some(timeout) = timeout {
+                if crate::timer::TimeSpec::now() >= timeout {
                     break;
                 }
             }
@@ -378,7 +379,7 @@ pub fn pselect(
         }
         // count exception
         if let Some(exception_fds) = exception_fds {
-            *exception_fds = FdSet::empty();
+            **exception_fds = FdSet::empty();
         }
         break;
     }
