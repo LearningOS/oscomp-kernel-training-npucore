@@ -23,7 +23,7 @@ use self::{fs::{inode::OSInode, cache_mgr::PageCache}, file_trait::{File}, direc
 lazy_static!{
     pub static ref ROOT_FD: Arc<FileDescriptor> = Arc::new(FileDescriptor::new(
         false,
-        self::directory_tree::ROOT.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true, false).unwrap()
+        self::directory_tree::ROOT.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true).unwrap()
     ));
 }
 #[derive(Clone)]
@@ -57,7 +57,7 @@ impl FileDescriptor {
         &self,
         path: &str
     ) -> Result<Arc<Self>, isize> {
-        match self.open(path, OpenFlags::O_DIRECTORY | OpenFlags::O_RDONLY, true, false) {
+        match self.open(path, OpenFlags::O_DIRECTORY | OpenFlags::O_RDONLY, true) {
             Ok(fd) => Ok(Arc::new(fd)),
             Err(errno) => Err(errno),
         }
@@ -94,7 +94,6 @@ impl FileDescriptor {
         path: &str,
         flags: OpenFlags,
         special_use: bool,
-        ignore_file_type: bool,
     ) -> Result<Self, isize> {
         if self.file.is_file() && !path.starts_with('/') {
             return Err(ENOTDIR);
@@ -104,7 +103,7 @@ impl FileDescriptor {
             Some(inode) => inode,
             None => return Err(ENOENT),
         };
-        let file = match inode.open(path, flags, special_use, ignore_file_type) {
+        let file = match inode.open(path, flags, special_use) {
             Ok(file) => file,
             Err(errno) => return Err(errno),
         };
