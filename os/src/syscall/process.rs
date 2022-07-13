@@ -1,5 +1,5 @@
 use crate::config::{CLOCK_FREQ, PAGE_SIZE, USER_STACK_SIZE, MMAP_BASE};
-use crate::fs::OpenFlags;
+use crate::fs::{OpenFlags, FdTable};
 use crate::mm::{
     copy_from_user, copy_to_user, copy_to_user_string, translated_byte_buffer, translated_ref,
     translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer, VirtAddr,
@@ -687,8 +687,8 @@ pub fn sys_prlimit(
                     copy_to_user(
                         token,
                         &(RLimit {
-                            rlim_cur: 64,
-                            rlim_max: 128,
+                            rlim_cur: task.files.lock().get_limit(),
+                            rlim_max: FdTable::SYSTEM_FD_LIMIT,
                         }),
                         old_limit,
                     );
@@ -703,10 +703,9 @@ pub fn sys_prlimit(
                 rlim_max: 0,
             };
             copy_from_user(token, new_limit, rlimit);
-            warn!("[sys_prlimit] new_limit is not implemented yet, but it's not null! new_limit: {:?}", rlimit);
             match resource {
                 Resource::NOFILE => {
-                    // Not implemented yet, for the sake of test we don't panic.
+                    task.files.lock().set_limit(rlimit.rlim_cur);
                 }
                 Resource::ILLEAGAL => return EINVAL,
                 _ => todo!(),

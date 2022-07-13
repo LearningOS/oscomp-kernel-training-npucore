@@ -244,6 +244,9 @@ impl FdTable {
         self.limit
     }
     pub fn set_limit(&mut self, limit: usize) {
+        if limit < self.limit {
+            log::warn!("[FdTable::set_limit] new limit: {} is smaller than old limit: {}", limit, self.limit);
+        }
         self.limit = limit;
     }
     #[inline(always)]
