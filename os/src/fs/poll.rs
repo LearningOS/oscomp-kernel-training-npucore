@@ -1,6 +1,7 @@
 use crate::{
+    syscall::errno::EINVAL,
     task::{current_user_token, signal::Signals},
-    timer::TimeSpec, syscall::errno::EINVAL,
+    timer::TimeSpec,
 };
 use alloc::vec::Vec;
 use core::ptr::{null, null_mut};
@@ -154,8 +155,8 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
                         trigger = 1;
                     }
                     done += trigger;
-                },
-                None => {},
+                }
+                None => {}
             }
         }
         if done > 0 {
@@ -166,15 +167,14 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Si
         suspend_current_and_run_next();
     }
 
-    copy_to_user_array(
-        token, 
-        &poll_fd[0], 
-        poll_fd_p as *mut PollFd,
-        nfds
-    );
+    copy_to_user_array(token, &poll_fd[0], poll_fd_p as *mut PollFd, nfds);
 
     if !sigmask.is_null() {
-        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
+        sigprocmask(
+            SigMaskHow::SIG_SETMASK.bits(),
+            oldsig,
+            null_mut::<Signals>(),
+        );
     }
     done
 }
@@ -239,22 +239,12 @@ impl FdSet {
 impl Bytes<FdSet> for FdSet {
     fn as_bytes(&self) -> &[u8] {
         let size = core::mem::size_of::<FdSet>();
-        unsafe {
-            core::slice::from_raw_parts(
-                self as *const _ as *const u8,
-                size,
-            )
-        }
+        unsafe { core::slice::from_raw_parts(self as *const _ as *const u8, size) }
     }
 
     fn as_bytes_mut(&mut self) -> &mut [u8] {
         let size = core::mem::size_of::<FdSet>();
-        unsafe {
-            core::slice::from_raw_parts_mut(
-                self as *mut _ as *mut u8, 
-                size
-            )
-        }
+        unsafe { core::slice::from_raw_parts_mut(self as *mut _ as *mut u8, size) }
     }
 }
 /// Poll each of the file discriptors
@@ -293,7 +283,6 @@ pub fn pselect(
     timeout: &Option<&mut TimeSpec>,
     sigmask: *const Signals,
 ) -> isize {
-
     let timeout: Option<TimeSpec> = if let Some(ref timeout) = timeout {
         Some(**timeout + crate::timer::TimeSpec::now())
     } else {
@@ -309,7 +298,7 @@ pub fn pselect(
     loop {
         let task = current_task().unwrap();
         let fd_table = task.files.lock();
-        
+
         // check read
         if let Some(ref read_fds) = read_fds {
             for i in 0..nfds {
@@ -339,52 +328,57 @@ pub fn pselect(
         // check exception
         // do nothing
 
-        if done == 0 {
-            // checktime out
-            if let Some(timeout) = timeout {
-                if crate::timer::TimeSpec::now() >= timeout {
-                    break;
-                }
-            }
-            drop(fd_table);
-            drop(task);
-            suspend_current_and_run_next();
-            continue;
+        if done != 0 {
+            break;
         }
-        // count read
-        if let Some(read_fds) = read_fds.as_mut() {
-            for i in 0..nfds {
-                if !read_fds.is_set(i) {
-                    continue;
-                }
-                if let Some(fd) = &fd_table[i] {
-                    if !fd.r_ready() {
-                        read_fds.clr(i);
-                    }
-                }
+        if let Some(timeout) = timeout {
+            if crate::timer::TimeSpec::now() >= timeout {
+                break;
             }
         }
-        // count write
-        if let Some(write_fds) = write_fds.as_mut() {
-            for i in 0..nfds {
-                if !write_fds.is_set(i) {
-                    continue;
-                }
-                if let Some(fd) = &fd_table[i] {
-                    if !fd.w_ready() {
-                        write_fds.clr(i);
-                    }
+
+        drop(fd_table);
+        drop(task);
+        suspend_current_and_run_next();
+    }
+    let task = current_task().unwrap();
+    let fd_table = task.files.lock();
+    // count read
+    if let Some(read_fds) = read_fds.as_mut() {
+        for i in 0..nfds {
+            if !read_fds.is_set(i) {
+                continue;
+            }
+            if let Some(fd) = &fd_table[i] {
+                if !fd.r_ready() {
+                    read_fds.clr(i);
                 }
             }
         }
-        // count exception
-        if let Some(exception_fds) = exception_fds {
-            **exception_fds = FdSet::empty();
+    }
+    // count write
+    if let Some(write_fds) = write_fds.as_mut() {
+        for i in 0..nfds {
+            if !write_fds.is_set(i) {
+                continue;
+            }
+            if let Some(fd) = &fd_table[i] {
+                if !fd.w_ready() {
+                    write_fds.clr(i);
+                }
+            }
         }
-        break;
+    }
+    // count exception
+    if let Some(exception_fds) = exception_fds {
+        **exception_fds = FdSet::empty();
     }
     if !sigmask.is_null() {
-        sigprocmask(SigMaskHow::SIG_SETMASK.bits(), oldsig, null_mut::<Signals>());
+        sigprocmask(
+            SigMaskHow::SIG_SETMASK.bits(),
+            oldsig,
+            null_mut::<Signals>(),
+        );
     }
     done as isize
 }

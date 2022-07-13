@@ -990,13 +990,12 @@ pub fn sys_pselect(
             None
         }
     }
-    pub fn write_back_and_release<T: Copy + core::fmt::Debug>(
+    pub fn write_back_and_release<T: Copy>(
         token: usize,
         kernel_ref: Option<&'static mut T>,
         user_ptr: *mut T,
     ) {
         if let Some(kernel_ref) = kernel_ref {
-            error!("fds: {:?}", kernel_ref);
             copy_to_user(token, kernel_ref, user_ptr);
             let layout = Layout::new::<T>();
             unsafe { dealloc((kernel_ref as *mut T).cast::<u8>(), layout) };
@@ -1018,11 +1017,17 @@ pub fn sys_pselect(
         &ktimeout,
         sigmask,
     );
-    error!("read:");
+    if let Some(kread_fds) = &kread_fds {
+        trace!("[pselect] read_fds: {:?}", kread_fds);
+    }
     write_back_and_release(token, kread_fds, read_fds);
-    error!("write:");
+    if let Some(kwrite_fds) = &kwrite_fds {
+        trace!("[pselect] write_fds: {:?}", kwrite_fds);
+    }
     write_back_and_release(token, kwrite_fds, write_fds);
-    error!("exception:");
+    if let Some(kexception_fds) = &kexception_fds {
+        trace!("[pselect] exception_fds: {:?}", kexception_fds);
+    }
     write_back_and_release(token, kexception_fds, exception_fds);
     ret
 }
