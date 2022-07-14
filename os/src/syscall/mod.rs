@@ -159,6 +159,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_EXECVE => "execve",
         SYSCALL_MMAP => "mmap",
         SYSCALL_MPROTECT => "mprotect",
+        SYSCALL_MSYNC => "msync",
         SYSCALL_WAIT4 => "wait4",
         SYSCALL_PRLIMIT => "prlimit",
         SYSCALL_RENAMEAT2 => "renameat2",
@@ -255,7 +256,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_EXIT => sys_exit(args[0] as u32),
         SYSCALL_EXIT_GRUOP => sys_exit(args[0] as u32),
-        SYSCALL_CLOCK_GETTIME => sys_clock_get_time(args[0], args[1] as *mut u64),
+        SYSCALL_CLOCK_GETTIME => sys_clock_gettime(args[0], args[1] as *mut TimeSpec),
         SYSCALL_KILL => sys_kill(args[0], args[1]),
         SYSCALL_TKILL => sys_tkill(args[0], args[1]),
         SYSCALL_SYSLOG => sys_syslog(args[0] as u32, args[1] as *mut u8, args[2] as u32),
@@ -277,7 +278,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_GET_TIME => sys_get_time(),
         SYSCALL_GETRUSAGE => sys_getrusage(args[0] as isize, args[1] as *mut Rusage),
         SYSCALL_UMASK => sys_umask(args[0] as u32),
-        SYSCALL_GET_TIME_OF_DAY => sys_get_time_of_day(
+        SYSCALL_GET_TIME_OF_DAY => sys_gettimeofday(
             args[0] as *mut crate::timer::TimeVal,
             args[1] as *mut crate::timer::TimeZone,
         ),

@@ -78,7 +78,7 @@ pub fn sys_syslog(type_: u32, buf: *mut u8, len: u32) -> isize {
 
 pub fn sys_yield() -> isize {
     suspend_current_and_run_next();
-    0
+    SUCCESS
 }
 
 pub fn sys_kill(pid: usize, sig: usize) -> isize {
@@ -204,11 +204,12 @@ pub fn sys_setitimer(
     }
 }
 
-pub fn sys_get_time_of_day(time_val: *mut TimeVal, time_zone: *mut TimeZone) -> isize {
+pub fn sys_gettimeofday(tv: *mut TimeVal, tz: *mut TimeZone) -> isize {
     // Timezone is currently NOT supported.
-    let ans = &TimeVal::now();
-    if time_val as usize != 0 {
-        copy_to_user(current_user_token(), ans, time_val);
+    if !tv.is_null() {
+        let token = current_user_token();
+        let timeval = &TimeVal::now();
+        copy_to_user(token, timeval, tv);
     }
     SUCCESS
 }
@@ -242,16 +243,14 @@ pub fn sys_uname(buf: *mut u8) -> isize {
 }
 
 pub fn sys_getpid() -> isize {
-    let pid = current_task().unwrap().pid.0;
-    //info!("[sys_getpid] pid:{}", pid);
+    let pid = current_task().unwrap().tgid;
     pid as isize
 }
 
 pub fn sys_getppid() -> isize {
     let task = current_task().unwrap();
     let inner = task.acquire_inner_lock();
-    let ppid = inner.parent.as_ref().unwrap().upgrade().unwrap().pid.0;
-    //info!("[sys_getppid] ppid:{}", ppid);
+    let ppid = inner.parent.as_ref().unwrap().upgrade().unwrap().tgid;
     ppid as isize
 }
 
@@ -279,7 +278,7 @@ pub fn sys_setpgid(pid: usize, pgid: usize) -> isize {
     let task = crate::task::find_task_by_tgid(pid);
     match task {
         Some(task) => task.setpgid(pgid),
-        None => -1,
+        None => ESRCH,
     }
 }
 
@@ -288,7 +287,7 @@ pub fn sys_getpgid(pid: usize) -> isize {
     let task = crate::task::find_task_by_tgid(pid);
     match task {
         Some(task) => task.getpgid() as isize,
-        None => -1,
+        None => ESRCH,
     }
 }
 
@@ -846,23 +845,17 @@ pub fn sys_mprotect(addr: usize, len: usize, prot: usize) -> isize {
     }
 }
 
-pub fn sys_clock_get_time(clk_id: usize, tp: *mut u64) -> isize {
-    if tp as usize == 0 {
-        // point is null
-        return 0;
+pub fn sys_clock_gettime(clk_id: usize, tp: *mut TimeSpec) -> isize {
+    if !tp.is_null() {
+        let token = current_user_token();
+        let timespec = &TimeSpec::now();
+        copy_to_user(token, timespec, tp);
+        info!(
+            "[sys_clock_gettime] clk_id: {}, tp: {:?}",
+            clk_id, timespec
+        );
     }
-
-    let token = current_user_token();
-    let ticks = get_time();
-    let sec = (ticks / CLOCK_FREQ) as u64;
-    let nsec = ((ticks % CLOCK_FREQ) * NSEC_PER_SEC / CLOCK_FREQ) as u64;
-    *translated_refmut(token, tp) = sec;
-    *translated_refmut(token, unsafe { tp.add(1) }) = nsec;
-    info!(
-        "sys_get_time(clk_id: {}, tp: (sec: {}, nsec: {}) = {}",
-        clk_id, sec, nsec, 0
-    );
-    0
+    SUCCESS
 }
 
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
