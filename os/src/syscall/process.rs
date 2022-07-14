@@ -432,25 +432,14 @@ pub fn sys_clone(
     // Sure to succeed, because all bits are valid (See `CloneFlags`)
     let flags = CloneFlags::from_bits(flags & !0xff).unwrap();
     info!(
-        "[sys_clone] flags: {:?}, exit_signal: {:?}, ptid: {:?}, tls: {:?}, ctid: {:?}",
-        flags, exit_signal, ptid, tls, ctid
+        "[sys_clone] flags: {:?}, stack: {:?}, exit_signal: {:?}, ptid: {:?}, tls: {:?}, ctid: {:?}",
+        flags, stack, exit_signal, ptid, tls, ctid
     );
     show_frame_consumption! {
         "clone";
-        let child = parent.sys_clone(flags);
+        let child = parent.sys_clone(flags, stack, tls);
     }
     let new_pid = child.pid.0;
-    // modify trap context of new_task, because it returns immediately after switching
-    let trap_cx = child.acquire_inner_lock().get_trap_cx();
-    // we do not have to move to next instruction since we have done it before
-    // we also do not need to prepare parameters on stack, musl has done it for us
-    if !stack.is_null() {
-        trap_cx.x[2] = stack as usize;
-    }
-    // set tp
-    if flags.contains(CloneFlags::CLONE_SETTLS) {
-        trap_cx.x[4] = tls;
-    }
     if flags.contains(CloneFlags::CLONE_PARENT_SETTID) {
         *translated_refmut(parent.get_user_token(), ptid) = child.pid.0 as u32;
     }
@@ -462,8 +451,6 @@ pub fn sys_clone(
         child.acquire_inner_lock().address.clear_child_tid = ctid as usize;
         *translated_refmut(child.get_user_token(), ctid) = 0u32;
     }
-    // for child process, fork returns 0
-    trap_cx.x[10] = 0;
     // add new task to scheduler
     add_task(child);
     new_pid as isize

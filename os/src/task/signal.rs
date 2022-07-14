@@ -278,7 +278,7 @@ pub fn do_signal() {
             {
                 let trap_cx = inner.get_trap_cx();
                 let sp = unsafe { (trap_cx.x[2] as *mut TrapContext).sub(1) };
-                if (sp as usize) < task.ustack_bottom_va() - USER_STACK_SIZE {
+                if (sp as usize) < task.ustack_base - USER_STACK_SIZE {
                     error!("[do_signal] User stack will overflow after push trap context! Send SIGSEGV.");
                     drop(inner);
                     drop(sighand);
