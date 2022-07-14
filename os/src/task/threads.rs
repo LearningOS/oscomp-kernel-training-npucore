@@ -4,11 +4,12 @@ use crate::{
     timer::{get_time, get_time_ns, TimeRange, TimeSpec},
 };
 use alloc::collections::BTreeMap;
-use core::convert::TryFrom;
 use lazy_static::lazy_static;
 use log::*;
 use num_enum::TryFromPrimitive;
 use spin::Mutex;
+
+#[allow(unused)]
 #[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
 #[repr(u32)]
 pub enum FutexCmd {
@@ -26,7 +27,7 @@ pub enum FutexCmd {
     /// is considered a waiter on this futex word.   If  the
     /// futex  value does not match val, then the call fails
     /// immediately with the error EAGAIN.
-    FUTEX_WAIT = 0,
+    Wait = 0,
     /// This operation wakes at most val of the waiters that
     /// are waiting (e.g., inside FUTEX_WAIT) on  the  futex
     /// word  at  the  address uaddr.  Most commonly, val is
@@ -36,15 +37,15 @@ pub enum FutexCmd {
     /// with  a higher scheduling priority is not guaranteed
     /// to be awoken in preference to a waiter with a  lower
     /// priority).
-    FUTEX_WAKE = 1,
-    FUTEX_FD = 2,
-    FUTEX_REQUEUE = 3,
-    FUTEX_CMP_REQUEUE = 4,
-    FUTEX_WAKE_OP = 5,
-    FUTEX_LOCK_PI = 6,
-    FUTEX_UNLOCK_PI = 7,
-    FUTEX_TRYLOCK_PI = 8,
-    FUTEX_WAIT_BITSET = 9,
+    Wake = 1,
+    Fd = 2,
+    Requeue = 3,
+    CmpRequeue = 4,
+    WakeOp = 5,
+    LockPi = 6,
+    UnlockPi = 7,
+    TrylockPi = 8,
+    WaitBitset = 9,
 }
 
 pub const FUTEX_PRIVATE: u32 = 128;
@@ -68,7 +69,7 @@ pub fn futex(
     let futex_word_addr = futex_word as *const u32 as usize;
     match cmd {
         // Returns  0  if the caller was woken up.
-        FutexCmd::FUTEX_WAIT => {
+        FutexCmd::Wait => {
             // old rev.
             loop {
                 if *futex_word != val {
@@ -96,7 +97,7 @@ pub fn futex(
         }
         // Returns the number of waiters that were woken up.
         // 我这算法挺智障的...我还是找机会换WaitQueue吧
-        FutexCmd::FUTEX_WAKE => {
+        FutexCmd::Wake => {
             let result = 0;
             loop {
                 let mut lock = FUTEX_WAIT_NO.lock();
@@ -119,13 +120,13 @@ pub fn futex(
                 }
             }
         }
-        FutexCmd::FUTEX_FD => todo!(),
-        FutexCmd::FUTEX_REQUEUE => todo!(),
-        FutexCmd::FUTEX_CMP_REQUEUE => todo!(),
-        FutexCmd::FUTEX_WAKE_OP => todo!(),
-        FutexCmd::FUTEX_LOCK_PI => todo!(),
-        FutexCmd::FUTEX_UNLOCK_PI => todo!(),
-        FutexCmd::FUTEX_TRYLOCK_PI => todo!(),
-        FutexCmd::FUTEX_WAIT_BITSET => todo!(),
+        FutexCmd::Fd => todo!(),
+        FutexCmd::Requeue => todo!(),
+        FutexCmd::CmpRequeue => todo!(),
+        FutexCmd::WakeOp => todo!(),
+        FutexCmd::LockPi => todo!(),
+        FutexCmd::UnlockPi => todo!(),
+        FutexCmd::TrylockPi => todo!(),
+        FutexCmd::WaitBitset => todo!(),
     }
 }

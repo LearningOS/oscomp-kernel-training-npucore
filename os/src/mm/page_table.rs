@@ -465,7 +465,7 @@ pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut 
     let size = core::mem::size_of::<T>();
     // if all data of `*src` is in the same page, read directly
     if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size - 1) {
-        unsafe { *dst = *translated_ref(token, src) };
+        unsafe { _core::ptr::copy_nonoverlapping(translated_ref(token, src), dst, 1) };
     // or we should use UserBuffer to read across user space pages
     } else {
         UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
@@ -489,9 +489,8 @@ pub fn copy_from_user_array<T: 'static + Copy>(
             .translate_va(VirtAddr::from(src as usize))
             .unwrap();
         unsafe {
-            core::slice::from_raw_parts_mut(dst as *mut T, len)
-                .copy_from_slice(core::slice::from_raw_parts(src_pa.0 as *const T, len))
-        };
+            _core::ptr::copy_nonoverlapping(src_pa.0 as *const T, dst, len);
+        }
     // or we should use UserBuffer to read across user space pages
     } else {
         UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
@@ -506,7 +505,7 @@ pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T)
     // A nice predicate. Well done!
     // Re: Thanks!
     if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size - 1) {
-        unsafe { *translated_refmut(token, dst) = *src };
+        unsafe { _core::ptr::copy_nonoverlapping(src, translated_refmut(token, dst), 1) };
     // use UserBuffer to write across user space pages
     } else {
         UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
@@ -519,9 +518,8 @@ pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T)
 #[inline(always)]
 pub fn get_from_user<T: 'static + Copy>(token: usize, src: *const T) -> T {
     unsafe {
-        let mut dst: T = uninitialized();
-        let dst_ptr: *mut T = &mut dst;
-        copy_from_user(token, src, dst_ptr);
+        let mut dst: T = MaybeUninit::uninit().assume_init();
+        copy_from_user(token, src, &mut dst);
         return dst;
     }
 }
@@ -537,8 +535,7 @@ pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *
             .translate_va(VirtAddr::from(dst as usize))
             .unwrap();
         unsafe {
-            core::slice::from_raw_parts_mut(dst_pa.0 as *mut T, len)
-                .copy_from_slice(core::slice::from_raw_parts(src as *const T, len))
+            _core::ptr::copy_nonoverlapping(src, dst_pa.0 as *mut T, len);
         };
     // or we should use UserBuffer to write across user space pages
     } else {
@@ -553,28 +550,23 @@ pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *
 /// Caller should ensure `src` is not too large, or this function will write out of bound.
 pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
     let size = src.len();
-    // if all data of `*dst` is in the same page, write directly
-    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
-        let page_table = PageTable::from_token(token);
-        let dst_pa = page_table
+    let page_table = PageTable::from_token(token);
+    let dst_pa = page_table
             .translate_va(VirtAddr::from(dst as usize))
             .unwrap();
+    let dst_ptr = dst_pa.0 as *mut u8;
+    // if all data of `*dst` is in the same page, write directly
+    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
         unsafe {
-            let dst_ptr = dst_pa.0 as *mut u8;
-            core::slice::from_raw_parts_mut(dst_ptr, size)
-                .copy_from_slice(core::slice::from_raw_parts(src.as_ptr(), size));
-            *dst_ptr.add(size) = b'\0';
+            _core::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, size);
+            dst_ptr.add(size).write(b'\0');
         }
     // or we should use UserBuffer to write across user space pages
     } else {
         UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
             .write(unsafe { core::slice::from_raw_parts(src.as_ptr(), size) });
-        let page_table = PageTable::from_token(token);
-        let dst_pa = page_table
-            .translate_va(VirtAddr::from(dst as usize + size))
-            .unwrap();
         unsafe {
-            *(dst_pa.0 as *mut u8) = b'\0';
+            dst_ptr.add(size).write(b'\0');
         }
     }
 }

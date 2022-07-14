@@ -7,11 +7,10 @@ use crate::fs::{
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
     translated_byte_buffer_append_to_existing_vec, translated_refmut, translated_str,
-    MapPermission, UserBuffer,
+    MapPermission, UserBuffer, get_from_user,
 };
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
-use alloc::alloc::{alloc, dealloc, Layout};
 use alloc::vec::Vec;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
@@ -976,38 +975,24 @@ pub fn sys_pselect(
     timeout: *mut TimeSpec,
     sigmask: *const crate::task::signal::Signals,
 ) -> isize {
-    pub fn copy_from_user_refmut<T: Copy>(
+    pub fn get_from_user_checked<T: 'static +  Copy>(
         token: usize,
-        user_ptr: *mut T,
-    ) -> Option<&'static mut T> {
-        if !user_ptr.is_null() {
-            let layout = Layout::new::<T>();
-            let kernel_ptr = unsafe { alloc(layout).cast::<T>() };
-            copy_from_user(token, user_ptr, kernel_ptr);
-            unsafe { kernel_ptr.as_mut() }
+        src: *const T,
+    ) -> Option<T> {
+        if !src.is_null() {
+            Some(get_from_user(token, src))
         } else {
             None
         }
     }
-    pub fn write_back_and_release<T: Copy>(
-        token: usize,
-        kernel_ref: Option<&'static mut T>,
-        user_ptr: *mut T,
-    ) {
-        if let Some(kernel_ref) = kernel_ref {
-            copy_to_user(token, kernel_ref, user_ptr);
-            let layout = Layout::new::<T>();
-            unsafe { dealloc((kernel_ref as *mut T).cast::<u8>(), layout) };
-        }
-    }
     if (nfds as isize) < 0 {
-        return -1;
+        return EINVAL;
     }
     let token = current_user_token();
-    let mut kread_fds = copy_from_user_refmut(token, read_fds);
-    let mut kwrite_fds = copy_from_user_refmut(token, write_fds);
-    let mut kexception_fds = copy_from_user_refmut(token, exception_fds);
-    let ktimeout = copy_from_user_refmut(token, timeout);
+    let mut kread_fds = get_from_user_checked(token, read_fds);
+    let mut kwrite_fds = get_from_user_checked(token, write_fds);
+    let mut kexception_fds = get_from_user_checked(token, exception_fds);
+    let ktimeout = get_from_user_checked(token, timeout);
     let ret = pselect(
         nfds,
         &mut kread_fds,
@@ -1018,16 +1003,16 @@ pub fn sys_pselect(
     );
     if let Some(kread_fds) = &kread_fds {
         trace!("[pselect] read_fds: {:?}", kread_fds);
+        copy_to_user(token, kread_fds, read_fds);
     }
-    write_back_and_release(token, kread_fds, read_fds);
     if let Some(kwrite_fds) = &kwrite_fds {
         trace!("[pselect] write_fds: {:?}", kwrite_fds);
+        copy_to_user(token, kwrite_fds, write_fds);
     }
-    write_back_and_release(token, kwrite_fds, write_fds);
     if let Some(kexception_fds) = &kexception_fds {
         trace!("[pselect] exception_fds: {:?}", kexception_fds);
+        copy_to_user(token, kexception_fds, exception_fds);
     }
-    write_back_and_release(token, kexception_fds, exception_fds);
     ret
 }
 
