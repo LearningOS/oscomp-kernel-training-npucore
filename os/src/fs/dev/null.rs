@@ -117,4 +117,8 @@ impl File for Null {
         todo!()
     }
 
+    fn fcntl(&self, cmd: u32, arg: u32) -> isize {
+        todo!()
+    }
+
 }

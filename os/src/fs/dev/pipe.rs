@@ -1,11 +1,15 @@
 
+use crate::config::PAGE_SIZE;
 use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::layout::{Stat};
+use crate::syscall::fs::Fcntl_Command;
 use crate::syscall::errno::*;
 use crate::{mm::UserBuffer, fs::file_trait::File};
 use crate::task::suspend_current_and_run_next;
 use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 use easy_fs::DiskInodeType;
+use num_enum::FromPrimitive;
 use spin::Mutex;
 
 pub struct Pipe {
@@ -31,10 +35,9 @@ impl Pipe {
     }
 }
 
-// const RING_BUFFER_SIZE: usize = 32;
-const RING_BUFFER_SIZE: usize = 3010;
+const RING_DEFAULT_BUFFER_SIZE: usize = 4096;
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 enum RingBufferStatus {
     FULL,
     EMPTY,
@@ -42,67 +45,48 @@ enum RingBufferStatus {
 }
 
 pub struct PipeRingBuffer {
-    arr: [u8; RING_BUFFER_SIZE],
+    arr: Vec<u8>,
     head: usize,
     tail: usize,
     status: RingBufferStatus,
     write_end: Option<Weak<Pipe>>,
     read_end: Option<Weak<Pipe>>,
-    count: usize,
 }
 
 impl PipeRingBuffer {
     pub fn new() -> Self {
+        let mut vec = Vec::<u8>::with_capacity(RING_DEFAULT_BUFFER_SIZE);
+        unsafe {
+            vec.set_len(RING_DEFAULT_BUFFER_SIZE);
+        }
         Self {
-            arr: [0; RING_BUFFER_SIZE],
+            arr: vec,
             head: 0,
             tail: 0,
             status: RingBufferStatus::EMPTY,
             write_end: None,
             read_end: None,
-            count: 0,
+        }
+    }
+    pub fn get_used_size(&self) -> usize {
+        if self.status == RingBufferStatus::FULL {
+            self.arr.len()
+        } else if self.status == RingBufferStatus::EMPTY {
+            0
+        } else {
+            assert!(self.head != self.tail);
+            if self.head < self.tail {
+                self.tail - self.head
+            } else {
+                self.tail + self.arr.len() - self.head
+            }
         }
     }
     pub fn set_write_end(&mut self, write_end: &Arc<Pipe>) {
         self.write_end = Some(Arc::downgrade(write_end));
     }
-    pub fn set_read_end(&mut self, write_end: &Arc<Pipe>) {
-        self.read_end = Some(Arc::downgrade(write_end));
-    }
-    pub fn write_byte(&mut self, byte: u8) {
-        self.status = RingBufferStatus::NORMAL;
-        self.arr[self.tail] = byte;
-        self.tail = (self.tail + 1) % RING_BUFFER_SIZE;
-        if self.tail == self.head {
-            self.status = RingBufferStatus::FULL;
-        }
-    }
-    pub fn read_byte(&mut self) -> u8 {
-        self.status = RingBufferStatus::NORMAL;
-        let c = self.arr[self.head];
-        self.head = (self.head + 1) % RING_BUFFER_SIZE;
-        if self.head == self.tail {
-            self.status = RingBufferStatus::EMPTY;
-        }
-        c
-    }
-    pub fn available_read(&self) -> usize {
-        if self.status == RingBufferStatus::EMPTY {
-            0
-        } else {
-            if self.tail > self.head {
-                self.tail - self.head
-            } else {
-                self.tail + RING_BUFFER_SIZE - self.head
-            }
-        }
-    }
-    pub fn available_write(&self) -> usize {
-        if self.status == RingBufferStatus::FULL {
-            0
-        } else {
-            RING_BUFFER_SIZE - self.available_read()
-        }
+    pub fn set_read_end(&mut self, read_end: &Arc<Pipe>) {
+        self.read_end = Some(Arc::downgrade(read_end));
     }
     pub fn all_write_ends_closed(&self) -> bool {
         self.write_end.as_ref().unwrap().upgrade().is_none()
@@ -142,67 +126,89 @@ impl File for Pipe {
     }
     fn r_ready(&self) -> bool {
         let ring_buffer = self.buffer.lock();
-        let loop_read = ring_buffer.available_read();
-        loop_read > 0
+        ring_buffer.status != RingBufferStatus::EMPTY
     }
 
     fn w_ready(&self) -> bool {
         let ring_buffer = self.buffer.lock();
-        let loop_write = ring_buffer.available_write();
-        loop_write > 0
+        ring_buffer.status != RingBufferStatus::FULL
     }
     fn read_user(&self, buf: UserBuffer) -> usize {
         assert_eq!(self.readable(), true);
-        let mut buf_iter = buf.into_iter();
         let mut read_size = 0usize;
-        let mut try_time = 0;
+        if buf.len() == 0 {
+            return read_size;
+        }
         loop {
-            let mut ring_buffer = self.buffer.lock();
-            let loop_read = ring_buffer.available_read();
-            if loop_read == 0 {
-                if ring_buffer.all_write_ends_closed() {
-                    return read_size; //return后就ring_buffer释放了，锁自然释放
+            let mut ring = self.buffer.lock();
+            if ring.status == RingBufferStatus::EMPTY {
+                if ring.all_write_ends_closed() {
+                    return read_size;
                 }
-                drop(ring_buffer);
+                drop(ring);
                 suspend_current_and_run_next();
                 continue;
             }
-            // read at most loop_read bytes
-            for i in 0..loop_read {
-                if let Some(byte_ref) = buf_iter.next() {
-                    unsafe {
-                        *byte_ref = ring_buffer.read_byte();
-                    }
-                    read_size += 1;
-                } else {
-                    ring_buffer.count += 1;
-                    return read_size;
+            for byte_ref in buf.into_iter() {
+                let index = ring.head;
+                unsafe {
+                    *byte_ref = ring.arr[index];
                 }
+                ring.head += 1;
+                if ring.head == ring.arr.len() {
+                    ring.head = 0;
+                }
+                read_size += 1;
+                if ring.head == ring.tail {
+                    break;
+                }
+            }
+            // We guarantee that this operation will read at least one byte
+            if ring.head == ring.tail {
+                ring.status = RingBufferStatus::EMPTY;
+            } else {
+                ring.status = RingBufferStatus::NORMAL;
             }
             return read_size;
         }
     }
     fn write_user(&self, buf: UserBuffer) -> usize {
         assert_eq!(self.writable(), true);
-        let mut buf_iter = buf.into_iter();
         let mut write_size = 0usize;
+        if buf.len() == 0 {
+            return write_size;
+        }
         loop {
-            let mut ring_buffer = self.buffer.lock();
-            let loop_write = ring_buffer.available_write();
-            if loop_write == 0 {
-                drop(ring_buffer);
-                continue;
-            }
-
-            for i in 0..loop_write {
-                if let Some(byte_ref) = buf_iter.next() {
-                    ring_buffer.write_byte(unsafe { *byte_ref });
-                    write_size += 1;
-                    ring_buffer.count += 1;
-                } else {
+            let mut ring = self.buffer.lock();
+            if ring.status == RingBufferStatus::FULL {
+                if ring.all_read_ends_closed() {
                     return write_size;
                 }
+                drop(ring);
+                suspend_current_and_run_next();
+                continue;
             }
+            for byte_ref in buf.into_iter() {
+                let index = ring.tail;
+                unsafe {
+                    ring.arr[index] = *byte_ref;
+                }
+                ring.tail += 1;
+                if ring.tail == ring.arr.len() {
+                    ring.tail = 0;
+                }
+                write_size += 1;
+                if ring.head == ring.tail {
+                    break;
+                }
+            }
+            // We guarantee that this operation will write at least one byte
+            if ring.head == ring.tail {
+                ring.status = RingBufferStatus::FULL;
+            } else {
+                ring.status = RingBufferStatus::NORMAL;
+            }
+            return write_size;
         }
     }
 
@@ -294,7 +300,46 @@ impl File for Pipe {
             self.buffer.lock().all_read_ends_closed()
         }
     }
-}
 
-impl Pipe {
+    fn fcntl(&self, cmd: u32, arg: u32) -> isize {
+        match Fcntl_Command::from_primitive(cmd) {
+            Fcntl_Command::GETPIPE_SZ => {
+                self.buffer.lock().arr.len() as isize
+            },
+            Fcntl_Command::SETPIPE_SZ => {
+                let new_size = (arg as usize).max(PAGE_SIZE);
+                let mut ring = self.buffer.lock();
+                let mut old_used_size = ring.get_used_size();
+                if new_size < old_used_size {
+                    return EBUSY;
+                }
+                let mut new_buffer = Vec::<u8>::with_capacity(new_size);
+                while old_used_size > 0 {
+                    let index = ring.head;
+                    new_buffer.push(ring.arr[index]);
+                    ring.head += 1;
+                    if ring.head == ring.arr.len() {
+                        ring.head = 0;
+                    }
+                    old_used_size -= 1;
+                }
+                ring.head = 0;
+                ring.tail = new_buffer.len();
+                if ring.tail == 0 {
+                    ring.status = RingBufferStatus::EMPTY;
+                } else if ring.tail != new_size {
+                    ring.status = RingBufferStatus::NORMAL;
+                } else {
+                    ring.status = RingBufferStatus::FULL;
+                }
+                unsafe {
+                    new_buffer.set_len(new_size);
+                }
+                ring.arr = new_buffer;
+                SUCCESS
+            },
+            _ => EINVAL,
+        }
+    }
+    
 }

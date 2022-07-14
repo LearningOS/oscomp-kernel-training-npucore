@@ -302,6 +302,10 @@ impl File for Teletype {
             _ => todo!(),
         }
     }
+
+    fn fcntl(&self, cmd: u32, arg: u32) -> isize {
+        todo!()
+    }
 }
 
 #[allow(non_camel_case_types)]
