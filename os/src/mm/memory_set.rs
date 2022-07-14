@@ -40,6 +40,15 @@ lazy_static! {
 pub fn kernel_token() -> usize {
     KERNEL_SPACE.lock().token()
 }
+
+#[derive(Debug)]
+pub enum MemoryError {
+    InvalidAddr,
+    AreaNotFound,
+    AlreadyMapped,
+    NotMapped,
+}
+
 /// The memory "space" as in user space or kernel space
 pub struct MemorySet {
     page_table: PageTable,
@@ -98,26 +107,19 @@ impl MemorySet {
         self.push_no_alloc(map_area)?;
         Ok(())
     }
-    /// # Warning
-    /// if the start_vpn does not match any area's start_vpn, then nothing is done and return `Ok(())`
-    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) -> Result<(), ()> {
+    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) -> Result<(), MemoryError> {
         if let Some((idx, area)) = self
             .areas
             .iter_mut()
             .enumerate()
             .find(|(_, area)| area.data_frames.vpn_range.get_start() == start_vpn)
         {
-            if let Err(_) = area.unmap(&mut self.page_table) {
-                warn!("[remove_area_with_start_vpn] Some pages are already unmapped in target area, is it caused by lazy alloc?");
-            }
+            let result = area.unmap(&mut self.page_table);
             self.areas.remove(idx);
+            result
         } else {
-            warn!(
-                "[remove_area_with_start_vpn] Target area not found! Request vpn: {:?}",
-                start_vpn
-            );
+            Err(MemoryError::AreaNotFound)
         }
-        Ok(())
     }
     /// Push a not-yet-mapped map_area into current MemorySet and copy the data into it if any, allocating the needed memory for the map.
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) -> Result<(), ()> {
@@ -225,13 +227,14 @@ impl MemorySet {
                         PAGE_SIZE,
                     ));
                     let old_offset = file.get_offset();
+                    // if offset of lseek exceed EOF, SIGBUS should be sent, but now we unwrap directly
                     file.lseek(
                         (target - VirtAddr::from(area.data_frames.vpn_range.get_start()).0)
                             as isize,
                         SeekWhence::SEEK_CUR,
-                    );
+                    ).unwrap();
                     file.read_user(page);
-                    file.lseek(old_offset as isize, SeekWhence::SEEK_SET);
+                    file.lseek(old_offset as isize, SeekWhence::SEEK_SET).unwrap();
                 }
                 // if mapped successfully,
                 // in other words, not previously mapped before last statement(let result = ...)
@@ -1007,11 +1010,16 @@ impl MemorySet {
 
     pub fn dealloc_user_res(&mut self, tid: usize) {
         // dealloc ustack manually
-        let ustack_bottom_va: VirtAddr = ustack_bottom_from_tid(tid).into();
-        self.remove_area_with_start_vpn(ustack_bottom_va.into());
+        let ustack_top_va: VirtAddr = (ustack_bottom_from_tid(tid) - USER_STACK_SIZE).into();
+        if let Err(err) = self.remove_area_with_start_vpn(ustack_top_va.into()) {
+            match err {
+                MemoryError::AreaNotFound => warn!("[dealloc_user_res] user stack is not allocated"),
+                _ => unreachable!(),
+            }
+        }
         // dealloc trap_cx manually
         let trap_cx_bottom_va: VirtAddr = trap_cx_bottom_from_tid(tid).into();
-        self.remove_area_with_start_vpn(trap_cx_bottom_va.into());
+        self.remove_area_with_start_vpn(trap_cx_bottom_va.into()).unwrap();
     }
 }
 
@@ -1206,7 +1214,7 @@ impl MapArea {
     /// the virtual page will be mapped directly to the physical page with an identical address to the page.
     /// # Note
     /// Vpn should be in this map area, but the check is not enforced in this function!
-    pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result<(), ()> {
+    pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result<(), MemoryError> {
         if !page_table.is_mapped(vpn) {
             //if not mapped
             let ppn: PhysPageNum;
@@ -1225,7 +1233,7 @@ impl MapArea {
             Ok(())
         } else {
             //mapped
-            Err(())
+            Err(MemoryError::AlreadyMapped)
         }
     }
     /// Unmap a page in current area.
@@ -1233,9 +1241,9 @@ impl MapArea {
     /// This is unnecessary if the area is directly mapped.
     /// # Note
     /// Vpn should be in this map area, but the check is not enforced in this function!
-    pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result<(), ()> {
+    pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result<(), MemoryError> {
         if !page_table.is_mapped(vpn) {
-            return Err(());
+            return Err(MemoryError::NotMapped);
         }
         match self.map_type {
             MapType::Framed => {
@@ -1247,11 +1255,9 @@ impl MapArea {
         Ok(())
     }
     /// Map & allocate all virtual pages in current area to physical pages in the page table.
-    pub fn map(&mut self, page_table: &mut PageTable) -> Result<(), ()> {
+    pub fn map(&mut self, page_table: &mut PageTable) -> Result<(), MemoryError> {
         for vpn in self.data_frames.vpn_range {
-            if let Err(_) = self.map_one(page_table, vpn) {
-                return Err(());
-            }
+            self.map_one(page_table, vpn)?;
         }
         Ok(())
     }
@@ -1328,17 +1334,17 @@ impl MapArea {
         Ok(())
     }
     /// Unmap all pages in `self` from `page_table` using unmap_one()
-    pub fn unmap(&mut self, page_table: &mut PageTable) -> Result<(), ()> {
+    pub fn unmap(&mut self, page_table: &mut PageTable) -> Result<(), MemoryError> {
         let mut has_unmapped_page = false;
         for vpn in self.data_frames.vpn_range {
             // it's normal to get an `Error` because we are using lazy alloc strategy
             // we still need to unmap remaining pages of `self`, just throw this `Error` to caller
-            if let Err(_) = self.unmap_one(page_table, vpn) {
+            if let Err(MemoryError::NotMapped) = self.unmap_one(page_table, vpn) {
                 has_unmapped_page = true;
             }
         }
         if has_unmapped_page {
-            Err(())
+            Err(MemoryError::NotMapped)
         } else {
             Ok(())
         }
