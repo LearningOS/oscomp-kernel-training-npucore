@@ -784,7 +784,16 @@ pub fn sys_futex(
     let cmd =
         <threads::FutexCmd as core::convert::TryFrom<u32>>::try_from(real_cmd as u32).unwrap();
 
-    futex(futex_word, uwd2,val, val3, cmd, private_futex, rt_clk, timeout)
+    futex(
+        futex_word,
+        uwd2,
+        val,
+        val3,
+        cmd,
+        private_futex,
+        rt_clk,
+        timeout,
+    )
 }
 
 pub fn sys_mmap(

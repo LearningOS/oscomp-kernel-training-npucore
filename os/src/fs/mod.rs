@@ -1,31 +1,39 @@
 mod dev;
-mod fs;
-pub mod poll;
-pub mod file_trait;
-mod layout;
 pub mod directory_tree;
+pub mod file_trait;
 mod filesystem;
+mod fs;
+mod layout;
+pub mod poll;
 
-pub use {
-    self::dev::null::*,
-    self::dev::tty::*,
-    self::dev::zero::*,
-    self::dev::pipe::*,
+use core::{
+    ops::{Index, IndexMut},
+    slice::{Iter, IterMut},
 };
-use core::{ops::{Index, IndexMut}, slice::{Iter, IterMut}};
+pub use {self::dev::null::*, self::dev::pipe::*, self::dev::tty::*, self::dev::zero::*};
 
 pub use self::layout::*;
 
+use self::{directory_tree::DirectoryTreeNode, file_trait::File, fs::cache_mgr::PageCache};
+use crate::{
+    mm::UserBuffer,
+    syscall::{errno::*, fs::SeekWhence},
+};
+use alloc::{
+    boxed::Box,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 use lazy_static::*;
-use alloc::{sync::{Arc}, string::{String, ToString}, vec::Vec, boxed::Box};
 use spin::Mutex;
-use crate::{mm::UserBuffer, syscall::{errno::*, fs::SeekWhence}};
-use self::{fs::{cache_mgr::PageCache}, file_trait::{File}, directory_tree::DirectoryTreeNode};
 
-lazy_static!{
+lazy_static! {
     pub static ref ROOT_FD: Arc<FileDescriptor> = Arc::new(FileDescriptor::new(
         false,
-        self::directory_tree::ROOT.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true).unwrap()
+        self::directory_tree::ROOT
+            .open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true)
+            .unwrap()
     ));
 }
 
@@ -56,10 +64,7 @@ impl FileDescriptor {
         Some(inode.get_cwd())
     }
     /// Just used for cwd
-    pub fn cd(
-        &self,
-        path: &str
-    ) -> Result<Arc<Self>, isize> {
+    pub fn cd(&self, path: &str) -> Result<Arc<Self>, isize> {
         match self.open(path, OpenFlags::O_DIRECTORY | OpenFlags::O_RDONLY, true) {
             Ok(fd) => Ok(Arc::new(fd)),
             Err(errno) => Err(errno),
@@ -92,12 +97,7 @@ impl FileDescriptor {
     pub fn get_stat(&self) -> Box<Stat> {
         Box::new(self.file.get_stat())
     }
-    pub fn open(
-        &self,
-        path: &str,
-        flags: OpenFlags,
-        special_use: bool,
-    ) -> Result<Self, isize> {
+    pub fn open(&self, path: &str, flags: OpenFlags, special_use: bool) -> Result<Self, isize> {
         if self.file.is_file() && !path.starts_with('/') {
             return Err(ENOTDIR);
         }
@@ -113,10 +113,7 @@ impl FileDescriptor {
         let cloexec = flags.contains(OpenFlags::O_CLOEXEC);
         Ok(Self::new(cloexec, file))
     }
-    pub fn mkdir(
-        &self,
-        path: &str,
-    ) -> Result<(), isize> {
+    pub fn mkdir(&self, path: &str) -> Result<(), isize> {
         if self.file.is_file() && !path.starts_with('/') {
             return Err(ENOTDIR);
         }
@@ -127,11 +124,7 @@ impl FileDescriptor {
         };
         inode.mkdir(path)
     }
-    pub fn delete(
-        &self,
-        path: &str,
-        delete_directory: bool
-    ) -> Result<(), isize> {
+    pub fn delete(&self, path: &str, delete_directory: bool) -> Result<(), isize> {
         if self.file.is_file() && !path.starts_with('/') {
             return Err(ENOTDIR);
         }
@@ -167,7 +160,7 @@ impl FileDescriptor {
 
         let old_abs_path = [old_inode.get_cwd(), old_path.to_string()].join("/");
         let new_abs_path = [new_inode.get_cwd(), new_path.to_string()].join("/");
-        DirectoryTreeNode::rename(&old_abs_path,&new_abs_path)
+        DirectoryTreeNode::rename(&old_abs_path, &new_abs_path)
     }
     pub fn get_dirent(&self, count: usize) -> Result<Vec<Dirent>, isize> {
         if !self.file.is_dir() {
@@ -190,7 +183,12 @@ impl FileDescriptor {
     pub fn truncate_size(&self, new_size: usize) -> Result<(), isize> {
         self.file.truncate_size(new_size)
     }
-    pub fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) -> Result<(), isize> {
+    pub fn set_timestamp(
+        &self,
+        ctime: Option<usize>,
+        atime: Option<usize>,
+        mtime: Option<usize>,
+    ) -> Result<(), isize> {
         self.file.set_timestamp(ctime, atime, mtime);
         Ok(())
     }
@@ -211,9 +209,7 @@ pub struct FdTable {
     limit: usize,
 }
 
-impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> Index<I>
-    for FdTable
-{
+impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> Index<I> for FdTable {
     type Output = I::Output;
 
     #[inline(always)]
@@ -222,9 +218,7 @@ impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> Index<I>
     }
 }
 
-impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> IndexMut<I>
-    for FdTable
-{
+impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> IndexMut<I> for FdTable {
     #[inline(always)]
     fn index_mut(&mut self, index: I) -> &mut Self::Output {
         &mut self.inner[index]
@@ -246,7 +240,11 @@ impl FdTable {
     }
     pub fn set_limit(&mut self, limit: usize) {
         if limit < self.limit {
-            log::warn!("[FdTable::set_limit] new limit: {} is smaller than old limit: {}", limit, self.limit);
+            log::warn!(
+                "[FdTable::set_limit] new limit: {} is smaller than old limit: {}",
+                limit,
+                self.limit
+            );
         }
         self.limit = limit;
     }

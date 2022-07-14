@@ -1,9 +1,9 @@
+use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
+use crate::mm::{frame_alloc, FrameTracker};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use easy_fs::{BlockDevice, Cache, CacheManager};
 use spin::Mutex;
-use crate::config::{PAGE_SIZE_BITS, PAGE_SIZE};
-use crate::mm::{FrameTracker, frame_alloc};
 
 const PAGE_BUFFERS: usize = 8;
 const BUFFER_SIZE: usize = 512;
@@ -213,7 +213,7 @@ impl Cache for PageCache {
                 .unwrap()
         })
     }
-    
+
     fn sync(&self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {
         self.write_back(block_ids, &block_device);
     }
@@ -235,11 +235,7 @@ impl PageCache {
         self.tracker.clone()
     }
 
-    pub fn read_in(
-        &mut self, 
-        block_ids: Vec<usize>, 
-        block_device: &Arc<dyn BlockDevice>
-    ) {
+    pub fn read_in(&mut self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {
         if block_ids.is_empty() {
             return;
         }
@@ -252,12 +248,11 @@ impl PageCache {
             if con_length == 0 {
                 start_block_id = *block_id;
                 con_length = 1;
-            }
-            else if *block_id != start_block_id + con_length {
+            } else if *block_id != start_block_id + con_length {
                 let buf = unsafe {
                     core::slice::from_raw_parts_mut(
-                        self.page_ptr.as_mut_ptr().add(start_buf_id * BUFFER_SIZE), 
-                        con_length * BUFFER_SIZE
+                        self.page_ptr.as_mut_ptr().add(start_buf_id * BUFFER_SIZE),
+                        con_length * BUFFER_SIZE,
                     )
                 };
                 block_device.read_block(start_block_id, buf);
@@ -270,18 +265,14 @@ impl PageCache {
         }
         let buf = unsafe {
             core::slice::from_raw_parts_mut(
-                self.page_ptr.as_mut_ptr().add(start_buf_id * BUFFER_SIZE), 
-                con_length * BUFFER_SIZE
+                self.page_ptr.as_mut_ptr().add(start_buf_id * BUFFER_SIZE),
+                con_length * BUFFER_SIZE,
             )
         };
         block_device.read_block(start_block_id, buf);
     }
 
-    pub fn write_back(
-        &self, 
-        block_ids: Vec<usize>,
-        block_device: &Arc<dyn BlockDevice>
-    ) {
+    pub fn write_back(&self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {
         if block_ids.is_empty() {
             return;
         }
@@ -293,12 +284,11 @@ impl PageCache {
             if con_length == 0 {
                 start_block_id = *block_id;
                 con_length = 1;
-            }
-            else if *block_id != start_block_id + con_length {
+            } else if *block_id != start_block_id + con_length {
                 let buf = unsafe {
                     core::slice::from_raw_parts(
-                        self.page_ptr.as_ptr().add(start_buf_id * BUFFER_SIZE), 
-                        con_length * BUFFER_SIZE
+                        self.page_ptr.as_ptr().add(start_buf_id * BUFFER_SIZE),
+                        con_length * BUFFER_SIZE,
                     )
                 };
                 block_device.write_block(start_block_id, buf);
@@ -312,8 +302,8 @@ impl PageCache {
         }
         let buf = unsafe {
             core::slice::from_raw_parts(
-                self.page_ptr.as_ptr().add(start_buf_id * BUFFER_SIZE), 
-                con_length * BUFFER_SIZE
+                self.page_ptr.as_ptr().add(start_buf_id * BUFFER_SIZE),
+                con_length * BUFFER_SIZE,
             )
         };
         block_device.write_block(start_block_id, buf);
@@ -386,13 +376,10 @@ impl CacheManager for PageCacheManager {
         page_cache
     }
 
-    fn oom<FUNC>(
-        &self,
-        neighbor: FUNC,
-        block_device: &Arc<dyn BlockDevice>,
-    ) -> usize
+    fn oom<FUNC>(&self, neighbor: FUNC, block_device: &Arc<dyn BlockDevice>) -> usize
     where
-        FUNC: Fn(usize) -> Vec<usize> {
+        FUNC: Fn(usize) -> Vec<usize>,
+    {
         let lock = self.cache_pool.try_lock();
         if lock.is_none() {
             return 0;
@@ -411,8 +398,7 @@ impl CacheManager for PageCacheManager {
             let mut inner_lock = inner.lock();
             if Arc::strong_count(&inner_lock.tracker) > 1 {
                 new_allocated_cache.push(inner_cache_id);
-            }
-            else if inner_lock.priority > 0 {
+            } else if inner_lock.priority > 0 {
                 inner_lock.priority -= 1;
                 new_allocated_cache.push(inner_cache_id);
             } else {
@@ -427,26 +413,23 @@ impl CacheManager for PageCacheManager {
         dropped
     }
 
-    fn notify_new_size(
-        &self,
-        new_size: usize
-    ) {
+    fn notify_new_size(&self, new_size: usize) {
         let mut lock = self.cache_pool.lock();
         let new_pages = (new_size + PAGE_SIZE - 1) / PAGE_SIZE;
         while lock.len() > new_pages {
-            lock.pop().unwrap().map(|cache|{
+            lock.pop().unwrap().map(|cache| {
                 if Arc::strong_count(&cache) > 1 {
                     panic!("page cache was used by others");
                 }
             });
         }
         lock.shrink_to_fit();
-        
+
         let mut new_allocated_cache = Vec::<usize>::new();
         for inner_cache_id in &*self.allocated_cache.lock() {
             if *inner_cache_id < new_pages {
                 new_allocated_cache.push(*inner_cache_id);
-            } 
+            }
         }
         *self.allocated_cache.lock() = new_allocated_cache;
     }

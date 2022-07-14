@@ -1,7 +1,11 @@
 use alloc::sync::Arc;
 use easy_fs::DiskInodeType;
 
-use crate::{fs::{file_trait::{File}, layout::{Stat}, directory_tree::DirectoryTreeNode}, mm::UserBuffer, syscall::errno::{ESPIPE, ENOTDIR}};
+use crate::{
+    fs::{directory_tree::DirectoryTreeNode, file_trait::File, layout::Stat},
+    mm::UserBuffer,
+    syscall::errno::{ENOTDIR, ESPIPE},
+};
 
 /// Data Sink
 /// Data written to the `/dev/null` special files is discarded.
@@ -31,17 +35,7 @@ impl File for Null {
         true
     }
     fn get_stat(&self) -> Stat {
-        Stat::new(
-            5,
-            1,
-            0o100777,
-            1,
-            0x0000000400000040,
-            0,
-            0,
-            0,
-            0,
-        )
+        Stat::new(5, 1, 0o100777, 1, 0x0000000400000040, 0, 0, 0, 0)
     }
     fn read_user(&self, buf: UserBuffer) -> usize {
         0
@@ -53,8 +47,10 @@ impl File for Null {
         DiskInodeType::File
     }
 
-    fn info_dirtree_node(&self, dirnode_ptr: alloc::sync::Weak<crate::fs::directory_tree::DirectoryTreeNode>) {
-        
+    fn info_dirtree_node(
+        &self,
+        dirnode_ptr: alloc::sync::Weak<crate::fs::directory_tree::DirectoryTreeNode>,
+    ) {
     }
 
     fn get_dirtree_node(&self) -> Option<Arc<DirectoryTreeNode>> {
@@ -73,7 +69,10 @@ impl File for Null {
         todo!()
     }
 
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize> where Self: Sized {
+    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    where
+        Self: Sized,
+    {
         todo!()
     }
 
@@ -101,11 +100,16 @@ impl File for Null {
         todo!()
     }
 
-    fn get_single_cache(&self, offset: usize) -> Result<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    fn get_single_cache(
+        &self,
+        offset: usize,
+    ) -> Result<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
         todo!()
     }
 
-    fn get_all_caches(&self) -> Result<alloc::vec::Vec<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    fn get_all_caches(
+        &self,
+    ) -> Result<alloc::vec::Vec<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
         todo!()
     }
 
@@ -120,5 +124,4 @@ impl File for Null {
     fn fcntl(&self, cmd: u32, arg: u32) -> isize {
         todo!()
     }
-
 }

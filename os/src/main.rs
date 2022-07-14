@@ -2,6 +2,8 @@
 #![no_main]
 #![feature(panic_info_message)]
 #![feature(alloc_error_handler)]
+#![feature(btree_drain_filter)]
+#![feature(drain_filter)]
 
 extern crate alloc;
 

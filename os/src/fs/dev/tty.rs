@@ -1,6 +1,6 @@
 use crate::fs::directory_tree::DirectoryTreeNode;
-use crate::fs::layout::{Stat};
-use crate::fs::file_trait::{File};
+use crate::fs::file_trait::File;
+use crate::fs::layout::Stat;
 use crate::mm::{copy_from_user, copy_to_user};
 use crate::mm::{translated_ref, translated_refmut, UserBuffer};
 use crate::sbi::console_getchar;
@@ -81,7 +81,7 @@ impl File for Teletype {
     }
 
     fn read(&self, offset: Option<&mut usize>, buf: &mut [u8]) -> usize {
-        unimplemented!()   
+        unimplemented!()
     }
 
     fn write(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
@@ -185,25 +185,17 @@ impl File for Teletype {
     }
 
     fn get_stat(&self) -> Stat {
-        Stat::new(
-            5,
-            1,
-            0o100777,
-            1,
-            0x0000000400000040,
-            0,
-            0,
-            0,
-            0,
-        )
+        Stat::new(5, 1, 0o100777, 1, 0x0000000400000040, 0, 0, 0, 0)
     }
 
     fn get_file_type(&self) -> DiskInodeType {
         DiskInodeType::File
     }
 
-    fn info_dirtree_node(&self, dirnode_ptr: alloc::sync::Weak<crate::fs::directory_tree::DirectoryTreeNode>) {
-        
+    fn info_dirtree_node(
+        &self,
+        dirnode_ptr: alloc::sync::Weak<crate::fs::directory_tree::DirectoryTreeNode>,
+    ) {
     }
 
     fn get_dirtree_node(&self) -> Option<Arc<DirectoryTreeNode>> {
@@ -222,7 +214,10 @@ impl File for Teletype {
         todo!()
     }
 
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize> where Self: Sized {
+    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    where
+        Self: Sized,
+    {
         todo!()
     }
 
@@ -250,11 +245,16 @@ impl File for Teletype {
         todo!()
     }
 
-    fn get_single_cache(&self, offset: usize) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    fn get_single_cache(
+        &self,
+        offset: usize,
+    ) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
         todo!()
     }
 
-    fn get_all_caches(&self) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    fn get_all_caches(
+        &self,
+    ) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
         todo!()
     }
 

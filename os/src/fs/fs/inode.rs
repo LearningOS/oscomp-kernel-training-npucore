@@ -1,19 +1,19 @@
 use super::cache_mgr::*;
 use crate::fs::directory_tree::DirectoryTreeNode;
-use crate::fs::file_trait::{File};
-use crate::fs::layout::{Stat, StatMode, OpenFlags, Dirent};
-use crate::mm::{UserBuffer};
+use crate::fs::file_trait::File;
+use crate::fs::layout::{Dirent, OpenFlags, Stat, StatMode};
+use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
 use core::panic;
 
-use alloc::string::{ToString};
-use alloc::sync::{Weak, Arc};
+use alloc::string::ToString;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use easy_fs::layout::FATDiskInodeType;
 pub use easy_fs::DiskInodeType;
-use easy_fs::{Inode};
-use spin::{Mutex};
+use easy_fs::Inode;
+use spin::Mutex;
 
 pub type InodeImpl = Inode<PageCacheManager, BlockCacheManager>;
 
@@ -30,14 +30,14 @@ pub struct OSInode {
 
 impl OSInode {
     pub fn new(root_inode: Arc<InodeImpl>) -> Arc<dyn File> {
-        Arc::new(Self { 
-            readable: true, 
-            writable: true, 
+        Arc::new(Self {
+            readable: true,
+            writable: true,
             special_use: true,
-            append: false, 
-            inner: root_inode, 
-            offset: Mutex::new(0), 
-            dirnode_ptr: Arc::new(Mutex::new(Weak::new()))
+            append: false,
+            inner: root_inode,
+            offset: Mutex::new(0),
+            dirnode_ptr: Arc::new(Mutex::new(Weak::new())),
         })
     }
 }
@@ -48,7 +48,7 @@ impl Drop for OSInode {
             let inode = self.get_dirtree_node();
             match inode {
                 Some(inode) => inode.sub_special_use(),
-                None => {},
+                None => {}
             }
         }
     }
@@ -60,10 +60,10 @@ impl File for OSInode {
             let inode = self.get_dirtree_node();
             match inode {
                 Some(inode) => inode.add_special_use(),
-                None => {},
+                None => {}
             }
         }
-        Arc::new(Self{
+        Arc::new(Self {
             readable: self.readable,
             writable: self.writable,
             special_use: self.special_use,
@@ -90,18 +90,18 @@ impl File for OSInode {
         let mut file_cont_lock = self.inner.lock();
         match offset {
             Some(offset) => {
-                let len =
-                    self.inner
-                        .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
+                let len = self
+                    .inner
+                    .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len
             }
             None => {
                 let mut offset = self.offset.lock();
-                let len =
-                    self.inner
-                        .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
+                let len = self
+                    .inner
+                    .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len
@@ -119,11 +119,9 @@ impl File for OSInode {
         let mut file_cont_lock = self.inner.lock();
         match offset {
             Some(offset) => {
-                let len = self.inner.write_at_block_cache_lock(
-                    &mut file_cont_lock,
-                    *offset,
-                    buffer,
-                );
+                let len =
+                    self.inner
+                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len
@@ -133,11 +131,9 @@ impl File for OSInode {
                 if self.append {
                     *offset = file_cont_lock.get_file_size() as usize;
                 }
-                let len = self.inner.write_at_block_cache_lock(
-                    &mut file_cont_lock,
-                    *offset,
-                    buffer,
-                );
+                let len =
+                    self.inner
+                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
                 drop(file_cont_lock);
                 *offset += len;
                 len
@@ -186,8 +182,7 @@ impl File for OSInode {
         total_write_size
     }
     fn get_stat(&self) -> Stat {
-        let (size, atime, mtime, ctime, ino) =
-            self.inner.stat_lock(&mut self.inner.lock());
+        let (size, atime, mtime, ctime, ino) = self.inner.stat_lock(&mut self.inner.lock());
         let st_mod: u32 = {
             if self.inner.is_dir() {
                 (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
@@ -209,12 +204,12 @@ impl File for OSInode {
 
     fn get_dirtree_node(&self) -> Option<Arc<DirectoryTreeNode>> {
         self.dirnode_ptr.lock().upgrade()
-    }   
+    }
 
     fn open(&self, flags: OpenFlags, special_use: bool) -> Arc<dyn File> {
         Arc::new(Self {
-            readable: flags.contains(OpenFlags::O_RDONLY) || flags.contains(OpenFlags::O_RDWR), 
-            writable: flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR), 
+            readable: flags.contains(OpenFlags::O_RDONLY) || flags.contains(OpenFlags::O_RDWR),
+            writable: flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR),
             special_use,
             append: flags.contains(OpenFlags::O_APPEND),
             inner: self.inner.clone(),
@@ -224,7 +219,9 @@ impl File for OSInode {
     }
     fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
         let mut lock = self.inner.lock();
-        if let Ok(Some((_, short_ent, offset))) = self.inner.find_local_lock(&mut lock, name.to_string()) {
+        if let Ok(Some((_, short_ent, offset))) =
+            self.inner.find_local_lock(&mut lock, name.to_string())
+        {
             Ok(Arc::new(Self {
                 readable: true,
                 writable: true,
@@ -242,7 +239,7 @@ impl File for OSInode {
         let mut lock = self.inner.lock();
         let new_file = Inode::create_lock(&self.inner, &mut lock, name.to_string(), file_type);
         if let Ok(inner) = new_file {
-            Ok(Arc::new(Self{
+            Ok(Arc::new(Self {
                 readable: true,
                 writable: true,
                 special_use: false,
@@ -255,10 +252,17 @@ impl File for OSInode {
             panic!()
         }
     }
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize> where Self: Sized {
+    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    where
+        Self: Sized,
+    {
         let mut par_lock = self.inner.lock();
         let mut son_lock = son.inner.lock();
-        if son.inner.link_par_lock(&mut son_lock, &self.inner, &mut par_lock, name.to_string()).is_err() {
+        if son
+            .inner
+            .link_par_lock(&mut son_lock, &self.inner, &mut par_lock, name.to_string())
+            .is_err()
+        {
             panic!();
         }
         Ok(())
@@ -339,7 +343,8 @@ impl File for OSInode {
     fn truncate_size(&self, new_size: usize) -> Result<(), isize> {
         let mut lock = self.inner.lock();
         let old_size = lock.get_file_size();
-        self.inner.modify_size_lock(&mut lock, new_size as isize - old_size as isize);
+        self.inner
+            .modify_size_lock(&mut lock, new_size as isize - old_size as isize);
         Ok(())
     }
     fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) {
