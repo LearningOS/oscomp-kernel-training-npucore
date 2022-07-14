@@ -210,21 +210,3 @@ impl Drop for TimeOut {
         self.task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
     }
 }
-lazy_static! {
-    pub static ref TIMEOUT_TASK_LIST: Mutex<LinkedList<TimeOut>> = Mutex::new(LinkedList::new());
-}
-pub fn timeout_wake() -> usize {
-    log::debug!("[timeout_wake] Trying to wake any timed out proc.");
-    let mut lock = TIMEOUT_TASK_LIST.lock();
-    let woken = lock
-        .drain_filter(|time| time.is_wake_time())
-        .collect::<LinkedList<TimeOut>>();
-    log::debug!("[timeout_wake] wake num: {}", woken.len());
-    woken.len()
-}
-/// This function doesn't sleep
-pub fn add_to_timeout_wake_li(time: TimeRange, task: Arc<TaskControlBlock>) {
-    let mut lock = TIMEOUT_TASK_LIST.lock();
-    lock.push_back(TimeOut { time, task });
-    drop(lock)
-}

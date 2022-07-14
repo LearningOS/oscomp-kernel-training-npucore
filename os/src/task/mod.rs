@@ -15,8 +15,8 @@ pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
 use lazy_static::*;
 use manager::fetch_task;
 pub use manager::{
-    add_task, find_task_by_pid, find_task_by_tgid, procs_count, sleep_interruptible, timeout_wake,
-    wake_interruptible, TIMEOUT_TASK_LIST,
+    add_task, find_task_by_pid, find_task_by_tgid, procs_count, sleep_interruptible,
+    wake_interruptible,
 };
 pub use pid::{pid_alloc, trap_cx_bottom_from_tid, ustack_bottom_from_tid, KernelStack, PidHandle};
 pub use processor::{
@@ -108,7 +108,7 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     // this resource may not be recycled in a long period of time.
     if Arc::strong_count(&task.vm) == 1 {
         task.vm.lock().recycle_data_pages();
-    } 
+    }
     drop(inner);
     // **** release current PCB lock
     // drop task manually to maintain rc correctly

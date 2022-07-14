@@ -1,4 +1,3 @@
-mod active_event;
 mod context;
 use core::arch::{asm, global_asm};
 
@@ -10,7 +9,6 @@ use crate::task::{
     Signals,
 };
 use crate::timer::set_next_trigger;
-use active_event::global_waiter;
 use riscv::register::{
     mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
@@ -57,7 +55,6 @@ pub fn trap_handler() -> ! {
     }
     let scause = scause::read();
     let stval = stval::read();
-    global_waiter();
     match scause.cause() {
         Trap::Exception(Exception::UserEnvCall) => {
             // jump to next instruction anyway
