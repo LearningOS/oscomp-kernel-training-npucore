@@ -1,11 +1,10 @@
-
 use crate::config::PAGE_SIZE;
 use crate::fs::directory_tree::DirectoryTreeNode;
-use crate::fs::layout::{Stat};
-use crate::syscall::fs::Fcntl_Command;
+use crate::fs::layout::Stat;
 use crate::syscall::errno::*;
-use crate::{mm::UserBuffer, fs::file_trait::File};
+use crate::syscall::fs::Fcntl_Command;
 use crate::task::suspend_current_and_run_next;
+use crate::{fs::file_trait::File, mm::UserBuffer};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use easy_fs::DiskInodeType;
@@ -213,17 +212,7 @@ impl File for Pipe {
     }
 
     fn get_stat(&self) -> Stat {
-        Stat::new(
-            5,
-            1,
-            0o100777,
-            1,
-            0x0000000400000040,
-            0,
-            0,
-            0,
-            0,
-        )
+        Stat::new(5, 1, 0o100777, 1, 0x0000000400000040, 0, 0, 0, 0)
     }
 
     fn get_file_type(&self) -> DiskInodeType {
@@ -250,7 +239,10 @@ impl File for Pipe {
         todo!()
     }
 
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize> where Self: Sized {
+    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    where
+        Self: Sized,
+    {
         todo!()
     }
 
@@ -278,11 +270,16 @@ impl File for Pipe {
         todo!()
     }
 
-    fn get_single_cache(&self, offset: usize) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    fn get_single_cache(
+        &self,
+        offset: usize,
+    ) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
         todo!()
     }
 
-    fn get_all_caches(&self) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    fn get_all_caches(
+        &self,
+    ) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
         todo!()
     }
 
@@ -303,9 +300,7 @@ impl File for Pipe {
 
     fn fcntl(&self, cmd: u32, arg: u32) -> isize {
         match Fcntl_Command::from_primitive(cmd) {
-            Fcntl_Command::GETPIPE_SZ => {
-                self.buffer.lock().arr.len() as isize
-            },
+            Fcntl_Command::GETPIPE_SZ => self.buffer.lock().arr.len() as isize,
             Fcntl_Command::SETPIPE_SZ => {
                 let new_size = (arg as usize).max(PAGE_SIZE);
                 let mut ring = self.buffer.lock();
@@ -337,9 +332,8 @@ impl File for Pipe {
                 }
                 ring.arr = new_buffer;
                 SUCCESS
-            },
+            }
             _ => EINVAL,
         }
     }
-    
 }

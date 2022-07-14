@@ -2,9 +2,10 @@ use crate::timer::{TimeRange, TimeSpec, TimeVal};
 
 use super::processor::current_kstack_top;
 use super::{current_task, TaskControlBlock};
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeSet, LinkedList, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use k210_soc::sleep;
 use lazy_static::*;
 use spin::Mutex;
 
@@ -135,13 +136,15 @@ impl WaitQueue {
     /// This funtion will wake up all tasks in inner Vec and change their `task_status`
     /// to `Ready`, so it will try to acquire inner lock and **dead lock could happen**.
     /// These tasks will be scheduled if everything goes well.
-    pub fn wake_all(&mut self) {
+    pub fn wake_all(&mut self) -> usize {
         let mut vec = self.inner.lock();
+        let ret = vec.len();
         vec.iter().for_each(|task| {
             wake_interruptible(task.clone());
             task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
         });
         vec.clear();
+        ret
     }
     /// Wake no more than `limit` processes in this queue.
     /// # DEADLOCK
@@ -163,7 +166,6 @@ pub struct TimeOut {
     time: TimeRange,
     task: Arc<TaskControlBlock>,
 }
-
 impl TimeOut {
     pub fn from_cur_task_rel_time(mut time: TimeRange) -> Self {
         time = match time {
@@ -204,11 +206,25 @@ impl Drop for TimeOut {
     fn drop(&mut self) {
         assert!(self.is_wake_time());
         wake_interruptible(self.task.clone());
+        log::info!("[TimeOut::drop] Woke due to timeout.");
         self.task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
     }
 }
-/* lazy_static! {
- *     static ref TIMEOUT_TASK_LIST
- * } */
-pub fn timeout_wake() {}
-pub fn add_sleep_task(time: TimeRange, task: Arc<TaskControlBlock>) {}
+lazy_static! {
+    pub static ref TIMEOUT_TASK_LIST: Mutex<LinkedList<TimeOut>> = Mutex::new(LinkedList::new());
+}
+pub fn timeout_wake() -> usize {
+    log::debug!("[timeout_wake] Trying to wake any timed out proc.");
+    let mut lock = TIMEOUT_TASK_LIST.lock();
+    let woken = lock
+        .drain_filter(|time| time.is_wake_time())
+        .collect::<LinkedList<TimeOut>>();
+    log::debug!("[timeout_wake] wake num: {}", woken.len());
+    woken.len()
+}
+/// This function doesn't sleep
+pub fn add_to_timeout_wake_li(time: TimeRange, task: Arc<TaskControlBlock>) {
+    let mut lock = TIMEOUT_TASK_LIST.lock();
+    lock.push_back(TimeOut { time, task });
+    drop(lock)
+}

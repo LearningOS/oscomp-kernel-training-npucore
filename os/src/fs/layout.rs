@@ -2,7 +2,6 @@ use core::mem::size_of;
 
 use crate::timer::TimeSpec;
 
-
 bitflags! {
     pub struct OpenFlags: u32 {
         const O_RDONLY      =   0o0;

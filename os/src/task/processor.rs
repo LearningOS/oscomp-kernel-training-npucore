@@ -1,4 +1,6 @@
-use super::__switch;
+use core::task::Waker;
+
+use super::{__switch, timeout_wake};
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
 use crate::trap::TrapContext;
@@ -51,7 +53,18 @@ pub fn run_tasks() {
                 __switch(idle_task_cx_ptr, next_task_cx_ptr);
             }
         } else {
-            println!("no tasks available in run_tasks");
+            let lock = super::manager::TIMEOUT_TASK_LIST.lock();
+            if lock.len() == 0 {
+                println!("no tasks available in run_tasks");
+                drop(lock);
+            } else {
+                loop {
+                    if timeout_wake() != 0 {
+                        break;
+                    }
+                }
+                drop(lock);
+            }
         }
     }
 }

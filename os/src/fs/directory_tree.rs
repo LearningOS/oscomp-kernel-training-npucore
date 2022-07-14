@@ -1,11 +1,30 @@
-use alloc::{sync::{Arc, Weak}, collections::{BTreeMap}, string::{String, ToString}, vec::Vec};
-use easy_fs::{EasyFileSystem, DiskInodeType, CacheManager};
-use spin::{RwLock, Mutex, RwLockWriteGuard};
+use alloc::{
+    collections::BTreeMap,
+    string::{String, ToString},
+    sync::{Arc, Weak},
+    vec::Vec,
+};
+use easy_fs::{CacheManager, DiskInodeType, EasyFileSystem};
 use lazy_static::*;
+use spin::{Mutex, RwLock, RwLockWriteGuard};
 
-use crate::{fs::{fs::{cache_mgr::BlockCacheManager, inode::{InodeImpl, OSInode}}, filesystem::FS}, drivers::BLOCK_DEVICE};
+use super::{
+    dev::{null::Null, tty::Teletype, zero::Zero},
+    file_trait::File,
+    filesystem::FileSystem,
+    layout::OpenFlags,
+};
 use crate::syscall::errno::*;
-use super::{layout::{OpenFlags}, dev::{null:: Null, zero::Zero, tty::Teletype}, file_trait::File, filesystem::FileSystem};
+use crate::{
+    drivers::BLOCK_DEVICE,
+    fs::{
+        filesystem::FS,
+        fs::{
+            cache_mgr::BlockCacheManager,
+            inode::{InodeImpl, OSInode},
+        },
+    },
+};
 
 lazy_static! {
     pub static ref FILE_SYSTEM: Arc<EasyFileSystem<BlockCacheManager>> = EasyFileSystem::open(
@@ -39,24 +58,18 @@ pub struct DirectoryTreeNode {
 
 impl DirectoryTreeNode {
     pub fn new(
-        name: String, 
+        name: String,
         filesystem: Arc<FileSystem>,
-        file: Arc<dyn File>, 
-        father: Option<&Arc<Self>>
-    ) -> Arc<Self>{
-        let node = 
-        Arc::new(DirectoryTreeNode { 
-            spe_usage: Mutex::new(if father.is_none() {1} else {0}),
+        file: Arc<dyn File>,
+        father: Option<&Arc<Self>>,
+    ) -> Arc<Self> {
+        let node = Arc::new(DirectoryTreeNode {
+            spe_usage: Mutex::new(if father.is_none() { 1 } else { 0 }),
             name,
-            filesystem, 
-            file, 
+            filesystem,
+            file,
             selfptr: Mutex::new(Weak::new()),
-            father: Mutex::new(
-                father.map_or_else(
-                    ||Weak::new(), 
-                    |x|Arc::downgrade(x)
-                )
-            ),
+            father: Mutex::new(father.map_or_else(|| Weak::new(), |x| Arc::downgrade(x))),
             children: RwLock::new(BTreeMap::new()),
         });
         *node.selfptr.lock() = Arc::downgrade(&node);
@@ -93,58 +106,52 @@ impl DirectoryTreeNode {
     fn get_arc(&self) -> Arc<Self> {
         self.selfptr.lock().upgrade().unwrap().clone()
     }
-    fn parse_dir_path (path: &str) -> Vec<&str> {
-        path.split('/')
-            .fold(Vec::new(), |mut v, s|{
-                match s {
-                    "" | "." => {}
-                    ".." => {
-                        if v.last().map_or(true, |s|{*s == ".."}) {
-                            v.push(s);
-                        } else {
-                            v.pop();
-                        }
+    fn parse_dir_path(path: &str) -> Vec<&str> {
+        path.split('/').fold(Vec::new(), |mut v, s| {
+            match s {
+                "" | "." => {}
+                ".." => {
+                    if v.last().map_or(true, |s| *s == "..") {
+                        v.push(s);
+                    } else {
+                        v.pop();
                     }
-                    _ => {v.push(s);}
                 }
-                v
-            })
+                _ => {
+                    v.push(s);
+                }
+            }
+            v
+        })
     }
     fn try_to_open_subfile(
         &self,
         name: &str,
-        lock: &mut RwLockWriteGuard<BTreeMap<String, Arc<Self>>>
+        lock: &mut RwLockWriteGuard<BTreeMap<String, Arc<Self>>>,
     ) -> Result<Arc<Self>, isize> {
         if lock.len() == 0 && !self.file.is_dir() {
             return Err(ENOTDIR);
         }
         match lock.get(&name.to_string()) {
-            Some(inode) => {
-                Ok(inode.clone())
-            },
-            None => {
-                match self.file.open_subfile(name) {
-                    Ok(new_file) => {
-                        let key = name.to_string();
-                        let value = Self::new(
-                            key.clone(), 
-                            self.filesystem.clone(),
-                            new_file, 
-                            Some(&self.get_arc())
-                        );
-                        let res_inode = value.clone();
-                        lock.insert(key, value);
-                        Ok(res_inode)
-                    },
-                    Err(errno) => Err(errno),
+            Some(inode) => Ok(inode.clone()),
+            None => match self.file.open_subfile(name) {
+                Ok(new_file) => {
+                    let key = name.to_string();
+                    let value = Self::new(
+                        key.clone(),
+                        self.filesystem.clone(),
+                        new_file,
+                        Some(&self.get_arc()),
+                    );
+                    let res_inode = value.clone();
+                    lock.insert(key, value);
+                    Ok(res_inode)
                 }
+                Err(errno) => Err(errno),
             },
         }
     }
-    pub fn cd_comp(
-        &self,
-        components: &Vec<&str>
-    ) -> Result<Arc<Self>, isize> {
+    pub fn cd_comp(&self, components: &Vec<&str>) -> Result<Arc<Self>, isize> {
         let mut current_inode = self.get_arc();
         for component in components {
             if *component == ".." {
@@ -172,10 +179,7 @@ impl DirectoryTreeNode {
         }
         Ok(current_inode)
     }
-    pub fn cd_path(
-        &self,
-        path: &str
-    ) -> Result<Arc<Self>, isize> {
+    pub fn cd_path(&self, path: &str) -> Result<Arc<Self>, isize> {
         let components = Self::parse_dir_path(path);
         let inode = if path.starts_with("/") {
             &**ROOT
@@ -184,11 +188,7 @@ impl DirectoryTreeNode {
         };
         inode.cd_comp(&components)
     }
-    fn create(
-        &self,
-        name: &str,
-        file_type: DiskInodeType,
-    ) -> Result<Arc<dyn File>, isize> {
+    fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
         if name == "" || !self.file.is_dir() {
             panic!();
         }
@@ -224,7 +224,7 @@ impl DirectoryTreeNode {
         } else {
             &self
         };
-        
+
         let mut components = Self::parse_dir_path(path);
         let last_comp = components.pop();
         let inode = match inode.cd_comp(&components) {
@@ -239,7 +239,7 @@ impl DirectoryTreeNode {
                         return Err(EEXIST);
                     }
                     inode
-                },
+                }
                 Err(ENOENT) => {
                     if !flags.contains(OpenFlags::O_CREAT) {
                         return Err(ENOENT);
@@ -250,18 +250,18 @@ impl DirectoryTreeNode {
                     };
                     let key = (*last_comp).to_string();
                     let value = Self::new(
-                        key.clone(), 
+                        key.clone(),
                         inode.filesystem.clone(),
-                        new_file, 
-                        Some(&self.get_arc())
+                        new_file,
+                        Some(&self.get_arc()),
                     );
                     let new_inode = value.clone();
                     lock.insert(key, value);
                     new_inode
-                },
+                }
                 Err(errno) => {
                     return Err(errno);
-                } 
+                }
             }
         } else {
             inode
@@ -269,18 +269,21 @@ impl DirectoryTreeNode {
 
         if flags.contains(OpenFlags::O_TRUNC) {
             match self.file.truncate_size(0) {
-                Ok(_) => {},
+                Ok(_) => {}
                 Err(errno) => return Err(errno),
             }
         }
 
-        if  inode.file.is_file() && 
-            *inode.spe_usage.lock() > 0 && 
-            (flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR)) {
+        if inode.file.is_file()
+            && *inode.spe_usage.lock() > 0
+            && (flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR))
+        {
             return Err(ETXTBSY);
         }
 
-        if inode.file.is_dir() && (flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR)) {
+        if inode.file.is_dir()
+            && (flags.contains(OpenFlags::O_WRONLY) || flags.contains(OpenFlags::O_RDWR))
+        {
             return Err(EISDIR);
         }
 
@@ -294,11 +297,8 @@ impl DirectoryTreeNode {
 
         Ok(inode.file.open(flags, special_use))
     }
-    
-    pub fn mkdir(
-        &self,
-        path: &str,
-    ) -> Result<(), isize> {
+
+    pub fn mkdir(&self, path: &str) -> Result<(), isize> {
         if path == "" {
             return Err(ENOENT);
         }
@@ -307,7 +307,7 @@ impl DirectoryTreeNode {
         } else {
             &self
         };
-        
+
         let mut components = Self::parse_dir_path(path);
         let last_comp = components.pop();
         let inode = match inode.cd_comp(&components) {
@@ -318,7 +318,9 @@ impl DirectoryTreeNode {
         if let Some(last_comp) = last_comp {
             let mut lock = inode.children.write();
             match inode.try_to_open_subfile(last_comp, &mut lock) {
-                Ok(_) => { return Err(EEXIST); },
+                Ok(_) => {
+                    return Err(EEXIST);
+                }
                 Err(ENOENT) => {
                     let new_file = match inode.create(last_comp, DiskInodeType::Directory) {
                         Ok(file) => file,
@@ -326,15 +328,15 @@ impl DirectoryTreeNode {
                     };
                     let key = (*last_comp).to_string();
                     let value = Self::new(
-                        key.clone(), 
+                        key.clone(),
                         inode.filesystem.clone(),
-                        new_file, 
-                        Some(&self.get_arc())
+                        new_file,
+                        Some(&self.get_arc()),
                     );
                     let new_inode = value.clone();
                     lock.insert(key, value);
                     new_inode
-                },
+                }
                 Err(errno) => {
                     return Err(errno);
                 }
@@ -344,17 +346,13 @@ impl DirectoryTreeNode {
         };
 
         Ok(())
-    } 
-    
-    pub fn delete(
-        &self,
-        path: &str,
-        delete_directory: bool
-    ) -> Result<(), isize> {
+    }
+
+    pub fn delete(&self, path: &str, delete_directory: bool) -> Result<(), isize> {
         if path == "" {
             return Err(ENOENT);
         }
-        if path.split('/').last().map_or(true, |x|{x == "."}) {
+        if path.split('/').last().map_or(true, |x| x == ".") {
             return Err(EINVAL);
         }
 
@@ -363,7 +361,7 @@ impl DirectoryTreeNode {
         } else {
             &self
         };
-        
+
         let components = Self::parse_dir_path(path);
         let last_comp = *components.last().unwrap();
         let inode = match inode.cd_comp(&components) {
@@ -378,7 +376,7 @@ impl DirectoryTreeNode {
         if !delete_directory && inode.file.is_dir() {
             return Err(EISDIR);
         }
-        
+
         if delete_directory && !inode.file.is_dir() {
             return Err(ENOTDIR);
         }
@@ -390,19 +388,16 @@ impl DirectoryTreeNode {
                     Ok(_) => {
                         let key = (*last_comp).to_string();
                         lock.remove(&key);
-                    },
+                    }
                     Err(errno) => return Err(errno),
                 }
-            },
+            }
             None => return Err(EACCES),
         }
         Ok(())
     }
 
-    pub fn rename(
-        old_path: &str,
-        new_path: &str,
-    ) -> Result<(), isize> {
+    pub fn rename(old_path: &str, new_path: &str) -> Result<(), isize> {
         assert!(old_path.starts_with('/'));
         assert!(new_path.starts_with('/'));
 
@@ -440,7 +435,6 @@ impl DirectoryTreeNode {
         let old_lock: Arc<Mutex<ChildLockType<'_>>>;
         let new_lock: Arc<Mutex<ChildLockType<'_>>>;
 
-
         // Be careful about the lock ordering
         if old_comps == new_comps {
             old_lock = Arc::new(Mutex::new(old_par_inode.children.write()));
@@ -453,10 +447,11 @@ impl DirectoryTreeNode {
             old_lock = Arc::new(Mutex::new(old_par_inode.children.write()));
         }
 
-        let old_inode = match old_par_inode.try_to_open_subfile(old_last_comp, &mut (*old_lock.lock())) {
-            Ok(inode) => inode,
-            Err(errno) => return Err(errno),
-        };
+        let old_inode =
+            match old_par_inode.try_to_open_subfile(old_last_comp, &mut (*old_lock.lock())) {
+                Ok(inode) => inode,
+                Err(errno) => return Err(errno),
+            };
 
         if *old_inode.spe_usage.lock() > 0 {
             return Err(EBUSY);
@@ -480,17 +475,19 @@ impl DirectoryTreeNode {
                 }
                 // delete
                 match new_par_inode.file.unlink(true) {
-                    Ok(_) => {new_lock.lock().remove(&new_key);},
+                    Ok(_) => {
+                        new_lock.lock().remove(&new_key);
+                    }
                     Err(errno) => return Err(errno),
                 }
-            },
-            Err(ENOENT) => {},
+            }
+            Err(ENOENT) => {}
             Err(errno) => return Err(errno),
         }
 
         let value = old_lock.lock().remove(&old_key).unwrap();
         match old_inode.file.unlink(false) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(errno) => return Err(errno),
         };
         match old_inode.filesystem.fs_type {
@@ -498,12 +495,12 @@ impl DirectoryTreeNode {
                 let old_file = old_inode.file.downcast_ref::<OSInode>().unwrap();
                 let new_par_file = new_par_inode.file.downcast_ref::<OSInode>().unwrap();
                 new_par_file.link_son(old_last_comp, old_file)?;
-            },
+            }
             FS::Null => return Err(EACCES),
         }
         *value.father.lock() = Arc::downgrade(&new_par_inode.get_arc());
         new_lock.lock().insert(new_key, value);
-        
+
         Ok(())
     }
 }
@@ -537,39 +534,37 @@ pub fn oom() {
     }
 }
 
-pub fn init_fs()
-{
+pub fn init_fs() {
     init_device_directory();
     init_tmp_directory();
 }
-fn init_device_directory()
-{
+fn init_device_directory() {
     match ROOT.mkdir("/dev") {
         _ => {}
     }
-    
+
     let dev_inode = match ROOT.cd_path("/dev") {
         Ok(inode) => inode,
         Err(_) => panic!("dev directory doesn't exist"),
     };
 
     let null_dev = DirectoryTreeNode::new(
-        "null".to_string(), 
+        "null".to_string(),
         Arc::new(FileSystem::new(FS::Null)),
-        Arc::new(Null{}), 
-        Some(&dev_inode.get_arc())
+        Arc::new(Null {}),
+        Some(&dev_inode.get_arc()),
     );
     let zero_dev = DirectoryTreeNode::new(
-        "zero".to_string(), 
+        "zero".to_string(),
         Arc::new(FileSystem::new(FS::Null)),
-        Arc::new(Zero{}), 
-        Some(&dev_inode.get_arc())
+        Arc::new(Zero {}),
+        Some(&dev_inode.get_arc()),
     );
     let tty_dev = DirectoryTreeNode::new(
-        "tty".to_string(), 
+        "tty".to_string(),
         Arc::new(FileSystem::new(FS::Null)),
         Arc::new(Teletype::new()),
-        Some(&dev_inode.get_arc())
+        Some(&dev_inode.get_arc()),
     );
 
     let mut lock = dev_inode.children.write();
@@ -577,8 +572,7 @@ fn init_device_directory()
     lock.insert("zero".to_string(), zero_dev);
     lock.insert("tty".to_string(), tty_dev);
 }
-fn init_tmp_directory()
-{
+fn init_tmp_directory() {
     match ROOT.mkdir("/tmp") {
         _ => {}
     }

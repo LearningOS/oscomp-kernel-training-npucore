@@ -1,11 +1,20 @@
-use alloc::{vec::Vec, sync::{Arc, Weak}};
-use easy_fs::{DiskInodeType};
-use spin::Mutex;
+use crate::{
+    mm::UserBuffer,
+    syscall::{errno::ENOTTY, fs::SeekWhence},
+};
+use alloc::{
+    sync::{Arc, Weak},
+    vec::Vec,
+};
 use downcast_rs::*;
-use crate::{mm::UserBuffer, syscall::{fs::SeekWhence, errno::ENOTTY}};
+use easy_fs::DiskInodeType;
+use spin::Mutex;
 
-use super::{layout::{Stat, OpenFlags, Dirent}, fs::cache_mgr::PageCache, directory_tree::DirectoryTreeNode};
-
+use super::{
+    directory_tree::DirectoryTreeNode,
+    fs::cache_mgr::PageCache,
+    layout::{Dirent, OpenFlags, Stat},
+};
 
 pub trait File: DowncastSync {
     fn deep_clone(&self) -> Arc<dyn File>;
@@ -32,7 +41,9 @@ pub trait File: DowncastSync {
     fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize>;
     /// create
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize>;
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize> where Self: Sized;
+    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    where
+        Self: Sized;
     /// delete(unlink)
     fn unlink(&self, delete: bool) -> Result<(), isize>;
     /// dirent

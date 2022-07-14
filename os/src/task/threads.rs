@@ -2,7 +2,7 @@ use crate::{
     syscall::errno::SUCCESS,
     task::{
         block_current_and_run_next, current_task,
-        manager::{add_sleep_task, WaitQueue},
+        manager::{add_to_timeout_wake_li, WaitQueue},
         suspend_current_and_run_next, timeout_wake,
     },
     timer::{get_time, get_time_ns, TimeRange, TimeSpec},
@@ -57,10 +57,10 @@ lazy_static! {
     static ref FUTEX_WAIT_NO: Mutex<BTreeMap<usize, u32>> = Mutex::new(BTreeMap::new());
 }
 
-/* lazy_static! {
- *     static ref FUTEX_WQUEUE_LI: Mutex<BTreeMap<usize, (WaitQueue, u32)>> =
- *         Mutex::new(BTreeMap::new());
- * } */
+lazy_static! {
+    static ref FUTEX_WQUEUE_LI: Mutex<BTreeMap<usize, (WaitQueue, u32)>> =
+        Mutex::new(BTreeMap::new());
+}
 /// Currently the `rt_clk` is ignored.
 pub fn futex(
     futex_word: &mut u32,
@@ -76,66 +76,86 @@ pub fn futex(
     let futex_word_addr = futex_word as *const u32 as usize;
     match cmd {
         // Returns  0  if the caller was woken up.
-        FutexCmd::FUTEX_WAIT => loop {
-            if *futex_word != val {
-                return SUCCESS;
-            } else {
-                let mut lock = FUTEX_WAIT_NO.lock();
-                if let Some(i) = lock.get(&futex_word_addr) {
-                    let num = *i;
-                    lock.insert(futex_word_addr, num - 1);
-                    drop(lock);
-                    return SUCCESS;
-                }
-                drop(lock);
-                if let Some(t) = timeout {
-                    if t <= TimeSpec::now() {
-                        return SUCCESS;
-                    }
-                }
-                suspend_current_and_run_next();
-            }
-        },
+        FutexCmd::FUTEX_WAIT =>
         /* {
-         *     let mut lock = FUTEX_WQUEUE_LI.lock();
-         *     if let Some((queue, _)) = lock.get_mut(&futex_word_addr) {
-         *         queue.add_task(current_task().unwrap());
-         *     } else {
-         *         let wait_queue = WaitQueue::new();
-         *         wait_queue.add_task(current_task().unwrap());
-         *         lock.insert(futex_word_addr, (wait_queue, val));
+         *     // old rev.
+         *     loop {
+         *         if *futex_word != val {
+         *             info!("[FUTEX_WAIT] quit for value change.");
+         *             return SUCCESS;
+         *         } else {
+         *             let mut lock = FUTEX_WAIT_NO.lock();
+         *             if let Some(i) = lock.get(&futex_word_addr) {
+         *                 info!("[FUTEX_WAIT] released for a new ticket.");
+         *                 let num = *i;
+         *                 lock.insert(futex_word_addr, num - 1);
+         *                 drop(lock);
+         *                 return SUCCESS;
+         *             }
+         *             drop(lock);
+         *             if let Some(t) = timeout {
+         *                 info!("[FUTEX_WAIT] released timed out.");
+         *                 if t <= TimeSpec::now() {
+         *                     return SUCCESS;
+         *                 }
+         *             }
+         *             suspend_current_and_run_next();
+         *         }
          *     }
-         *     if let Some(time) = timeout {
-         *         add_sleep_task(, current_task().unwrap());
-         *     }
-         *     block_current_and_run_next();
-         *     return SUCCESS;
          * } */
+        {
+            let mut lock = FUTEX_WQUEUE_LI.lock();
+            if let Some((queue, _)) = lock.get_mut(&futex_word_addr) {
+                queue.add_task(current_task().unwrap());
+            } else {
+                let mut wait_queue = WaitQueue::new();
+                wait_queue.add_task(current_task().unwrap());
+                lock.insert(futex_word_addr, (wait_queue, val));
+            }
+            drop(lock);
+            if let Some(time) = timeout {
+                add_to_timeout_wake_li(TimeRange::TimeSpec(time), current_task().unwrap());
+            }
+            block_current_and_run_next();
+            return SUCCESS;
+        }
         // Returns the number of waiters that were woken up.
         // 我这算法挺智障的...我还是找机会换WaitQueue吧
-        FutexCmd::FUTEX_WAKE => {
-            let result = 0;
-            loop {
-                let mut lock = FUTEX_WAIT_NO.lock();
-                if let Some(_) = lock.get(&futex_word_addr) {
-                    drop(lock);
-                    suspend_current_and_run_next();
-                } else {
-                    lock.insert(futex_word_addr, val);
-                    drop(lock);
-                    suspend_current_and_run_next();
-                    let mut lock = FUTEX_WAIT_NO.lock();
-                    let diff = *lock.get(&futex_word_addr).unwrap();
-                    if diff == 0 {
-                        lock.remove(&futex_word_addr);
-                    }
-                    drop(lock);
-                    info!("[FUTEX_WAKE] waked {} proc", (val - diff));
-                    return (val - diff) as isize;
-                }
-            }
+        FutexCmd::FUTEX_WAKE =>
+        /* {
+         *     let result = 0;
+         *     loop {
+         *         let mut lock = FUTEX_WAIT_NO.lock();
+         *         if let Some(_) = lock.get(&futex_word_addr) {
+         *             drop(lock);
+         *             suspend_current_and_run_next();
+         *         } else {
+         *             info!("[FUTEX_WAKE] no tickets");
+         *             lock.insert(futex_word_addr, val);
+         *             drop(lock);
+         *             suspend_current_and_run_next();
+         *             let mut lock = FUTEX_WAIT_NO.lock();
+         *             let diff = *lock.get(&futex_word_addr).unwrap();
+         *             if diff == 0 {
+         *                 lock.remove(&futex_word_addr);
+         *             }
+         *             drop(lock);
+         *             info!("[FUTEX_WAKE] woke {} proc(s)", (val - diff));
+         *             return (val - diff) as isize;
+         *         }
+         *     }
+         * } */
+        {
+            let mut lock = FUTEX_WQUEUE_LI.lock();
+            let ret = if let Some((queue, _)) = lock.get_mut(&futex_word_addr) {
+                queue.wake_at_most(val as usize) as isize
+            } else {
+                0
+            };
+            log::debug!("[FUTEX_WAKE] Woke {} proc(s)", ret);
+            drop(lock);
+            ret
         }
-        //            {}
         FutexCmd::FUTEX_FD => todo!(),
         FutexCmd::FUTEX_REQUEUE => todo!(),
         FutexCmd::FUTEX_CMP_REQUEUE => todo!(),
@@ -147,4 +167,24 @@ pub fn futex(
     }
 }
 
-pub fn futex_waiter() {}
+pub fn futex_waiter() {
+    let mut lock = FUTEX_WQUEUE_LI.lock();
+    lock.drain_filter(|addr, (li, val)| {
+        if unsafe { *((*addr) as *const u32) } != *val {
+            let waiter_num = li.wake_all();
+            log::debug!(
+                "[futex_waiter] Physical addr {} has \
+                 changed to {} (Which is no longer {}.),\
+                 \n releasing all {} proc(s)",
+                addr,
+                unsafe { *((*addr) as *const u32) },
+                val,
+                waiter_num
+            );
+            true
+        } else {
+            false
+        }
+    });
+    drop(lock);
+}
