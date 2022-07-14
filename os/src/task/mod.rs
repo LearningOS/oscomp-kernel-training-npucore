@@ -6,24 +6,25 @@ mod processor;
 pub mod signal;
 mod switch;
 mod task;
+pub mod threads;
 
-use alloc::{sync::Arc};
+use crate::fs::{OpenFlags, ROOT_FD};
+use alloc::sync::Arc;
 pub use context::TaskContext;
+pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
 use lazy_static::*;
 use manager::fetch_task;
-pub use signal::*;
-use switch::__switch;
-pub use task::{Rusage, TaskControlBlock, TaskStatus};
-pub use elf::{AuxvEntry, AuxvType, ELFInfo, load_elf_interp};
 pub use manager::{
-    add_task, find_task_by_pid, find_task_by_tgid, procs_count, sleep_interruptible, wake_interruptible,
+    add_task, find_task_by_pid, find_task_by_tgid, procs_count, sleep_interruptible, timeout_wake,
+    wake_interruptible,
 };
-pub use pid::{pid_alloc, KernelStack, PidHandle, trap_cx_bottom_from_tid, ustack_bottom_from_tid};
+pub use pid::{pid_alloc, trap_cx_bottom_from_tid, ustack_bottom_from_tid, KernelStack, PidHandle};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
 };
-use crate::fs::{OpenFlags, ROOT_FD};
-
+pub use signal::*;
+use switch::__switch;
+pub use task::{Rusage, TaskControlBlock, TaskStatus};
 
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
@@ -34,6 +35,7 @@ pub fn suspend_current_and_run_next() {
     let task_cx_ptr = &mut task_inner.task_cx as *mut TaskContext;
     // Change status to Ready
     task_inner.task_status = TaskStatus::Ready;
+    //    log::info!("suspended pid:{}", task.pid.0);
     drop(task_inner);
     // ---- release current PCB lock
 

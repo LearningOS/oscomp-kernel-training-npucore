@@ -1,15 +1,17 @@
-use crate::config::{CLOCK_FREQ, PAGE_SIZE, USER_STACK_SIZE, MMAP_BASE};
-use crate::fs::{OpenFlags, FdTable};
+use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE, USER_STACK_SIZE};
+use crate::fs::{FdTable, OpenFlags};
 use crate::mm::{
-    copy_from_user, copy_to_user, copy_to_user_string, translated_byte_buffer, translated_ref,
-    translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer, VirtAddr,
+    copy_from_user, copy_to_user, copy_to_user_string, get_from_user, translated_byte_buffer,
+    translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
+    VirtAddr,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
+use crate::task::threads::{futex, FUTEX_CLOCK_REALTIME, FUTEX_PRIVATE};
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
     exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
-    suspend_current_and_run_next, wake_interruptible, Rusage, TaskStatus,
+    suspend_current_and_run_next, threads, wake_interruptible, Rusage, TaskStatus,
 };
 use crate::timer::{
     get_time, get_time_ms, get_time_sec, ITimerVal, TimeSpec, TimeVal, TimeZone, Times,
@@ -511,24 +513,21 @@ pub fn sys_execve(
             let elf = match magic_number.as_slice() {
                 b"\x7fELF" => file,
                 b"#!" => {
-                    let shell_file = working_inode.open(
-                        DEFAULT_SHELL,
-                        OpenFlags::O_RDONLY,
-                        false,
-                    )
-                    .unwrap();
+                    let shell_file = working_inode
+                        .open(DEFAULT_SHELL, OpenFlags::O_RDONLY, false)
+                        .unwrap();
                     argv_vec.insert(0, DEFAULT_SHELL.to_string());
                     shell_file
                 }
                 _ => return ENOEXEC,
             };
 
-            let buffer = unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, elf.get_size()) };
+            let buffer =
+                unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, elf.get_size()) };
             let caches = elf.get_all_caches().unwrap();
-            let frames = 
-                caches
+            let frames = caches
                 .iter()
-                .map(|cache|{
+                .map(|cache| {
                     let lock = cache.try_lock();
                     assert!(lock.is_some());
                     Some(lock.unwrap().get_tracker())
@@ -747,7 +746,19 @@ pub fn sys_set_tid_address(tidptr: usize) -> isize {
         .clear_child_tid = tidptr;
     sys_gettid()
 }
-
+/// # Description
+/// fast user-space locking
+/// # Arguments
+/// * `uaddr`: `usize`, the address to the futex word;
+/// * `futex_op`: `u32`, the operation to perform on the futex;
+/// The remaining arguments (val, timeout, uaddr2, and val3) are re‐
+/// quired only for certain of the futex  operations  described
+/// below.  Where one of these arguments is not required, it is
+/// ignored.
+/// * `val`: `u32`, the argument to futex_op
+/// * `timeout`: `*const TimeSpec`,
+/// * `uaddr2`: `usize`,
+/// * `val3`: `u32`,
 pub fn sys_futex(
     uaddr: usize,
     futex_op: u32,
@@ -756,7 +767,24 @@ pub fn sys_futex(
     uaddr2: usize,
     val3: u32,
 ) -> isize {
-    SUCCESS
+    if uaddr % 4 != 0 {
+        return EINVAL;
+    }
+    let token = current_user_token();
+    let private_futex = (futex_op | FUTEX_PRIVATE) != 0;
+    let rt_clk = (futex_op | FUTEX_CLOCK_REALTIME) != 0;
+    let real_cmd = futex_op & (!(FUTEX_CLOCK_REALTIME | FUTEX_PRIVATE));
+    let futex_word = translated_refmut(token, uaddr as *mut u32);
+    let uwd2 = translated_refmut(token, uaddr as *mut u32);
+    let timeout = if timeout.is_null() {
+        None
+    } else {
+        Some(get_from_user(token, timeout))
+    };
+    let cmd =
+        <threads::FutexCmd as core::convert::TryFrom<u32>>::try_from(real_cmd as u32).unwrap();
+
+    futex(futex_word, uwd2,val, val3, cmd, private_futex, rt_clk, timeout)
 }
 
 pub fn sys_mmap(
@@ -776,6 +804,19 @@ pub fn sys_mmap(
         start, len, prot, flags, fd as isize, offset
     );
     memory_set.mmap(start, len, prot, flags, fd, offset) as isize
+}
+
+/// # Versions
+/// The membarrier() system call was added in Linux 4.3.
+/// Before Linux 5.10, the prototype for membarrier() was:
+/// `int membarrier(int cmd, int flags);`
+pub fn sys_memorybarrier(cmd: usize, flags: usize, cpu_id: usize) -> isize {
+    error!("[sys_memorybarrier]=========PSEUDOIMPLEMENTATION=========");
+    error!(
+        "This system call is only needed by the multicore environment for faster synchronization."
+    );
+    error!("In theory, it can be replaced (INefficiently) by fencing.");
+    return SUCCESS;
 }
 
 pub fn sys_munmap(start: usize, len: usize) -> isize {

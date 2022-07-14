@@ -69,8 +69,8 @@ const SYSCALL_MPROTECT: usize = 226;
 const SYSCALL_WAIT4: usize = 260; // wait is implemented as wait4(pid, status, options, 0) in lib.
 const SYSCALL_PRLIMIT: usize = 261;
 const SYSCALL_RENAMEAT2: usize = 276;
+const SYSCALL_MEMBARRIER: usize = 283;
 const SYSCALL_FACCESSAT2: usize = 439;
-
 // Not standard POSIX sys_call
 const SYSCALL_LS: usize = 500;
 const SYSCALL_SHUTDOWN: usize = 501;
@@ -84,8 +84,8 @@ mod process;
 
 use fs::*;
 use log::{debug, error, info, trace, warn};
-use process::*;
 pub use process::CloneFlags;
+use process::*;
 
 pub fn syscall_name(id: usize) -> &'static str {
     match id {
@@ -162,6 +162,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_PRLIMIT => "prlimit",
         SYSCALL_RENAMEAT2 => "renameat2",
         SYSCALL_FACCESSAT2 => "faccessat2",
+        SYSCALL_MEMBARRIER => "membarrier",
         // non-standard
         SYSCALL_LS => "ls",
         SYSCALL_SHUTDOWN => "shutdown",
@@ -343,11 +344,12 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2] as u32,
             args[3] as u32,
         ),
+        SYSCALL_MEMBARRIER => sys_memorybarrier(args[0], args[1], args[2]),
         SYSCALL_RENAMEAT2 => sys_renameat2(
-            args[0], 
-            args[1] as *const u8, 
-            args[2], 
-            args[3] as *const u8, 
+            args[0],
+            args[1] as *const u8,
+            args[2],
+            args[3] as *const u8,
             args[4] as u32,
         ),
         _ => {

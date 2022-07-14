@@ -2,6 +2,7 @@ use super::{
     frame_alloc, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne, VirtAddr,
     VirtPageNum,
 };
+use _core::mem::{uninitialized, MaybeUninit};
 use _core::ops::{Index, IndexMut};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -510,6 +511,18 @@ pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T)
     } else {
         UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
             .write(unsafe { core::slice::from_raw_parts(src as *const u8, size) });
+    }
+}
+
+/// Copy `*src: T` to kernel space.
+/// `src` is a pointer in user space, `dst` is a pointer in kernel space.
+#[inline(always)]
+pub fn get_from_user<T: 'static + Copy>(token: usize, src: *const T) -> T {
+    unsafe {
+        let mut dst: T = uninitialized();
+        let dst_ptr: *mut T = &mut dst;
+        copy_from_user(token, src, dst_ptr);
+        return dst;
     }
 }
 

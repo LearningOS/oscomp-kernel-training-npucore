@@ -7,7 +7,9 @@ use crate::config::*;
 use crate::fs::file_trait::File;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
-use crate::task::{current_task, AuxvEntry, AuxvType, ELFInfo, ustack_bottom_from_tid, trap_cx_bottom_from_tid};
+use crate::task::{
+    current_task, trap_cx_bottom_from_tid, ustack_bottom_from_tid, AuxvEntry, AuxvType, ELFInfo,
+};
 use crate::timer::TICKS_PER_SEC;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -993,9 +995,15 @@ impl MemorySet {
                 ustack_bottom.into(),
                 MapPermission::R | MapPermission::W | MapPermission::U,
             );
-            trace!("[alloc_user_res] user stack start_va: {:X}, end_va: {:X}", ustack_top, ustack_bottom);
+            trace!(
+                "[alloc_user_res] user stack start_va: {:X}, end_va: {:X}",
+                ustack_top,
+                ustack_bottom
+            );
         } else {
-            debug!("[alloc_user_res] user stack is not allocated (stack is designated in sys_clone)");
+            debug!(
+                "[alloc_user_res] user stack is not allocated (stack is designated in sys_clone)"
+            );
         }
         // alloc trap_cx
         let trap_cx_bottom = trap_cx_bottom_from_tid(tid);
@@ -1005,7 +1013,11 @@ impl MemorySet {
             trap_cx_top.into(),
             MapPermission::R | MapPermission::W,
         );
-        trace!("[alloc_user_res] trap context start_va: {:X}, end_va: {:X}", trap_cx_bottom, trap_cx_top);
+        trace!(
+            "[alloc_user_res] trap context start_va: {:X}, end_va: {:X}",
+            trap_cx_bottom,
+            trap_cx_top
+        );
     }
 
     pub fn dealloc_user_res(&mut self, tid: usize) {

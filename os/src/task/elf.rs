@@ -1,6 +1,10 @@
 use alloc::boxed::Box;
 
-use crate::{fs::{OpenFlags, ROOT_FD}, syscall::errno::*, mm::KERNEL_SPACE};
+use crate::{
+    fs::{OpenFlags, ROOT_FD},
+    mm::KERNEL_SPACE,
+    syscall::errno::*,
+};
 
 #[derive(Clone, Copy)]
 #[allow(non_camel_case_types, unused)]
@@ -92,10 +96,9 @@ pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
                         core::slice::from_raw_parts_mut(buffer_addr.0 as *mut u8, file.get_size())
                     };
                     let caches = file.get_all_caches().unwrap();
-                    let frames = 
-                        caches
+                    let frames = caches
                         .iter()
-                        .map(|cache|{
+                        .map(|cache| {
                             let lock = cache.try_lock();
                             assert!(lock.is_some());
                             Some(lock.unwrap().get_tracker())
