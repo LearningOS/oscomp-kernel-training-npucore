@@ -3,8 +3,8 @@ use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
-use spin::Mutex;
 use lazy_static::*;
+use spin::Mutex;
 
 pub struct Processor {
     current: Option<Arc<TaskControlBlock>>,
@@ -69,10 +69,7 @@ pub fn current_user_token() -> usize {
 }
 
 pub fn current_trap_cx() -> &'static mut TrapContext {
-    current_task()
-        .unwrap()
-        .acquire_inner_lock()
-        .get_trap_cx()
+    current_task().unwrap().acquire_inner_lock().get_trap_cx()
 }
 
 // pub fn current_trap_cx_user_va() -> usize {

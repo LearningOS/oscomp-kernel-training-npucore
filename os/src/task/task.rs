@@ -1,12 +1,13 @@
 use super::manager::TASK_MANAGER;
-use super::pid::RecycleAllocator;
 use super::pid::kstack_alloc;
+use super::pid::RecycleAllocator;
 use super::signal::*;
-use super::TaskContext;
 use super::trap_cx_bottom_from_tid;
 use super::ustack_bottom_from_tid;
+use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::fs::{FileDescriptor,FdTable,OpenFlags,ROOT_FD};
+use crate::config::*;
+use crate::fs::{FdTable, FileDescriptor, OpenFlags, ROOT_FD};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::CloneFlags;
 use crate::timer::{ITimerVal, TimeVal};
@@ -207,7 +208,7 @@ impl TaskControlBlock {
             .lock()
             .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor())
             .unwrap();
-        
+
         let tid_allocator = Arc::new(Mutex::new(RecycleAllocator::new()));
         // alloc a pid and a kernel stack in kernel space
         let pid_handle = pid_alloc();
@@ -222,7 +223,7 @@ impl TaskControlBlock {
             .translate(VirtAddr::from(trap_cx_bottom_from_tid(tid)).into())
             .unwrap()
             .ppn();
-        
+
         let task_control_block = Self {
             pid: pid_handle,
             tid,
@@ -239,7 +240,11 @@ impl TaskControlBlock {
                 Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
             ]))),
             fs: Arc::new(Mutex::new(FsStatus {
-                working_inode: Arc::new(ROOT_FD.open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true).unwrap()),
+                working_inode: Arc::new(
+                    ROOT_FD
+                        .open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true)
+                        .unwrap(),
+                ),
             })),
             vm: Arc::new(Mutex::new(memory_set)),
             sighand: Arc::new(Mutex::new(BTreeMap::new())),
@@ -283,7 +288,8 @@ impl TaskControlBlock {
         let (mut memory_set, program_break, elf_info) = MemorySet::from_elf(elf_data)?;
         log::trace!("[load_elf] ELF file mapped");
         memory_set.alloc_user_res(self.tid, true);
-        let user_sp = memory_set.create_elf_tables(self.ustack_bottom_va(), argv_vec, envp_vec, &elf_info);
+        let user_sp =
+            memory_set.create_elf_tables(self.ustack_bottom_va(), argv_vec, envp_vec, &elf_info);
         log::trace!("[load_elf] user sp after pushing parameters: {:X}", user_sp);
         // initialize trap_cx
         let trap_cx = TrapContext::app_init_context(
@@ -321,12 +327,23 @@ impl TaskControlBlock {
             None => (),
         });
         // destory all other threads
-        TASK_MANAGER.lock().ready_queue.retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
-        TASK_MANAGER.lock().interruptible_queue.retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
+        TASK_MANAGER
+            .lock()
+            .ready_queue
+            .retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
+        TASK_MANAGER
+            .lock()
+            .interruptible_queue
+            .retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
         Ok(())
         // **** release current PCB lock
     }
-    pub fn sys_clone(self: &Arc<TaskControlBlock>, flags: CloneFlags, stack: *const u8, tls: usize) -> Arc<TaskControlBlock> {
+    pub fn sys_clone(
+        self: &Arc<TaskControlBlock>,
+        flags: CloneFlags,
+        stack: *const u8,
+        tls: usize,
+    ) -> Arc<TaskControlBlock> {
         // ---- hold parent PCB lock
         let mut parent_inner = self.acquire_inner_lock();
         // copy user space(include trap context)
@@ -362,7 +379,7 @@ impl TaskControlBlock {
             .translate(VirtAddr::from(trap_cx_bottom_from_tid(tid)).into())
             .unwrap()
             .ppn();
-        
+
         let task_control_block = Arc::new(TaskControlBlock {
             pid: pid_handle,
             tid,
@@ -407,7 +424,9 @@ impl TaskControlBlock {
                 // compute
                 trap_cx_ppn,
                 task_cx: TaskContext::goto_trap_return(kstack_top),
-                parent: if flags.contains(CloneFlags::CLONE_PARENT) | flags.contains(CloneFlags::CLONE_THREAD) {
+                parent: if flags.contains(CloneFlags::CLONE_PARENT)
+                    | flags.contains(CloneFlags::CLONE_THREAD)
+                {
                     parent_inner.parent.clone()
                 } else {
                     Some(Arc::downgrade(self))
@@ -420,7 +439,12 @@ impl TaskControlBlock {
         // add child
         if flags.contains(CloneFlags::CLONE_PARENT) | flags.contains(CloneFlags::CLONE_THREAD) {
             if let Some(grandparent) = &parent_inner.parent {
-                grandparent.upgrade().unwrap().acquire_inner_lock().children.push(task_control_block.clone());
+                grandparent
+                    .upgrade()
+                    .unwrap()
+                    .acquire_inner_lock()
+                    .children
+                    .push(task_control_block.clone());
             }
         } else {
             parent_inner.children.push(task_control_block.clone());

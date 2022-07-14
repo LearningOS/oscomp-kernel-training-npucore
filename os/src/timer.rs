@@ -1,5 +1,5 @@
 #![allow(unused)]
-use core::ops::{Add, Sub};
+use core::ops::{Add, AddAssign, Sub};
 
 use crate::config::CLOCK_FREQ;
 use crate::sbi::set_timer;
@@ -60,7 +60,12 @@ pub struct TimeSpec {
     /// The tv_usec member captures rest of the elapsed time, represented as the number of microseconds.
     pub tv_nsec: usize,
 }
-
+impl AddAssign for TimeSpec {
+    fn add_assign(&mut self, rhs: Self) {
+        self.tv_sec += rhs.tv_sec;
+        self.tv_nsec += rhs.tv_nsec;
+    }
+}
 impl Add for TimeSpec {
     type Output = Self;
 
@@ -164,6 +169,7 @@ pub struct TimeVal {
     /// The `tv_nsec` member represents the rest of the elapsed time in nanoseconds.
     pub tv_usec: usize,
 }
+
 impl TimeVal {
     pub fn new() -> Self {
         Self {
@@ -237,6 +243,21 @@ impl Sub for TimeVal {
         }
     }
 }
+impl PartialEq for TimeVal {
+    fn eq(&self, other: &Self) -> bool {
+        self.tv_sec == other.tv_sec && self.tv_usec == other.tv_usec
+    }
+}
+
+impl PartialOrd for TimeVal {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        match self.tv_sec.partial_cmp(&other.tv_sec) {
+            Some(core::cmp::Ordering::Equal) => {}
+            ord => return ord,
+        }
+        self.tv_usec.partial_cmp(&other.tv_usec)
+    }
+}
 
 #[derive(Clone)]
 pub struct TimeZone {
@@ -269,4 +290,9 @@ pub struct Times {
     pub tms_cutime: usize,
     /// system time of children
     pub tms_cstime: usize,
+}
+
+pub enum TimeRange {
+    TimeSpec(TimeSpec),
+    TimeVal(TimeVal),
 }
