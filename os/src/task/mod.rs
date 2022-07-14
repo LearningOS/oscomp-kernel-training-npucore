@@ -100,8 +100,13 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     // ++++++ release parent PCB lock here
 
     inner.children.clear();
-    // deallocate user space
-    task.vm.lock().recycle_data_pages();
+    // deallocate user resource (trap context and user stack)
+    task.vm.lock().dealloc_user_res(task.tid);
+    // deallocate whole user space in advance, or if its parent do not call wait,
+    // this resource may not be recycled in a long period of time.
+    if Arc::strong_count(&task.vm) == 1 {
+        task.vm.lock().recycle_data_pages();
+    } 
     drop(inner);
     // **** release current PCB lock
     // drop task manually to maintain rc correctly

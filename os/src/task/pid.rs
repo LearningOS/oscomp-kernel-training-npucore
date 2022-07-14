@@ -80,7 +80,8 @@ impl Drop for KernelStack {
         let kernel_stack_bottom_va: VirtAddr = kernel_stack_bottom.into();
         KERNEL_SPACE
             .lock()
-            .remove_area_with_start_vpn(kernel_stack_bottom_va.into());
+            .remove_area_with_start_vpn(kernel_stack_bottom_va.into())
+            .unwrap();
     }
 }
 

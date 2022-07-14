@@ -468,7 +468,6 @@ impl TaskControlBlock {
 
 impl Drop for TaskControlBlock {
     fn drop(&mut self) {
-        self.vm.lock().dealloc_user_res(self.tid);
         self.tid_allocator.lock().dealloc(self.tid);
     }
 }
