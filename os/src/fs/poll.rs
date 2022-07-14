@@ -1,6 +1,5 @@
 use crate::{
-    syscall::errno::EINVAL,
-    task::{current_trap_cx, current_user_token, signal::Signals},
+    task::{current_user_token, signal::Signals},
     timer::TimeSpec,
 };
 use alloc::vec::Vec;
@@ -107,8 +106,11 @@ pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
 /// * A value of 0 indicates that the call timed out and no file descriptors were ready.
 /// * On error, -1 is returned, and errno is set appropriately.
 /// * The observed event is written back to the array, with others cleared.
-pub fn ppoll(poll_fd_p: usize, nfds: usize, time_spec: usize, sigmask: *const Signals) -> isize {
-    let oldsig = &mut Signals::empty();
+pub fn ppoll(poll_fd_p: usize, nfds: usize, _time_spec: usize, sigmask: *const Signals) -> isize {
+    // push to the top of TrapContext page, make use of redundant space
+    let oldsig = ((current_task().unwrap().trap_cx_user_va() + crate::config::PAGE_SIZE)
+        as *mut Signals)
+        .wrapping_sub(1);
     if !sigmask.is_null() {
         sigprocmask(SigMaskHow::SIG_SETMASK.bits(), sigmask, oldsig);
     }
@@ -187,6 +189,7 @@ pub struct FdSet {
     bits: [u64; 16],
 }
 use crate::lang_items::Bytes;
+#[allow(unused)]
 impl FdSet {
     /// Return an empty bitmap for further manipulation
     pub fn empty() -> Self {

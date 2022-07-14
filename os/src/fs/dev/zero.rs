@@ -7,6 +7,8 @@ use crate::{mm::UserBuffer, fs::{file_trait::{File}, layout::{Stat}, directory_t
 /// Data written to the `/dev/zero` special files is discarded.
 /// Reads from `/dev/zero` always return  bytes  containing  zero (`'\0'` characters).
 pub struct Zero;
+
+#[allow(unused)]
 impl File for Zero {
     fn deep_clone(&self) -> Arc<dyn File> {
         todo!()

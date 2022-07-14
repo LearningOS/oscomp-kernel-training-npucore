@@ -67,6 +67,7 @@ impl Teletype {
 }
 
 // TODO: independ of rust sbi
+#[allow(unused)]
 impl File for Teletype {
     fn deep_clone(&self) -> Arc<dyn File> {
         todo!()
