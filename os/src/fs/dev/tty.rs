@@ -70,7 +70,7 @@ impl Teletype {
 #[allow(unused)]
 impl File for Teletype {
     fn deep_clone(&self) -> Arc<dyn File> {
-        todo!()
+        TTY.clone()
     }
     fn readable(&self) -> bool {
         true
@@ -215,7 +215,7 @@ impl File for Teletype {
     }
 
     fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
-        todo!()
+        Err(ENOTDIR)
     }
 
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
