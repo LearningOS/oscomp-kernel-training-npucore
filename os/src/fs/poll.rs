@@ -280,14 +280,14 @@ impl Bytes<FdSet> for FdSet {
 ///    If timeout is NULL (no timeout), select() can block indefinitely.
 pub fn pselect(
     nfds: usize,
-    read_fds: &mut Option<&mut FdSet>,
-    write_fds: &mut Option<&mut FdSet>,
-    exception_fds: &mut Option<&mut FdSet>,
-    timeout: &Option<&mut TimeSpec>,
+    read_fds: &mut Option<FdSet>,
+    write_fds: &mut Option<FdSet>,
+    exception_fds: &mut Option<FdSet>,
+    timeout: &Option<TimeSpec>,
     sigmask: *const Signals,
 ) -> isize {
     let timeout: Option<TimeSpec> = if let Some(ref timeout) = timeout {
-        Some(**timeout + crate::timer::TimeSpec::now())
+        Some(*timeout + crate::timer::TimeSpec::now())
     } else {
         None
     };
@@ -377,7 +377,7 @@ pub fn pselect(
     }
     // count exception
     if let Some(exception_fds) = exception_fds {
-        **exception_fds = FdSet::empty();
+        *exception_fds = FdSet::empty();
     }
     if !sigmask.is_null() {
         sigprocmask(
