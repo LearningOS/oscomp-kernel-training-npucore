@@ -36,7 +36,6 @@ pub fn sys_getcwd(buf: usize, size: usize) -> isize {
         return EINVAL;
     }
     let working_dir = task.fs.lock().working_inode.get_cwd().unwrap();
-    log::error!("cwd: {}", working_dir);
     if working_dir.len() >= size {
         // The size argument is less than the length of the absolute pathname of the working directory,
         // including the terminating null byte.
@@ -1087,4 +1086,7 @@ pub fn sys_faccessat2(dirfd: usize, pathname: *const u8, mode: u32, flags: u32) 
         Ok(_) => SUCCESS,
         Err(errno) => errno,
     }
+}
+pub fn sys_msync(_addr: *const u8, _length: usize, _flags: u32) -> isize {
+    SUCCESS
 }

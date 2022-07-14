@@ -156,9 +156,14 @@ impl DirectoryTreeNode {
         for component in components {
             if *component == ".." {
                 let lock = current_inode.father.lock();
-                let par_inode = lock.upgrade().unwrap().clone();
-                drop(lock);
-                current_inode = par_inode;
+                let par_inode = lock.upgrade();
+                match par_inode {
+                    Some(par_inode) => {
+                        drop(lock);
+                        current_inode = par_inode;
+                    },
+                    None => {},
+                }
                 continue;
             }
             let lock = current_inode.children.upgradeable_read();

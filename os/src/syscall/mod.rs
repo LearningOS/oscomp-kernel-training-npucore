@@ -66,6 +66,7 @@ const SYSCALL_CLONE: usize = 220; // fork is implemented as clone(SIGCHLD, 0) in
 const SYSCALL_EXECVE: usize = 221;
 const SYSCALL_MMAP: usize = 222;
 const SYSCALL_MPROTECT: usize = 226;
+const SYSCALL_MSYNC: usize = 227;
 const SYSCALL_WAIT4: usize = 260; // wait is implemented as wait4(pid, status, options, 0) in lib.
 const SYSCALL_PRLIMIT: usize = 261;
 const SYSCALL_RENAMEAT2: usize = 276;
@@ -351,6 +352,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[2],
             args[3] as *const u8,
             args[4] as u32,
+        ),
+        SYSCALL_MSYNC => sys_msync(
+            args[0] as *const u8, 
+            args[1], 
+            args[2] as u32
         ),
         _ => {
             error!(
