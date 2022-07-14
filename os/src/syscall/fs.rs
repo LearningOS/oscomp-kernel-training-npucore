@@ -886,7 +886,7 @@ fn __openat(dirfd: usize, path: &str) -> Result<FileDescriptor, isize> {
 #[allow(non_camel_case_types)]
 #[derive(Debug, Eq, PartialEq, FromPrimitive)]
 #[repr(u32)]
-pub enum Command {
+pub enum Fcntl_Command {
     DUPFD = 0,
     GETFD = 1,
     SETFD = 2,
@@ -935,12 +935,12 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
     info!(
         "[sys_fcntl] fd:{}, cmd:{:?}, arg:{:X}",
         fd,
-        Command::from_primitive(cmd),
+        Fcntl_Command::from_primitive(cmd),
         arg
     );
     let file_descriptor = fd_table[fd].as_mut().unwrap();
-    match Command::from_primitive(cmd) {
-        Command::DUPFD | Command::DUPFD_CLOEXEC => {
+    match Fcntl_Command::from_primitive(cmd) {
+        Fcntl_Command::DUPFD | Fcntl_Command::DUPFD_CLOEXEC => {
             let newfd = match fd_table.alloc_fd_at(arg) {
                 Some(fd) => fd,
                 // cmd is F_DUPFD and arg is negative or is greater than the maximum allowable value
@@ -950,15 +950,15 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
             // take advantage of `DUPFD == 0`
             sys_dup3(fd, newfd, OpenFlags::O_CLOEXEC.bits() & cmd)
         }
-        Command::GETFD => file_descriptor.get_cloexec() as isize,
-        Command::SETFD => {
+        Fcntl_Command::GETFD => file_descriptor.get_cloexec() as isize,
+        Fcntl_Command::SETFD => {
             file_descriptor.set_cloexec((arg & FD_CLOEXEC) != 0);
             if (arg & !FD_CLOEXEC) != 0 {
                 warn!("[fcntl] Unsupported flag exists: {:X}", arg);
             }
             SUCCESS
         }
-        Command::GETFL => {
+        Fcntl_Command::GETFL => {
             // Access control is not fully implemented
             OpenFlags::O_RDWR.bits() as isize
         }

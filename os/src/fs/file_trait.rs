@@ -54,12 +54,11 @@ pub trait File: DowncastSync {
     fn oom(&self) -> usize;
     /// poll, select related
     fn hang_up(&self) -> bool;
-    /// fcntl
-    /// todo
-
     /// iotcl
     fn ioctl(&self, _cmd: u32, _argp: usize) -> isize {
         ENOTTY
     }
+    /// fcntl
+    fn fcntl(&self, cmd: u32, arg: u32) -> isize;
 }
 impl_downcast!(sync File);

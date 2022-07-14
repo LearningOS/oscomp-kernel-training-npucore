@@ -53,7 +53,7 @@ impl Drop for OSInode {
         }
     }
 }
-
+#[allow(unused)]
 impl File for OSInode {
     fn deep_clone(&self) -> Arc<dyn File> {
         if self.special_use {
@@ -370,6 +370,10 @@ impl File for OSInode {
     }
 
     fn hang_up(&self) -> bool {
+        todo!()
+    }
+
+    fn fcntl(&self, cmd: u32, arg: u32) -> isize {
         todo!()
     }
 }

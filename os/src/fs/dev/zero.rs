@@ -118,4 +118,8 @@ impl File for Zero {
     fn hang_up(&self) -> bool {
         todo!()
     }
+
+    fn fcntl(&self, cmd: u32, arg: u32) -> isize {
+        todo!()
+    }
 }
