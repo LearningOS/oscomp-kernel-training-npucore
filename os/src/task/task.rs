@@ -11,7 +11,6 @@ use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::CloneFlags;
 use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
-use crate::config::*;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -32,6 +31,7 @@ pub struct TaskControlBlock {
     pub tid: usize,
     pub tgid: usize,
     pub kstack: KernelStack,
+    pub ustack_base: usize,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
     // shareable and mutable
@@ -217,7 +217,7 @@ impl TaskControlBlock {
         let kstack = kstack_alloc();
         let kstack_top = kstack.get_top();
 
-        memory_set.alloc_user_res(tid);
+        memory_set.alloc_user_res(tid, true);
         let trap_cx_ppn = memory_set
             .translate(VirtAddr::from(trap_cx_bottom_from_tid(tid)).into())
             .unwrap()
@@ -228,6 +228,7 @@ impl TaskControlBlock {
             tid,
             tgid,
             kstack,
+            ustack_base: ustack_bottom_from_tid(tid),
             tid_allocator,
             files: Arc::new(Mutex::new(FdTable::new(vec![
                 // 0 -> stdin
@@ -281,7 +282,7 @@ impl TaskControlBlock {
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (mut memory_set, program_break, elf_info) = MemorySet::from_elf(elf_data)?;
         log::trace!("[load_elf] ELF file mapped");
-        memory_set.alloc_user_res(self.tid);
+        memory_set.alloc_user_res(self.tid, true);
         let user_sp = memory_set.create_elf_tables(self.ustack_bottom_va(), argv_vec, envp_vec, &elf_info);
         log::trace!("[load_elf] user sp after pushing parameters: {:X}", user_sp);
         // initialize trap_cx
@@ -325,7 +326,7 @@ impl TaskControlBlock {
         Ok(())
         // **** release current PCB lock
     }
-    pub fn sys_clone(self: &Arc<TaskControlBlock>, flags: CloneFlags) -> Arc<TaskControlBlock> {
+    pub fn sys_clone(self: &Arc<TaskControlBlock>, flags: CloneFlags, stack: *const u8, tls: usize) -> Arc<TaskControlBlock> {
         // ---- hold parent PCB lock
         let mut parent_inner = self.acquire_inner_lock();
         // copy user space(include trap context)
@@ -354,7 +355,7 @@ impl TaskControlBlock {
         let kstack_top = kstack.get_top();
 
         if flags.contains(CloneFlags::CLONE_THREAD) {
-            memory_set.lock().alloc_user_res(tid);
+            memory_set.lock().alloc_user_res(tid, stack.is_null());
         }
         let trap_cx_ppn = memory_set
             .lock()
@@ -367,6 +368,11 @@ impl TaskControlBlock {
             tid,
             tgid,
             kstack,
+            ustack_base: if !stack.is_null() {
+                stack as usize
+            } else {
+                ustack_bottom_from_tid(tid)
+            },
             tid_allocator,
             files: if flags.contains(CloneFlags::CLONE_FILES) {
                 self.files.clone()
@@ -423,6 +429,16 @@ impl TaskControlBlock {
         if flags.contains(CloneFlags::CLONE_THREAD) {
             *trap_cx = *parent_inner.get_trap_cx();
         }
+        // we also do not need to prepare parameters on stack, musl has done it for us
+        if !stack.is_null() {
+            trap_cx.x[2] = stack as usize;
+        }
+        // set tp
+        if flags.contains(CloneFlags::CLONE_SETTLS) {
+            trap_cx.x[4] = tls;
+        }
+        // for child process, fork returns 0
+        trap_cx.x[10] = 0;
         // modify kernel_sp in trap_cx
         trap_cx.kernel_sp = kstack_top;
         // return

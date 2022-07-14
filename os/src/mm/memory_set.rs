@@ -980,16 +980,20 @@ impl MemorySet {
         }
         user_sp
     }
-    pub fn alloc_user_res(&mut self, tid: usize) {
-        // alloc user stack
-        let ustack_bottom = ustack_bottom_from_tid(tid);
-        let ustack_top = ustack_bottom - USER_STACK_SIZE;
-        self.insert_framed_area(
-            ustack_top.into(),
-            ustack_bottom.into(),
-            MapPermission::R | MapPermission::W | MapPermission::U,
-        );
-        trace!("[alloc_user_res] user stack start_va: {:X}, end_va: {:X}", ustack_top, ustack_bottom);
+    pub fn alloc_user_res(&mut self, tid: usize, alloc_stack: bool) {
+        if alloc_stack {
+            // alloc user stack
+            let ustack_bottom = ustack_bottom_from_tid(tid);
+            let ustack_top = ustack_bottom - USER_STACK_SIZE;
+            self.insert_framed_area(
+                ustack_top.into(),
+                ustack_bottom.into(),
+                MapPermission::R | MapPermission::W | MapPermission::U,
+            );
+            trace!("[alloc_user_res] user stack start_va: {:X}, end_va: {:X}", ustack_top, ustack_bottom);
+        } else {
+            debug!("[alloc_user_res] user stack is not allocated (stack is designated in sys_clone)");
+        }
         // alloc trap_cx
         let trap_cx_bottom = trap_cx_bottom_from_tid(tid);
         let trap_cx_top = trap_cx_bottom + PAGE_SIZE;
