@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 use easy_fs::DiskInodeType;
 
-use crate::{fs::{file_trait::{File}, layout::{Stat}, directory_tree::DirectoryTreeNode}, mm::UserBuffer};
+use crate::{fs::{file_trait::{File}, layout::{Stat}, directory_tree::DirectoryTreeNode}, mm::UserBuffer, syscall::errno::{ESPIPE, ENOTDIR}};
 
 /// Data Sink
 /// Data written to the `/dev/null` special files is discarded.
@@ -10,7 +10,7 @@ pub struct Null;
 #[allow(unused)]
 impl File for Null {
     fn deep_clone(&self) -> Arc<dyn File> {
-        todo!()
+        Arc::new(Null {})
     }
     fn readable(&self) -> bool {
         true
@@ -62,11 +62,11 @@ impl File for Null {
     }
 
     fn open(&self, flags: crate::fs::layout::OpenFlags, special_use: bool) -> Arc<dyn File> {
-        todo!()
+        Arc::new(Null {})
     }
 
     fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
-        todo!()
+        Err(ENOTDIR)
     }
 
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
@@ -86,7 +86,7 @@ impl File for Null {
     }
 
     fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
-        todo!()
+        Err(ESPIPE)
     }
 
     fn modify_size(&self, diff: isize) -> Result<(), isize> {
