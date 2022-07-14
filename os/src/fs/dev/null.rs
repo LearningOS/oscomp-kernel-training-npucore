@@ -7,7 +7,7 @@ use crate::{fs::{file_trait::{File}, layout::{Stat}, directory_tree::DirectoryTr
 /// Data written to the `/dev/null` special files is discarded.
 /// Reads  from `/dev/null` always return end of file (i.e., read(2) returns 0)
 pub struct Null;
-
+#[allow(unused)]
 impl File for Null {
     fn deep_clone(&self) -> Arc<dyn File> {
         todo!()

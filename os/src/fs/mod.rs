@@ -20,7 +20,7 @@ use lazy_static::*;
 use alloc::{sync::{Arc}, string::{String, ToString}, vec::Vec, boxed::Box};
 use spin::Mutex;
 use crate::{mm::UserBuffer, syscall::{errno::*, fs::SeekWhence}};
-use self::{fs::{inode::OSInode, cache_mgr::PageCache}, file_trait::{File}, directory_tree::DirectoryTreeNode};
+use self::{fs::{cache_mgr::PageCache}, file_trait::{File}, directory_tree::DirectoryTreeNode};
 
 lazy_static!{
     pub static ref ROOT_FD: Arc<FileDescriptor> = Arc::new(FileDescriptor::new(
@@ -34,7 +34,7 @@ pub struct FileDescriptor {
     cloexec: bool,
     pub file: Arc<dyn File>,
 }
-
+#[allow(unused)]
 impl FileDescriptor {
     pub fn new(cloexec: bool, file: Arc<dyn File>) -> Self {
         Self { cloexec, file }
@@ -231,6 +231,7 @@ impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> IndexMut<I>
     }
 }
 
+#[allow(unused)]
 impl FdTable {
     pub const SYSTEM_FD_LIMIT: usize = 256;
     pub const DEFAULT_FD_LIMIT: usize = 64;

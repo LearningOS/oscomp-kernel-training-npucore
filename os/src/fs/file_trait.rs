@@ -58,7 +58,7 @@ pub trait File: DowncastSync {
     /// todo
 
     /// iotcl
-    fn ioctl(&self, cmd: u32, argp: usize) -> isize {
+    fn ioctl(&self, _cmd: u32, _argp: usize) -> isize {
         ENOTTY
     }
 }

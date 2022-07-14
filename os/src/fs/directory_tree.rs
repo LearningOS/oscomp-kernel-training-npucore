@@ -1,5 +1,3 @@
-use core::cell::RefCell;
-
 use alloc::{sync::{Arc, Weak}, collections::{BTreeMap}, string::{String, ToString}, vec::Vec};
 use easy_fs::{EasyFileSystem, DiskInodeType, CacheManager};
 use spin::{RwLock, Mutex, RwLockWriteGuard};
@@ -7,7 +5,7 @@ use lazy_static::*;
 
 use crate::{fs::{fs::{cache_mgr::BlockCacheManager, inode::{InodeImpl, OSInode}}, filesystem::FS}, drivers::BLOCK_DEVICE};
 use crate::syscall::errno::*;
-use super::{layout::{OpenFlags, Dirent}, dev::{null:: Null, zero::Zero, tty::Teletype}, file_trait::File, filesystem::FileSystem};
+use super::{layout::{OpenFlags}, dev::{null:: Null, zero::Zero, tty::Teletype}, file_trait::File, filesystem::FileSystem};
 
 lazy_static! {
     pub static ref FILE_SYSTEM: Arc<EasyFileSystem<BlockCacheManager>> = EasyFileSystem::open(

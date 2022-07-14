@@ -316,7 +316,7 @@ impl File for OSInode {
             .collect()
     }
     fn lseek(&self, offset: isize, whence: SeekWhence) -> Result<usize, isize> {
-        let mut lock = self.inner.lock();
+        let lock = self.inner.lock();
         let new_offset = match whence {
             SeekWhence::SEEK_SET => offset,
             SeekWhence::SEEK_CUR => *self.offset.lock() as isize + offset,

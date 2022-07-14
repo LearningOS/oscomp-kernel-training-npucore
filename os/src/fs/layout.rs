@@ -121,6 +121,7 @@ pub struct Stat {
     __unused: u64,
 }
 
+#[allow(unused)]
 impl Stat {
     /// Get the inode number described in the `Stat`
     pub fn get_ino(&self) -> usize {

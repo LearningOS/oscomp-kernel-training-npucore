@@ -123,6 +123,7 @@ pub fn make_pipe() -> (Arc<Pipe>, Arc<Pipe>) {
     (read_end, write_end)
 }
 
+#[allow(unused)]
 impl File for Pipe {
     fn deep_clone(&self) -> Arc<dyn File> {
         todo!()
