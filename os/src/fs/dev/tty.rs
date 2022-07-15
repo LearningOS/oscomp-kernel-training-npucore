@@ -99,7 +99,7 @@ impl File for Teletype {
     }
 
     #[cfg(feature = "board_k210")]
-    fn read_ready(&self) -> bool {
+    fn r_ready(&self) -> bool {
         let mut inner = self.inner.lock();
         // in this case, user program call pselect() before, should return true
         if inner.last_char == 0 {
