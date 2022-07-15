@@ -122,19 +122,8 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
 
 lazy_static! {
     pub static ref INITPROC: Arc<TaskControlBlock> = Arc::new({
-        let inode = ROOT_FD.open("initproc", OpenFlags::O_RDONLY, true).unwrap();
-        let start: usize = crate::config::MMAP_BASE;
-        let len = inode.get_size();
-        crate::mm::KERNEL_SPACE.lock().insert_framed_area(
-            start.into(),
-            (start + len).into(),
-            crate::mm::MapPermission::R | crate::mm::MapPermission::W,
-        );
-        unsafe {
-            let buffer = core::slice::from_raw_parts_mut(start as *mut u8, len);
-            inode.read(None, buffer);
-            TaskControlBlock::new(buffer)
-        }
+        let elf = ROOT_FD.open("initproc", OpenFlags::O_RDONLY, true).unwrap();
+        TaskControlBlock::new(elf)
     });
 }
 

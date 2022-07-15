@@ -201,6 +201,28 @@ impl FileDescriptor {
     pub fn ioctl(&self, cmd: u32, argp: usize) -> isize {
         self.file.ioctl(cmd, argp)
     }
+    // for execve
+    pub fn map_to_kernel_space(&self, addr: usize) -> &'static [u8] {
+        let caches = self.get_all_caches().unwrap();
+        let frames = caches
+            .iter()
+            .map(|cache| {
+                let lock = cache.try_lock();
+                assert!(lock.is_some());
+                Some(lock.unwrap().get_tracker())
+            })
+            .collect();
+
+        crate::mm::KERNEL_SPACE
+            .lock()
+            .insert_program_area(
+                addr.into(),
+                crate::mm::MapPermission::R | crate::mm::MapPermission::W,
+                frames,
+            )
+            .unwrap();
+        unsafe { core::slice::from_raw_parts_mut(addr as *mut u8, self.get_size()) }
+    }
 }
 
 #[derive(Clone)]

@@ -520,39 +520,13 @@ pub fn sys_execve(
                 _ => return ENOEXEC,
             };
 
-            let buffer =
-                unsafe { core::slice::from_raw_parts_mut(MMAP_BASE as *mut u8, elf.get_size()) };
-            let caches = elf.get_all_caches().unwrap();
-            let frames = caches
-                .iter()
-                .map(|cache| {
-                    let lock = cache.try_lock();
-                    assert!(lock.is_some());
-                    Some(lock.unwrap().get_tracker())
-                })
-                .collect();
-
-            crate::mm::KERNEL_SPACE
-                .lock()
-                .insert_program_area(
-                    MMAP_BASE.into(),
-                    crate::mm::MapPermission::R | crate::mm::MapPermission::W,
-                    frames,
-                )
-                .unwrap();
-
             let task = current_task().unwrap();
             show_frame_consumption! {
                 "load_elf";
-                if let Err(errno) = task.load_elf(buffer, &argv_vec, &envp_vec) {
+                if let Err(errno) = task.load_elf(elf, &argv_vec, &envp_vec) {
                     return errno;
                 };
             }
-            // remove elf area
-            crate::mm::KERNEL_SPACE
-                .lock()
-                .remove_area_with_start_vpn(VirtAddr::from(MMAP_BASE).floor())
-                .unwrap();
             // should return 0 in success
             SUCCESS
         }
