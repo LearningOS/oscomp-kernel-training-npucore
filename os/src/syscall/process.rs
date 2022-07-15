@@ -1,13 +1,13 @@
-use crate::config::{CLOCK_FREQ, MMAP_BASE, PAGE_SIZE, USER_STACK_SIZE};
+use crate::config::{MMAP_BASE, PAGE_SIZE, USER_STACK_SIZE};
 use crate::fs::{FdTable, OpenFlags};
 use crate::mm::{
-    copy_from_user, copy_to_user, copy_to_user_string, get_from_user, translated_byte_buffer,
+    copy_from_user, copy_to_user, copy_to_user_string, get_from_user_checked, translated_byte_buffer,
     translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
     VirtAddr,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
-use crate::task::threads::{futex, FUTEX_CLOCK_REALTIME, FUTEX_PRIVATE};
+use crate::task::threads::futex;
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
     exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
@@ -15,7 +15,6 @@ use crate::task::{
 };
 use crate::timer::{
     get_time, get_time_ms, get_time_sec, ITimerVal, TimeSpec, TimeVal, TimeZone, Times,
-    NSEC_PER_SEC,
 };
 use crate::trap::TrapContext;
 use alloc::boxed::Box;
@@ -745,6 +744,15 @@ pub fn sys_set_tid_address(tidptr: usize) -> isize {
         .clear_child_tid = tidptr;
     sys_gettid()
 }
+
+
+bitflags! {
+    pub struct FutexOption: u32 {
+        const PRIVATE = 128;
+        const CLOCK_REALTIME = 256;
+    }
+}
+
 /// # Description
 /// fast user-space locking
 /// # Arguments
@@ -759,38 +767,35 @@ pub fn sys_set_tid_address(tidptr: usize) -> isize {
 /// * `uaddr2`: `usize`,
 /// * `val3`: `u32`,
 pub fn sys_futex(
-    uaddr: usize,
+    uaddr: *mut u32,
     futex_op: u32,
     val: u32,
     timeout: *const TimeSpec,
-    uaddr2: usize,
+    uaddr2: *mut u32,
     val3: u32,
 ) -> isize {
-    if uaddr % 4 != 0 {
+    let task = current_task().unwrap();
+    let token = task.get_user_token();
+    // uaddr is always used
+    if uaddr.is_null() || uaddr.align_offset(4) != 0 {
         return EINVAL;
     }
-    let token = current_user_token();
-    let private_futex = (futex_op | FUTEX_PRIVATE) != 0;
-    let rt_clk = (futex_op | FUTEX_CLOCK_REALTIME) != 0;
-    let real_cmd = futex_op & (!(FUTEX_CLOCK_REALTIME | FUTEX_PRIVATE));
-    let futex_word = translated_refmut(token, uaddr as *mut u32);
-    let uwd2 = translated_refmut(token, uaddr as *mut u32);
-    let timeout = if timeout.is_null() {
-        None
-    } else {
-        Some(get_from_user(token, timeout))
-    };
-    let cmd =
-        <threads::FutexCmd as core::convert::TryFrom<u32>>::try_from(real_cmd as u32).unwrap();
-
+    let futex_word = translated_refmut(token, uaddr);
+    let cmd = threads::FutexCmd::from_primitive(futex_op & 0x7fu32);
+    let option = FutexOption::from_bits_truncate(futex_op);
+    if !option.contains(FutexOption::PRIVATE) {
+        warn!("[futex] process-shared futex is unimplemented");
+    }
+    let timeout = get_from_user_checked(token, timeout);
+    info!(
+        "[futex] uaddr: {:?}, futex_op: {:?}, option: {:?}, val: {:X}, timeout: {:?}, uaddr2: {:?}, val3: {:X}",
+        uaddr, cmd, option, val, timeout, uaddr2, val3
+    );
     futex(
         futex_word,
-        uwd2,
         val,
-        val3,
         cmd,
-        private_futex,
-        rt_clk,
+        option,
         timeout,
     )
 }
@@ -850,10 +855,7 @@ pub fn sys_clock_gettime(clk_id: usize, tp: *mut TimeSpec) -> isize {
         let token = current_user_token();
         let timespec = &TimeSpec::now();
         copy_to_user(token, timespec, tp);
-        info!(
-            "[sys_clock_gettime] clk_id: {}, tp: {:?}",
-            clk_id, timespec
-        );
+        info!("[sys_clock_gettime] clk_id: {}, tp: {:?}", clk_id, timespec);
     }
     SUCCESS
 }

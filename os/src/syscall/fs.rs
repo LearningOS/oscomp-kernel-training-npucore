@@ -7,7 +7,7 @@ use crate::fs::{
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
     translated_byte_buffer_append_to_existing_vec, translated_refmut, translated_str,
-    MapPermission, UserBuffer, get_from_user,
+    MapPermission, UserBuffer, get_from_user_checked,
 };
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
@@ -975,16 +975,6 @@ pub fn sys_pselect(
     timeout: *mut TimeSpec,
     sigmask: *const crate::task::signal::Signals,
 ) -> isize {
-    pub fn get_from_user_checked<T: 'static +  Copy>(
-        token: usize,
-        src: *const T,
-    ) -> Option<T> {
-        if !src.is_null() {
-            Some(get_from_user(token, src))
-        } else {
-            None
-        }
-    }
     if (nfds as isize) < 0 {
         return EINVAL;
     }

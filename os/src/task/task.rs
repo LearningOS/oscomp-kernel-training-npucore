@@ -6,7 +6,6 @@ use super::trap_cx_bottom_from_tid;
 use super::ustack_bottom_from_tid;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
-use crate::config::*;
 use crate::fs::{FdTable, FileDescriptor, OpenFlags, ROOT_FD};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::CloneFlags;
