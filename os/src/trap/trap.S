@@ -1,9 +1,17 @@
+.attribute arch, "rv64gc"
+FP_START = 37
 .altmacro
 .macro SAVE_GP n
     sd x\n, \n*8(sp)
 .endm
 .macro LOAD_GP n
     ld x\n, \n*8(sp)
+.endm
+.macro SAVE_FP n, m
+    fsd f\n, \m*8(sp)
+.endm
+.macro LOAD_FP n, m
+    fld f\n, \m*8(sp)
 .endm
     .section .text.trampoline
     .globl __alltraps
@@ -15,14 +23,17 @@ __alltraps:
     # save other general purpose registers
     sd x1, 1*8(sp)
     # skip sp(x2), we will save it later
-    sd x3, 3*8(sp)
-    sd x4, 4*8(sp) # store tp(x4), application does use it
-    # skip tp(x4), application does not use it
-    # save x5~x31
-    .set n, 5
+    .set n, 3
     .rept 27
         SAVE_GP %n
         .set n, n+1
+    .endr
+    .set n, 0
+    .set m, FP_START
+    .rept 32
+        SAVE_FP %n, %m
+        .set n, n+1
+        .set m, m+1
     .endr
     # we can use t0/t1/t2 freely, because they have been saved in TrapContext
     csrr t0, sstatus
@@ -57,14 +68,19 @@ __restore:
     ld t1, 33*8(sp)
     csrw sstatus, t0
     csrw sepc, t1
-    # restore general purpose registers except x0/sp/tp
+    # restore general purpose registers except x0/sp
     ld x1, 1*8(sp)
-    ld x3, 3*8(sp)
-    ld x4, 4*8(sp)
-    .set n, 5
+    .set n, 3
     .rept 27
         LOAD_GP %n
         .set n, n+1
+    .endr
+    .set n, 0
+    .set m, FP_START
+    .rept 32
+        LOAD_FP %n, %m
+        .set n, n+1
+        .set m, m+1
     .endr
     # back to user stack
     ld sp, 2*8(sp)
