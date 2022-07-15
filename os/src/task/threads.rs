@@ -1,16 +1,16 @@
 use crate::{
-    syscall::errno::SUCCESS,
+    syscall::{errno::*, FutexOption},
     task::{block_current_and_run_next, current_task, suspend_current_and_run_next},
     timer::{get_time, get_time_ns, TimeRange, TimeSpec},
 };
 use alloc::collections::BTreeMap;
 use lazy_static::lazy_static;
 use log::*;
-use num_enum::TryFromPrimitive;
+use num_enum::FromPrimitive;
 use spin::Mutex;
 
 #[allow(unused)]
-#[derive(Debug, Eq, PartialEq, TryFromPrimitive)]
+#[derive(Debug, Eq, PartialEq, FromPrimitive)]
 #[repr(u32)]
 pub enum FutexCmd {
     /// This  operation  tests  that  the value at the futex
@@ -46,10 +46,10 @@ pub enum FutexCmd {
     UnlockPi = 7,
     TrylockPi = 8,
     WaitBitset = 9,
+    #[num_enum(default)]
+    Invalid,
 }
 
-pub const FUTEX_PRIVATE: u32 = 128;
-pub const FUTEX_CLOCK_REALTIME: u32 = 256;
 lazy_static! {
     static ref FUTEX_WAIT_NO: Mutex<BTreeMap<usize, u32>> = Mutex::new(BTreeMap::new());
 }
@@ -57,12 +57,9 @@ lazy_static! {
 /// Currently the `rt_clk` is ignored.
 pub fn futex(
     futex_word: &mut u32,
-    uwd2: &mut u32,
     val: u32,
-    val3: u32,
     cmd: FutexCmd,
-    private_futex: bool,
-    rt_clk: bool,
+    option: FutexOption,
     timeout: Option<TimeSpec>,
 ) -> isize {
     let timeout = timeout.map(|t| t + TimeSpec::now());
@@ -71,11 +68,15 @@ pub fn futex(
         // Returns  0  if the caller was woken up.
         FutexCmd::Wait => {
             // old rev.
-            loop {
-                if *futex_word != val {
-                    info!("[FUTEX_WAIT] quit for value change.");
-                    return SUCCESS;
-                } else {
+
+            if *futex_word != val {
+                info!(
+                    "[FUTEX_WAIT] quit for value change, futex: {:X}, val: {:X}",
+                    *futex_word, val
+                );
+                return EAGAIN;
+            } else {
+                loop {
                     let mut lock = FUTEX_WAIT_NO.lock();
                     if let Some(i) = lock.get(&futex_word_addr) {
                         info!("[FUTEX_WAIT] released for a new ticket.");
@@ -120,13 +121,7 @@ pub fn futex(
                 }
             }
         }
-        FutexCmd::Fd => todo!(),
-        FutexCmd::Requeue => todo!(),
-        FutexCmd::CmpRequeue => todo!(),
-        FutexCmd::WakeOp => todo!(),
-        FutexCmd::LockPi => todo!(),
-        FutexCmd::UnlockPi => todo!(),
-        FutexCmd::TrylockPi => todo!(),
-        FutexCmd::WaitBitset => todo!(),
+        FutexCmd::Invalid => EINVAL,
+        _ => ENOSYS,
     }
 }

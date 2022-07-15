@@ -2,13 +2,12 @@ use super::{
     frame_alloc, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne, VirtAddr,
     VirtPageNum,
 };
-use _core::mem::{uninitialized, MaybeUninit};
+use _core::mem::{MaybeUninit};
 use _core::ops::{Index, IndexMut};
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
 use bitflags::*;
-use core::fmt::Error;
 bitflags! {
     /// Page Table Entry flags
     pub struct PTEFlags: u8 {
@@ -521,6 +520,18 @@ pub fn get_from_user<T: 'static + Copy>(token: usize, src: *const T) -> T {
         let mut dst: T = MaybeUninit::uninit().assume_init();
         copy_from_user(token, src, &mut dst);
         return dst;
+    }
+}
+
+#[inline(always)]
+pub fn get_from_user_checked<T: 'static +  Copy>(
+    token: usize,
+    src: *const T,
+) -> Option<T> {
+    if !src.is_null() {
+        Some(get_from_user(token, src))
+    } else {
+        None
     }
 }
 

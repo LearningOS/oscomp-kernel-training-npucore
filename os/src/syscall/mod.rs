@@ -85,7 +85,7 @@ mod process;
 
 use fs::*;
 use log::{debug, error, info, trace, warn};
-pub use process::CloneFlags;
+pub use process::{CloneFlags, FutexOption};
 use process::*;
 
 pub fn syscall_name(id: usize) -> &'static str {
@@ -198,7 +198,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         show_info = true;
         info!(
             "[syscall] pid: {}, syscall_id: {} ({}), \nargs: {:?}",
-            sys_getpid(),
+            sys_gettid(),
             syscall_name(syscall_id),
             syscall_id,
             args
@@ -313,11 +313,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         ),
         SYSCALL_SET_TID_ADDRESS => sys_set_tid_address(args[0]),
         SYSCALL_FUTEX => sys_futex(
-            args[0],
+            args[0] as *mut u32,
             args[1] as u32,
             args[2] as u32,
             args[3] as *const TimeSpec,
-            args[4],
+            args[4] as *mut u32,
             args[5] as u32,
         ),
         SYSCALL_GETUID => sys_getuid(),
@@ -376,7 +376,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if show_info {
         info!(
             "[syscall] pid: {}, syscall_id: {} ({}) returned {}",
-            sys_getpid(),
+            sys_gettid(),
             syscall_name(syscall_id),
             syscall_id,
             ret
