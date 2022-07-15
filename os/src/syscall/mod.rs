@@ -248,6 +248,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as u32,
         ),
         SYSCALL_FSTAT => sys_fstat(args[0], args[1] as *mut u8),
+        SYSCALL_FSYNC => sys_fsync(args[0]),
         SYSCALL_UTIMENSAT => sys_utimensat(
             args[0],
             args[1] as *const u8,
@@ -355,7 +356,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[4] as u32,
         ),
         SYSCALL_MSYNC => sys_msync(
-            args[0] as *const u8, 
+            args[0], 
             args[1], 
             args[2] as u32
         ),

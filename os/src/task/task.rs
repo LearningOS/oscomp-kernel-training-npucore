@@ -6,6 +6,7 @@ use super::trap_cx_bottom_from_tid;
 use super::ustack_bottom_from_tid;
 use super::TaskContext;
 use super::{pid_alloc, KernelStack, PidHandle};
+use crate::config::MMAP_BASE;
 use crate::fs::{FdTable, FileDescriptor, OpenFlags, ROOT_FD};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::CloneFlags;
@@ -35,6 +36,7 @@ pub struct TaskControlBlock {
     // mutable
     inner: Mutex<TaskControlBlockInner>,
     // shareable and mutable
+    pub exe: Arc<Mutex<FileDescriptor>>,
     pub tid_allocator: Arc<Mutex<RecycleAllocator>>,
     pub files: Arc<Mutex<FdTable>>,
     pub fs: Arc<Mutex<FsStatus>>,
@@ -200,12 +202,13 @@ impl TaskControlBlock {
     }
     /// !!!!!!!!!!!!!!!!WARNING!!!!!!!!!!!!!!!!!!!!!
     /// Currently used for initproc loading only. bin_path must be used changed if used elsewhere.
-    pub fn new(elf_data: &[u8]) -> Self {
-        // memory_set with elf program headers/trampoline/trap context/user stack
+    pub fn new(elf: FileDescriptor) -> Self {
+        let elf_data = elf.map_to_kernel_space(MMAP_BASE);
+        // memory_set with elf program headers/trampoline
         let (mut memory_set, user_heap, elf_info) = MemorySet::from_elf(elf_data).unwrap();
         crate::mm::KERNEL_SPACE
             .lock()
-            .remove_area_with_start_vpn(VirtAddr::from(elf_data.as_ptr() as usize).floor())
+            .remove_area_with_start_vpn(VirtAddr::from(MMAP_BASE).floor())
             .unwrap();
 
         let tid_allocator = Arc::new(Mutex::new(RecycleAllocator::new()));
@@ -229,6 +232,7 @@ impl TaskControlBlock {
             tgid,
             kstack,
             ustack_base: ustack_bottom_from_tid(tid),
+            exe: Arc::new(Mutex::new(elf)),
             tid_allocator,
             files: Arc::new(Mutex::new(FdTable::new(vec![
                 // 0 -> stdin
@@ -279,13 +283,19 @@ impl TaskControlBlock {
 
     pub fn load_elf(
         &self,
-        elf_data: &[u8],
+        elf: FileDescriptor,
         argv_vec: &Vec<String>,
         envp_vec: &Vec<String>,
     ) -> Result<(), isize> {
+        let elf_data = elf.map_to_kernel_space(MMAP_BASE);
         // memory_set with elf program headers/trampoline/trap context/user stack
         let (mut memory_set, program_break, elf_info) = MemorySet::from_elf(elf_data)?;
         log::trace!("[load_elf] ELF file mapped");
+        // remove elf area
+        crate::mm::KERNEL_SPACE
+        .lock()
+        .remove_area_with_start_vpn(VirtAddr::from(MMAP_BASE).floor())
+        .unwrap();
         memory_set.alloc_user_res(self.tid, true);
         let user_sp =
             memory_set.create_elf_tables(self.ustack_bottom_va(), argv_vec, envp_vec, &elf_info);
@@ -310,12 +320,10 @@ impl TaskControlBlock {
             .unwrap()
             .ppn();
         *inner.get_trap_cx() = trap_cx;
-        // substitute memory_set
-        *self.vm.lock() = memory_set;
         inner.heap_bottom = program_break;
         inner.heap_pt = program_break;
-        // flush signal handler
-        *self.sighand.lock() = BTreeMap::new();
+        // track the change of ELF file
+        *self.exe.lock() = elf;
         // flush cloexec fd
         self.files.lock().iter_mut().for_each(|fd| match fd {
             Some(file) => {
@@ -325,6 +333,10 @@ impl TaskControlBlock {
             }
             None => (),
         });
+        // substitute memory_set
+        *self.vm.lock() = memory_set;
+        // flush signal handler
+        *self.sighand.lock() = BTreeMap::new();
         // destory all other threads
         TASK_MANAGER
             .lock()
@@ -389,6 +401,7 @@ impl TaskControlBlock {
             } else {
                 ustack_bottom_from_tid(tid)
             },
+            exe: self.exe.clone(),
             tid_allocator,
             files: if flags.contains(CloneFlags::CLONE_FILES) {
                 self.files.clone()

@@ -5,9 +5,9 @@ use crate::fs::{
     Dirent, FileDescriptor, Null, Stat, Zero, TTY,
 };
 use crate::mm::{
-    copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, translated_byte_buffer,
-    translated_byte_buffer_append_to_existing_vec, translated_refmut, translated_str,
-    MapPermission, UserBuffer, get_from_user_checked,
+    copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string,
+    get_from_user_checked, translated_byte_buffer, translated_byte_buffer_append_to_existing_vec,
+    translated_refmut, translated_str, MapPermission, UserBuffer, VirtAddr,
 };
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
@@ -285,7 +285,7 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: *mut usize, count: usiz
 }
 
 pub fn sys_close(fd: usize) -> isize {
-    info!("[sys_close] fd:{}", fd);
+    info!("[sys_close] fd: {}", fd);
     let task = current_task().unwrap();
     let mut fd_table = task.files.lock();
     if fd >= fd_table.len() || fd_table[fd].is_none() {
@@ -442,28 +442,35 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: u32) -> isize {
 
 // This syscall is not complete at all, only /read proc/self/exe
 pub fn sys_readlinkat(dirfd: usize, pathname: *const u8, buf: *mut u8, bufsiz: usize) -> isize {
-    if dirfd == AT_FDCWD {
-        let token = current_user_token();
-        let path = translated_str(token, pathname);
-        if path.as_str() != "/proc/self/exe" {
-            panic!("sys_readlinkat: pathname not support");
-        }
-        let mut userbuf = UserBuffer::new(translated_byte_buffer(token, buf, bufsiz));
-        //let procinfo = "/lmbench_all\0";
-        let procinfo = "/busybox\0";
-        let buff = procinfo.as_bytes();
-        userbuf.write(buff);
-
-        let len = procinfo.len() - 1;
-        info!(
-            "[sys_readlinkat] dirfd = {}, pathname = {}, *buf = 0x{:X}, bufsiz = {}, len = {}",
-            dirfd, path, buf as usize, bufsiz, len
-        );
-
-        return len as isize;
+    let task = current_task().unwrap();
+    let token = task.get_user_token();
+    let path = translated_str(token, pathname);
+    let real_path = if path.as_str() == "/proc/self/exe" {
+        task.exe.lock().get_cwd().unwrap()
     } else {
-        panic!("sys_readlinkat: fd not support");
-    }
+        match __openat(dirfd, &path) {
+            Ok(file) => {
+                // we don't implement symbolic link, so if we found it...
+                warn!(
+                    "[sys_readlinkat] not a symbolic link! dirfd: {}, path: {}",
+                    dirfd as isize, path
+                );
+                // The file of `pathname` is not a symbolic link
+                return EINVAL;
+            }
+            Err(errno) => return errno,
+        }
+    };
+    let len = real_path.len().min(bufsiz - 1);
+    // `copy_to_user_string` will add '\0' in the end, so written length is `len + 1`
+    copy_to_user_string(token, &real_path[0..len], buf);
+
+    debug!(
+        "[sys_readlinkat] dirfd: {}, pathname: {}, buf: {:?}, bufsiz: {}, written: {}",
+        dirfd as isize, path, buf, bufsiz, real_path
+    );
+
+    (len + 1) as isize
 }
 
 bitflags! {
@@ -486,8 +493,8 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
     };
 
     info!(
-        "[sys_fstatat] dirfd = {}, path = {:?}, flags: {:?}",
-        dirfd, path, flags,
+        "[sys_fstatat] dirfd: {}, path: {:?}, flags: {:?}",
+        dirfd as isize, path, flags,
     );
 
     let task = current_task().unwrap();
@@ -515,7 +522,7 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
 
-    info!("[syscall_fstat] fd = {}", fd);
+    info!("[sys_fstat] fd: {}", fd);
     let file_descriptor = match fd {
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
@@ -531,6 +538,18 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
         file_descriptor.get_stat().as_ref(),
         statbuf as *mut Stat,
     );
+    SUCCESS
+}
+
+pub fn sys_fsync(fd: usize) -> isize {
+    let task = current_task().unwrap();
+    let token = task.get_user_token();
+
+    info!("[sys_fsync] fd: {}", fd);
+    let fd_table = task.files.lock();
+    if fd >= fd_table.len() || fd_table[fd].is_none() {
+        return EBADF;
+    }
     SUCCESS
 }
 
@@ -564,8 +583,8 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
     };
     let mode = StatMode::from_bits(mode);
     info!(
-        "[sys_openat] dirfd: {}, path:{}, flags:{:?}, mode:{:?}",
-        dirfd, path, flags, mode
+        "[sys_openat] dirfd: {}, path: {}, flags: {:?}, mode: {:?}",
+        dirfd as isize, path, flags, mode
     );
     let mut fd_table = task.files.lock();
     let file_descriptor = match dirfd {
@@ -604,8 +623,8 @@ pub fn sys_renameat2(
     let newpath = translated_str(token, newpath);
 
     info!(
-        "[sys_renameat2] olddirfd: {}, oldpath:{}, newdirfd: {}, newpath: {}, flags:{}",
-        olddirfd, oldpath, newdirfd, newpath, flags
+        "[sys_renameat2] olddirfd: {}, oldpath: {}, newdirfd: {}, newpath: {}, flags: {}",
+        olddirfd as isize, oldpath, newdirfd as isize, newpath, flags
     );
 
     let old_file_descriptor = match olddirfd {
@@ -665,7 +684,7 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
     let path = translated_str(token, path);
     info!(
         "[sys_mkdirat] dirfd: {}, path: {}, mode: {:?}",
-        dirfd,
+        dirfd as isize,
         path,
         StatMode::from_bits(mode)
     );
@@ -706,7 +725,7 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
     };
     info!(
         "[sys_unlinkat] dirfd: {}, path: {}, flags: {:?}",
-        dirfd, path, flags
+        dirfd as isize, path, flags
     );
 
     let file_descriptor = match dirfd {
@@ -834,7 +853,7 @@ pub fn sys_utimensat(
 
     info!(
         "[sys_utimensat] dirfd: {}, path: {}, times: {:?}, flags: {:?}",
-        dirfd, path, times, flags
+        dirfd as isize, path, times, flags
     );
 
     let inode = match __openat(dirfd, &path) {
@@ -865,7 +884,7 @@ pub fn sys_utimensat(
 }
 
 /// # Warning
-/// `acquire_inner_lock()` is called in this function
+/// `fs` & `files` is locked in this function
 fn __openat(dirfd: usize, path: &str) -> Result<FileDescriptor, isize> {
     let task = current_task().unwrap();
     let file_descriptor = match dirfd {
@@ -931,7 +950,7 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
     }
 
     info!(
-        "[sys_fcntl] fd:{}, cmd:{:?}, arg:{:X}",
+        "[sys_fcntl] fd: {}, cmd: {:?}, arg: {:X}",
         fd,
         Fcntl_Command::from_primitive(cmd),
         arg
@@ -1052,7 +1071,7 @@ pub fn sys_faccessat2(dirfd: usize, pathname: *const u8, mode: u32, flags: u32) 
 
     info!(
         "[sys_faccessat2] dirfd: {}, pathname: {}, mode: {:?}, flags: {:?}",
-        dirfd, pathname, mode, flags
+        dirfd as isize, pathname, mode, flags
     );
 
     // Do not check user's authority, because user group is not implemented yet.
@@ -1062,6 +1081,34 @@ pub fn sys_faccessat2(dirfd: usize, pathname: *const u8, mode: u32, flags: u32) 
         Err(errno) => errno,
     }
 }
-pub fn sys_msync(_addr: *const u8, _length: usize, _flags: u32) -> isize {
+
+bitflags! {
+    pub struct MsyncFlags: u32 {
+        const MS_ASYNC      =   1;
+        const MS_INVALIDATE =   2;
+        const MS_SYNC       =   4;
+    }
+}
+
+pub fn sys_msync(addr: usize, length: usize, flags: u32) -> isize {
+    if !VirtAddr::from(addr).aligned() {
+        return EINVAL;
+    }
+    let flags = match MsyncFlags::from_bits(flags) {
+        Some(flags) => flags,
+        None => return EINVAL,
+    };
+    let task = current_task().unwrap();
+    if !task
+        .vm
+        .lock()
+        .contains_valid_buffer(addr, length, MapPermission::empty())
+    {
+        return ENOMEM;
+    }
+    info!(
+        "[sys_msync] addr: {:X}, length: {:X}, flags: {:?}",
+        addr, flags, flags
+    );
     SUCCESS
 }
