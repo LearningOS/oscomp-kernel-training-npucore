@@ -102,7 +102,7 @@ bootloader:
 	@$(OBJCOPY) $(RUSTSBI_K210_ELF) --strip-all -O binary ../bootloader/rustsbi-k210.bin
 	@$(OBJDUMP) -S $(RUSTSBI_K210_ELF) > ../bootloader/rustsbi-k210.S
 try_bootldr:
-	@cd ../rustsbi-k210 && cargo build
+	@cd ../rustsbi-k210 && cargo build --release
 	@$(OBJCOPY) $(RUSTSBI_MISAL_ELF) --strip-all -O binary ../bootloader/rustsbi-misal.bin
 	@$(OBJDUMP) -S $(RUSTSBI_MISAL_ELF) > ../bootloader/rustsbi-misal.S
 kernel:
