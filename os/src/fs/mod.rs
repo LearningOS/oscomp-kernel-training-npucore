@@ -228,7 +228,8 @@ impl FileDescriptor {
 #[derive(Clone)]
 pub struct FdTable {
     inner: Vec<Option<FileDescriptor>>,
-    limit: usize,
+    soft_limit: usize,
+    hard_limit: usize,
 }
 
 impl<I: core::slice::SliceIndex<[Option<FileDescriptor>]>> Index<I> for FdTable {
@@ -254,21 +255,35 @@ impl FdTable {
     pub fn new(inner: Vec<Option<FileDescriptor>>) -> Self {
         Self {
             inner,
-            limit: FdTable::DEFAULT_FD_LIMIT,
+            soft_limit: FdTable::DEFAULT_FD_LIMIT,
+            hard_limit: FdTable::SYSTEM_FD_LIMIT,
         }
     }
-    pub fn get_limit(&self) -> usize {
-        self.limit
+    pub fn get_soft_limit(&self) -> usize {
+        self.soft_limit
     }
-    pub fn set_limit(&mut self, limit: usize) {
-        if limit < self.limit {
+    pub fn set_soft_limit(&mut self, limit: usize) {
+        if limit < self.soft_limit {
             log::warn!(
                 "[FdTable::set_limit] new limit: {} is smaller than old limit: {}",
                 limit,
-                self.limit
+                self.soft_limit
             );
         }
-        self.limit = limit;
+        self.soft_limit = limit;
+    }
+    pub fn get_hard_limit(&self) -> usize {
+        self.hard_limit
+    }
+    pub fn set_hard_limit(&mut self, limit: usize) {
+        if limit < self.hard_limit {
+            log::warn!(
+                "[FdTable::set_limit] new limit: {} is smaller than old limit: {}",
+                limit,
+                self.hard_limit
+            );
+        }
+        self.hard_limit = limit;
     }
     #[inline(always)]
     pub fn len(&self) -> usize {
@@ -288,24 +303,27 @@ impl FdTable {
     }
     /// Try to alloc fd at `hint`, if `hint` is allocated, will alloc lowest valid fd above.
     pub fn alloc_fd_at(&mut self, hint: usize) -> Option<usize> {
-        if hint < self.inner.len() {
-            if let Some(fd) = (hint..self.inner.len()).find(|fd| self.inner[*fd].is_none()) {
-                Some(fd)
-            } else {
-                if self.inner.len() < self.limit {
-                    self.inner.push(None);
-                    Some(self.inner.len() - 1)
+        if hint >= self.soft_limit {
+            return None;
+        }
+        let limit = self.inner.len().min(self.soft_limit);
+        match (hint..limit).find(|fd| self.inner[*fd].is_none()) {
+            Some(fd) => Some(fd),
+            None => {
+                if hint <= limit {
+                    if limit < self.soft_limit {
+                        if limit == self.inner.len() {
+                            self.inner.push(None);
+                        }
+                        Some(limit)
+                    } else {
+                        None
+                    }
                 } else {
-                    None
+                    self.inner.resize(hint + 1, None);
+                    Some(hint)
                 }
-            }
-        } else {
-            if hint < self.limit {
-                self.inner.resize(hint + 1, None);
-                Some(hint)
-            } else {
-                None
-            }
+            },
         }
     }
 }
