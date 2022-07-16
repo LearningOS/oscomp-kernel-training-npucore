@@ -675,11 +675,12 @@ pub fn sys_prlimit(
                     );
                 }
                 Resource::NOFILE => {
+                    let lock = task.files.lock();
                     copy_to_user(
                         token,
                         &(RLimit {
-                            rlim_cur: task.files.lock().get_limit(),
-                            rlim_max: FdTable::SYSTEM_FD_LIMIT,
+                            rlim_cur: lock.get_soft_limit(),
+                            rlim_max: lock.get_hard_limit(),
                         }),
                         old_limit,
                     );
@@ -696,7 +697,8 @@ pub fn sys_prlimit(
             copy_from_user(token, new_limit, rlimit);
             match resource {
                 Resource::NOFILE => {
-                    task.files.lock().set_limit(rlimit.rlim_cur);
+                    task.files.lock().set_soft_limit(rlimit.rlim_cur);
+                    task.files.lock().set_hard_limit(rlimit.rlim_max);
                 }
                 Resource::ILLEAGAL => return EINVAL,
                 _ => todo!(),

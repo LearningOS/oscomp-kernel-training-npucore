@@ -394,6 +394,7 @@ pub fn sys_dup(oldfd: usize) -> isize {
         Some(fd) => fd,
         None => return EMFILE,
     };
+    info!("[sys_dup] oldfd: {}, newfd: {}", oldfd, newfd);
     fd_table[newfd] = Some(fd_table[oldfd].as_ref().unwrap().clone());
     newfd as isize
 }
@@ -432,7 +433,7 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: u32) -> isize {
             // `newfd` is not allocated in this case, so `fd` should never differ from `newfd`
             Some(fd) => assert_eq!(fd, newfd),
             // newfd is out of the allowed range for file descriptors
-            None => return EBADF,
+            None => return EMFILE,
         };
     }
     fd_table[newfd] = Some(fd_table[oldfd].as_ref().unwrap().clone());
@@ -961,7 +962,7 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
             let newfd = match fd_table.alloc_fd_at(arg) {
                 Some(fd) => fd,
                 // cmd is F_DUPFD and arg is negative or is greater than the maximum allowable value
-                None => return EINVAL,
+                None => return EMFILE,
             };
             drop(fd_table);
             // take advantage of `DUPFD == 0`
