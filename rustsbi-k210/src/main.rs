@@ -134,7 +134,7 @@ fn delegate_interrupt_exception() {
         medeleg::set_breakpoint();
         medeleg::set_user_env_call();
         medeleg::set_load_misaligned();
-        medeleg::set_store_misaligned();
+        //        medeleg::set_store_misaligned();
         /* MMU Exception Delegation
         /* Page Faults are *Reserved* in 1.9.1 version */
         - medeleg::set_instruction_page_fault();
