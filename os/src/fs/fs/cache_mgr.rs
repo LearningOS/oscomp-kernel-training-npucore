@@ -1,5 +1,5 @@
 use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
-use crate::mm::{frame_alloc, FrameTracker};
+use crate::mm::{frame_alloc, FrameTracker, KERNEL_SPACE, PageTableEntry};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use easy_fs::{BlockDevice, Cache, CacheManager};
@@ -9,7 +9,7 @@ const PAGE_BUFFERS: usize = 8;
 const BUFFER_SIZE: usize = 512;
 const CACHEPOOLSIZE: usize = 16;
 const CACHEPOOLPAGE: usize = CACHEPOOLSIZE >> 3;
-const PRIORITY_UPPERBOUND: usize = 3;
+const PRIORITY_UPPERBOUND: usize = 1;
 
 pub struct BufferCache {
     /// Every time kernel tried to alloc this buffer this number will increase 1(at most 3)
@@ -181,7 +181,7 @@ impl CacheManager for BlockCacheManager {
 /// Each PageCache contains PAGE_BUFFERS(8) BufferCache.
 pub struct PageCache {
     /// Priority is used for out of memory
-    /// Every time kernel tried to alloc this pagecache this number will increase 1(at most 3)
+    /// Every time kernel tried to alloc this pagecache this number will increase 1(at most 1)
     /// Every time out of memory occurred this number will decrease 1(at least 0)
     /// When it's 0 and Arc's strong count is 1(one in inode) this PageCache will be dropped
     priority: usize,
@@ -215,7 +215,11 @@ impl Cache for PageCache {
     }
 
     fn sync(&self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {
-        self.write_back(block_ids, &block_device);
+        match self.get_pte() {
+            Some(pte) => {if !pte.is_dirty() {return;}},
+            None => {},
+        }
+        self.write_back(block_ids, block_device)
     }
 }
 
@@ -233,6 +237,16 @@ impl PageCache {
 
     pub fn get_tracker(&self) -> Arc<FrameTracker> {
         self.tracker.clone()
+    }
+
+    fn get_pte(&self) -> Option<PageTableEntry> {
+        let lock = KERNEL_SPACE.try_lock();
+        match lock {
+            Some(lock) => {
+                Some(lock.translate(self.tracker.ppn.0.into())).unwrap()
+            },
+            None => None,
+        }
     }
 
     pub fn read_in(&mut self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {
