@@ -3,6 +3,7 @@ TARGET := riscv64gc-unknown-none-elf
 MODE := release
 RUSTSBI_K210_ELF := ../rustsbi-k210/target/riscv64imac-unknown-none-elf/debug/rustsbi-k210
 RUSTSBI_K210_BIN := $(RUSTSBI_K210_ELF).bin
+RUSTSBI_MISAL_ELF := ../rustsbi-k210/target/riscv64gc-unknown-none-elf/release/rustsbi-k210
 KERNEL_ELF := target/$(TARGET)/$(MODE)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
 DISASM_TMP := target/$(TARGET)/$(MODE)/asm
@@ -33,7 +34,8 @@ ifeq ($(BOARD), qemu)
 		BOOTLOADER := ../bootloader/fw_payload.bin
 	endif
 else ifeq ($(BOARD), k210)
-	BOOTLOADER := ../bootloader/rustsbi-$(BOARD).bin
+#	BOOTLOADER := ../bootloader/rustsbi-$(BOARD).bin
+	BOOTLOADER := ../bootloader/rustsbi-misal.bin
 endif
 K210_BOOTLOADER_SIZE := 131072
 
@@ -103,7 +105,10 @@ bootloader:
 	@cd ../rustsbi-k210 && cargo build
 	@$(OBJCOPY) $(RUSTSBI_K210_ELF) --strip-all -O binary ../bootloader/rustsbi-k210.bin
 	@$(OBJDUMP) -S $(RUSTSBI_K210_ELF) > ../bootloader/rustsbi-k210.S
-
+try_bootldr:
+	@cd ../rustsbi-k210 && cargo build
+	@$(OBJCOPY) $(RUSTSBI_MISAL_ELF) --strip-all -O binary ../bootloader/rustsbi-misal.bin
+	@$(OBJDUMP) -S $(RUSTSBI_MISAL_ELF) > ../bootloader/rustsbi-misal.S
 kernel:
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
