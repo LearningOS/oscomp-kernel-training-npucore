@@ -3,7 +3,7 @@ use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::layout::Stat;
 use crate::syscall::errno::*;
 use crate::syscall::fs::Fcntl_Command;
-use crate::task::suspend_current_and_run_next;
+use crate::task::{suspend_current_and_run_next, current_task};
 use crate::{fs::file_trait::File, mm::UserBuffer};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -139,6 +139,12 @@ impl File for Pipe {
             return read_size;
         }
         loop {
+            let task = current_task().unwrap();
+            let inner = task.acquire_inner_lock();
+            if !inner.sigpending.is_empty() {
+                return EINTR as usize;
+            }
+            drop(inner);
             let mut ring = self.buffer.lock();
             if ring.status == RingBufferStatus::EMPTY {
                 if ring.all_write_ends_closed() {
@@ -178,6 +184,12 @@ impl File for Pipe {
             return write_size;
         }
         loop {
+            let task = current_task().unwrap();
+            let inner = task.acquire_inner_lock();
+            if !inner.sigpending.is_empty() {
+                return EINTR as usize;
+            }
+            drop(inner);
             let mut ring = self.buffer.lock();
             if ring.status == RingBufferStatus::FULL {
                 if ring.all_read_ends_closed() {
