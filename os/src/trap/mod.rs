@@ -5,7 +5,7 @@ use crate::config::TRAMPOLINE;
 use crate::mm::VirtAddr;
 use crate::syscall::syscall;
 use crate::task::{
-    current_task, current_trap_cx, current_user_token, do_signal, suspend_current_and_run_next,
+    current_task, current_trap_cx, do_signal, suspend_current_and_run_next,
     Signals,
 };
 use crate::timer::set_next_trigger;
@@ -14,6 +14,7 @@ use riscv::register::{
     scause::{self, Exception, Interrupt, Trap},
     sie, stval, stvec,
 };
+pub use context::{TrapContext, MachineContext, UserContext};
 
 global_asm!(include_str!("trap.S"));
 
@@ -62,12 +63,12 @@ pub fn trap_handler() -> ! {
             cx.sepc += 4;
             // get system call return value
             let result = syscall(
-                cx.x[17],
-                [cx.x[10], cx.x[11], cx.x[12], cx.x[13], cx.x[14], cx.x[15]],
+                cx.gp.x[17],
+                [cx.gp.x[10], cx.gp.x[11], cx.gp.x[12], cx.gp.x[13], cx.gp.x[14], cx.gp.x[15]],
             );
             // cx is changed during sys_exec, so we have to call it again
             cx = current_trap_cx();
-            cx.x[10] = result as usize;
+            cx.gp.x[10] = result as usize;
         }
         Trap::Exception(Exception::StoreFault)
         | Trap::Exception(Exception::StorePageFault)
@@ -137,9 +138,6 @@ pub fn trap_return() -> ! {
 
 #[no_mangle]
 pub fn trap_from_kernel() -> ! {
-    println!("I will protect {:X}!", __call_sigreturn as usize);
-    // It seems like rust has not keyword like "volatile" to protect some variables from being optimized out.
-    // So I have to put it here. Hope someone can find a better way to solve it!
     panic!(
         "a trap {:?} from kernel! bad addr = {:#x}, bad instruction = {:#x}",
         scause::read().cause(),
@@ -147,5 +145,3 @@ pub fn trap_from_kernel() -> ! {
         current_trap_cx().sepc
     );
 }
-
-pub use context::TrapContext;

@@ -1,9 +1,8 @@
-use crate::config::{MMAP_BASE, PAGE_SIZE, USER_STACK_SIZE};
+use crate::config::{PAGE_SIZE, USER_STACK_SIZE};
 use crate::fs::{FdTable, OpenFlags};
 use crate::mm::{
     copy_from_user, copy_to_user, copy_to_user_string, get_from_user_checked, translated_byte_buffer,
     translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
-    VirtAddr,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
@@ -16,7 +15,7 @@ use crate::task::{
 use crate::timer::{
     get_time, get_time_ms, get_time_sec, ITimerVal, TimeSpec, TimeVal, TimeZone, Times,
 };
-use crate::trap::TrapContext;
+use crate::trap::{TrapContext, MachineContext};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -90,14 +89,12 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
         // signal will be sent to an arbitrary task with target `pid` (`tgid` more precisely).
         // But manual also require that the target task should not mask this signal.
         if let Some(task) = find_task_by_tgid(pid) {
-            if let Some(signal) = signal {
-                let mut inner = task.acquire_inner_lock();
-                inner.add_signal(signal);
-                // wake up target process if it is sleeping
-                if inner.task_status == TaskStatus::Interruptible {
-                    inner.task_status = TaskStatus::Ready;
-                    wake_interruptible(task.clone());
-                }
+            let mut inner = task.acquire_inner_lock();
+            inner.add_signal(signal);
+            // wake up target process if it is sleeping
+            if inner.task_status == TaskStatus::Interruptible {
+                inner.task_status = TaskStatus::Ready;
+                wake_interruptible(task.clone());
             }
             SUCCESS
         } else {
@@ -120,14 +117,12 @@ pub fn sys_tkill(tid: usize, sig: usize) -> isize {
     };
     if tid > 0 {
         if let Some(task) = find_task_by_pid(tid) {
-            if let Some(signal) = signal {
-                let mut inner = task.acquire_inner_lock();
-                inner.add_signal(signal);
-                // wake up target process if it is sleeping
-                if inner.task_status == TaskStatus::Interruptible {
-                    inner.task_status = TaskStatus::Ready;
-                    wake_interruptible(task.clone());
-                }
+            let mut inner = task.acquire_inner_lock();
+            inner.add_signal(signal);
+            // wake up target process if it is sleeping
+            if inner.task_status == TaskStatus::Interruptible {
+                inner.task_status = TaskStatus::Ready;
+                wake_interruptible(task.clone());
             }
             SUCCESS
         } else {
@@ -425,8 +420,9 @@ pub fn sys_clone(
     let exit_signal = match Signals::from_signum((flags & 0xff) as usize) {
         Ok(signal) => signal,
         Err(_) => {
+            warn!("[sys_clone] signum of exit_signal is unspecified or invalid: {}", (flags & 0xff) as usize);
             // This is permitted by standard, but we only support 64 signals
-            todo!()
+            Signals::SIGCHLD
         }
     };
     // Sure to succeed, because all bits are valid (See `CloneFlags`)
@@ -865,14 +861,26 @@ pub fn sys_sigtimedwait(set: usize, info: usize, timeout: usize) -> isize {
 pub fn sys_sigreturn() -> isize {
     // mark not processing signal handler
     let task = current_task().unwrap();
-    info!("[sys_sigreturn] pid: {}", task.pid.0);
-    let inner = task.acquire_inner_lock();
+    let mut inner = task.acquire_inner_lock();
     let token = task.get_user_token();
-    // restore trap_cx
+    info!("[sys_sigreturn] pid: {}", task.pid.0);
+
     let trap_cx = inner.get_trap_cx();
-    let sp = trap_cx.x[2];
-    copy_from_user(token, sp as *const TrapContext, trap_cx);
-    return trap_cx.x[10] as isize; //return a0: not modify any of trap_cx
+    // restore sigmask & trap context
+    let mut sp = trap_cx.gp.x[2];
+    sp += size_of::<SigInfo>();
+    copy_from_user(
+        token,
+        (sp + 2 * size_of::<usize>() + size_of::<SignalStack>()) as *mut Signals,
+        &mut inner.sigmask
+    ); // restore sigmask
+    copy_from_user(
+        token,
+        (sp + 2 * size_of::<usize>() + size_of::<SignalStack>() + size_of::<Signals>())
+            as *mut TrapContext,
+        trap_cx as *mut TrapContext
+    ); // restore trap_cx
+    return trap_cx.gp.x[10] as isize; // return a0: not modify any of trap_cx
 }
 
 /// Get process times

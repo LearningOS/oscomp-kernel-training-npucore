@@ -77,6 +77,13 @@ pub fn futex(
                 return EAGAIN;
             } else {
                 loop {
+                    let task = current_task().unwrap();
+                    let inner = task.acquire_inner_lock();
+                    if !inner.sigpending.is_empty() {
+                        return EINTR;
+                    }
+                    drop(inner);
+                    drop(task);
                     let mut lock = FUTEX_WAIT_NO.lock();
                     if let Some(i) = lock.get(&futex_word_addr) {
                         info!("[FUTEX_WAIT] released for a new ticket.");
