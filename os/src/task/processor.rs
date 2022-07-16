@@ -1,6 +1,6 @@
 use core::task::Waker;
 
-use super::__switch;
+use super::{__switch, Signals};
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
 use crate::trap::TrapContext;

@@ -145,6 +145,7 @@ impl File for Pipe {
                 return EINTR as usize;
             }
             drop(inner);
+            drop(task);
             let mut ring = self.buffer.lock();
             if ring.status == RingBufferStatus::EMPTY {
                 if ring.all_write_ends_closed() {
