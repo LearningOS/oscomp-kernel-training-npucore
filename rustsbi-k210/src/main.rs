@@ -70,7 +70,7 @@ extern "C" fn rust_main() -> ! {
         hart_csr_utils::print_hart_csrs();
         println!("[rustsbi] enter supervisor 0x80020000");
     }
-    execute::execute_supervisor(0x80020000, hartid, DEVICE_TREE_BINARY.as_ptr() as usize)
+    execute::execute_supervisor(0x80020000, hartid, DEVICE_TREE_BINARY.as_ptr() as usize);
 }
 
 fn pause_if_not_start_hart() {
