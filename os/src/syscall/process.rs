@@ -422,7 +422,7 @@ pub fn sys_clone(
         Err(_) => {
             warn!("[sys_clone] signum of exit_signal is unspecified or invalid: {}", (flags & 0xff) as usize);
             // This is permitted by standard, but we only support 64 signals
-            Signals::SIGCHLD
+            Signals::empty()
         }
     };
     // Sure to succeed, because all bits are valid (See `CloneFlags`)
@@ -543,7 +543,7 @@ bitflags! {
 /// Else if there is a child process but it is still running, return -2.
 pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> isize {
     let option = WaitOption::from_bits(option).unwrap();
-    // info!("[sys_waitpid] pid: {}, option: {:?}", pid, option);
+    info!("[sys_wait4] pid: {}, option: {:?}", pid, option);
     let task = current_task().unwrap();
     let token = task.get_user_token();
     loop {
@@ -565,8 +565,8 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
             .iter()
             .filter(|p| pid == -1 || pid as usize == p.getpid())
             .for_each(|p| {
-                info!(
-                    "pid: {}, status: {:?}",
+                trace!(
+                    "[sys_wait4] found child pid: {}, status: {:?}",
                     p.pid.0,
                     p.acquire_inner_lock().task_status
                 )
@@ -584,7 +584,7 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
             // ++++ temporarily hold child lock
             let exit_code = child.acquire_inner_lock().exit_code;
             // ++++ release child PCB lock
-            if status as usize != 0 {
+            if !status.is_null() {
                 // this may NULL!!!
                 *translated_refmut(token, status) = exit_code;
             }
@@ -595,6 +595,7 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
                 return SUCCESS;
             } else {
                 block_current_and_run_next();
+                debug!("[sys_wait4] --resumed--");
             }
         }
     }
