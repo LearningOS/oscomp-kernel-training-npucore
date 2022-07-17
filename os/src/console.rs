@@ -1,4 +1,4 @@
-use crate::sbi::console_putchar;
+use crate::{sbi::console_putchar, task::current_task};
 use core::fmt::{self, Write};
 use log::{self, Level, LevelFilter, Log, Metadata, Record};
 
@@ -57,7 +57,10 @@ impl Log for Logger {
         }
 
         print!("\x1b[{}m", level_to_color_code(record.level()));
-        println!("[{}] {}", record.level(), record.args());
+        match current_task() {
+            Some(task) => println!("pid {}: {}", task.pid.0, record.args()),
+            None => println!("kernel: {}", record.args()),
+        }
         print!("\x1b[0m")
     }
 

@@ -83,6 +83,7 @@ pub mod errno;
 pub mod fs;
 mod process;
 
+use core::convert::TryFrom;
 use fs::*;
 use log::{debug, error, info, trace, warn};
 pub use process::{CloneFlags, FutexOption};
@@ -175,7 +176,7 @@ pub fn syscall_name(id: usize) -> &'static str {
 use crate::{
     fs::poll::FdSet,
     task::Rusage,
-    timer::{ITimerVal, TimeSpec, Times},
+    timer::{ITimerVal, TimeSpec, Times}, syscall::errno::Errno,
 };
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
@@ -188,8 +189,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_GETDENTS64,
         SYSCALL_READV,
         SYSCALL_WRITEV,
-        SYSCALL_WAIT4,
-        //        SYSCALL_WAITPID,
+        // SYSCALL_WAIT4,
         SYSCALL_GETPPID,
         SYSCALL_CLOCK_GETTIME,
     ]
@@ -197,11 +197,15 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     {
         show_info = true;
         info!(
-            "[syscall] pid: {}, syscall_id: {} ({}), \nargs: {:?}",
-            sys_gettid(),
+            "[syscall] {}({}) args: [{:X}, {:X}, {:X}, {:X}, {:X}, {:X}]",
             syscall_name(syscall_id),
             syscall_id,
-            args
+            args[0],
+            args[1],
+            args[2],
+            args[3],
+            args[4],
+            args[5],
         );
     }
     let ret = match syscall_id {
@@ -375,13 +379,20 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     };
 
     if show_info {
-        info!(
-            "[syscall] pid: {}, syscall_id: {} ({}) returned {}",
-            sys_gettid(),
-            syscall_name(syscall_id),
-            syscall_id,
-            ret
-        );
+        match Errno::try_from(ret) {
+            Ok(errno) => info!(
+                "[syscall] {}({}) -> {:?}",
+                syscall_name(syscall_id),
+                syscall_id,
+                errno
+            ),
+            Err(val) => info!(
+                "[syscall] {}({}) -> {:X}",
+                syscall_name(syscall_id),
+                syscall_id,
+                val.number
+            ),
+        }
     }
     ret
 }
