@@ -4,7 +4,11 @@ use core::{
     panic,
     pin::Pin,
 };
-use riscv::register::scause::{Exception, Trap};
+use riscv::register::{
+    mepc,
+    scause::{Exception, Trap},
+};
+use rustsbi::print;
 
 use crate::feature;
 use crate::runtime::{MachineTrap, Runtime, SupervisorContext};
@@ -72,118 +76,27 @@ pub fn execute_supervisor(supervisor_mepc: usize, a0: usize, a1: usize) -> ! {
                 }
             }
             GeneratorState::Yielded(MachineTrap::LoadMisaligned(addr)) => {
+                print!("[rustsbi::execute.rs] LMA at {}\n", addr);
+
+                handle_load_misal_native(addr, &mut rt);
                 let ctx = rt.context_mut();
-                let ins = unsafe { get_vaddr_u32(ctx.mepc) };
-                let rd = get_rd(ins);
-
-                let dst_reg: &mut usize = match rd {
-                    1 => &mut rt.context_mut().ra,
-                    2 => &mut rt.context_mut().sp,
-                    3 => &mut rt.context_mut().gp,
-                    4 => &mut rt.context_mut().tp,
-
-                    5 => &mut rt.context_mut().t0,
-                    6 => &mut rt.context_mut().t1,
-                    7 => &mut rt.context_mut().t2,
-
-                    8 => &mut rt.context_mut().s0,
-                    9 => &mut rt.context_mut().s1,
-
-                    10 => &mut rt.context_mut().a0,
-                    11 => &mut rt.context_mut().a1,
-                    12 => &mut rt.context_mut().a2,
-                    13 => &mut rt.context_mut().a3,
-                    14 => &mut rt.context_mut().a4,
-                    15 => &mut rt.context_mut().a5,
-                    16 => &mut rt.context_mut().a6,
-                    17 => &mut rt.context_mut().a7,
-
-                    18 => &mut rt.context_mut().s2,
-                    19 => &mut rt.context_mut().s3,
-                    20 => &mut rt.context_mut().s4,
-                    21 => &mut rt.context_mut().s5,
-                    22 => &mut rt.context_mut().s6,
-                    23 => &mut rt.context_mut().s7,
-                    24 => &mut rt.context_mut().s8,
-                    25 => &mut rt.context_mut().s9,
-                    26 => &mut rt.context_mut().s10,
-                    27 => &mut rt.context_mut().s11,
-
-                    28 => &mut rt.context_mut().t3,
-                    29 => &mut rt.context_mut().t4,
-                    30 => &mut rt.context_mut().t5,
-                    31 => &mut rt.context_mut().t6,
-                    _ => panic!(),
-                };
-                match get_funct(ins) {
-                    0b000 => {
-                        //lb
-                        unsafe {
-                            s_lv_translation_mode_on();
-                            *dst_reg = (addr as *const i8).read_unaligned() as usize;
-                            s_lv_translation_mode_off();
-                        }
-                    }
-                    0b001 => {
-                        //lh
-                        unsafe {
-                            s_lv_translation_mode_on();
-                            *dst_reg = (addr as *const i16).read_unaligned() as usize;
-                            s_lv_translation_mode_off();
-                        }
-                    }
-                    0b010 => {
-                        //lw
-                        unsafe {
-                            s_lv_translation_mode_on();
-                            *dst_reg = (addr as *const i32).read_unaligned() as usize;
-                            s_lv_translation_mode_off();
-                        }
-                    }
-                    0b011 => {
-                        //ld
-                        unsafe {
-                            s_lv_translation_mode_on();
-                            *dst_reg = (addr as *const u64).read_unaligned() as usize;
-                            s_lv_translation_mode_off();
-                        }
-                    }
-                    0b100 => {
-                        //lbu
-                        unsafe {
-                            s_lv_translation_mode_on();
-                            *dst_reg = (addr as *const u8).read_unaligned() as usize;
-                            s_lv_translation_mode_off();
-                        }
-                    }
-                    0b101 => {
-                        //lhu
-                        unsafe {
-                            s_lv_translation_mode_on();
-                            *dst_reg = (addr as *const u16).read_unaligned() as usize;
-                            s_lv_translation_mode_off();
-                        }
-                    }
-                    0b110 => {
-                        //lwu
-                        unsafe {
-                            s_lv_translation_mode_on();
-                            *dst_reg = (addr as *const u32).read_unaligned() as usize;
-                            s_lv_translation_mode_off();
-                        }
-                    }
-                    _ => {
-                        panic!("Unsupported load version")
-                    }
-                }
+                ctx.mepc = ctx.mepc.wrapping_add(4);
             }
             /* K210 implements only priv. 1.9.1 which doesn't contain a real `mtval` register,
              * but only a `mbadaddr` register.
              * However, it seems that the abi is actually the same for the access of the two.
              */
-            /* GeneratorState::Yielded(MachineTrap::StoreMisaligned(addr)) => {
-             *     handle_store_misaligned(addr, &mut rt)
-             * } */
+            GeneratorState::Yielded(MachineTrap::StoreMisaligned(addr)) => {
+202370;
+                print!(
+                    "[rustsbi::execute.rs] SMA at {}, mepc:{}\n",
+                    addr,
+                    rt.context_mut().mepc,
+                );
+                handle_store_misal_native(addr, &mut rt);
+                let ctx = rt.context_mut();
+                ctx.mepc = ctx.mepc.wrapping_add(4);
+            }
             GeneratorState::Yielded(MachineTrap::LoadFault(addr)) => {
                 let ctx = rt.context_mut();
                 if feature::is_page_fault(addr) {
@@ -194,6 +107,7 @@ pub fn execute_supervisor(supervisor_mepc: usize, a0: usize, a1: usize) -> ! {
                     unsafe { feature::do_transfer_trap(ctx, Trap::Exception(Exception::LoadFault)) }
                 }
             }
+
             GeneratorState::Yielded(MachineTrap::StoreFault(addr)) => {
                 let ctx = rt.context_mut();
                 if feature::is_page_fault(addr) {
@@ -343,6 +257,100 @@ fn emulate_illegal_instruction(ctx: &mut SupervisorContext, ins: usize) -> bool 
 fn fail_illegal_instruction(ctx: &mut SupervisorContext, ins: usize) -> ! {
     panic!("invalid instruction from machine level, mepc: {:016x?}, instruction: {:016x?}, context: {:016x?}", ctx.mepc, ins, ctx);
 }
+fn handle_store_misal_native(addr: usize, rt: &mut Runtime) {
+    let ctx = rt.context_mut();
+    let ins = unsafe { get_vaddr_u32(ctx.mepc) };
+    let mut store_val = match get_rs2(ins) {
+        0 => 0,
+        1 => rt.context_mut().ra,
+        2 => rt.context_mut().sp,
+        3 => rt.context_mut().gp,
+        4 => rt.context_mut().tp,
+
+        5 => rt.context_mut().t0,
+        6 => rt.context_mut().t1,
+        7 => rt.context_mut().t2,
+
+        8 => rt.context_mut().s0,
+        9 => rt.context_mut().s1,
+
+        10 => rt.context_mut().a0,
+        11 => rt.context_mut().a1,
+        12 => rt.context_mut().a2,
+        13 => rt.context_mut().a3,
+        14 => rt.context_mut().a4,
+        15 => rt.context_mut().a5,
+        16 => rt.context_mut().a6,
+        17 => rt.context_mut().a7,
+
+        18 => rt.context_mut().s2,
+        19 => rt.context_mut().s3,
+        20 => rt.context_mut().s4,
+        21 => rt.context_mut().s5,
+        22 => rt.context_mut().s6,
+        23 => rt.context_mut().s7,
+        24 => rt.context_mut().s8,
+        25 => rt.context_mut().s9,
+        26 => rt.context_mut().s10,
+        27 => rt.context_mut().s11,
+
+        28 => rt.context_mut().t3,
+        29 => rt.context_mut().t4,
+        30 => rt.context_mut().t5,
+        31 => rt.context_mut().t6,
+        _ => panic!(),
+    };
+
+    match get_funct(ins) {
+        0b000 => {
+            //sb
+            unsafe {
+                s_lv_translation_mode_on();
+                (addr as *mut u8).write_unaligned(store_val as u8);
+                s_lv_translation_mode_off();
+            }
+        }
+        0b001 => {
+            //sh
+            unsafe {
+                s_lv_translation_mode_on();
+                (addr as *mut u16).write_unaligned(store_val as u16);
+                s_lv_translation_mode_off();
+            }
+        }
+        0b010 => {
+            //sw
+            unsafe {
+                s_lv_translation_mode_on();
+                (addr as *mut u32).write_unaligned(store_val as u32);
+                s_lv_translation_mode_off();
+            }
+        }
+        0b011 => {
+            //sd
+            unsafe {
+                s_lv_translation_mode_on();
+                (addr as *mut usize).write_unaligned(store_val as usize);
+                s_lv_translation_mode_off();
+            }
+        }
+        0b110 => {
+            //sq
+            unsafe {
+                s_lv_translation_mode_on();
+                (addr as *mut u128).write_unaligned(store_val as u128);
+                s_lv_translation_mode_off();
+            }
+        }
+        _ => {
+            panic!(
+                "Unsupported store version, ins:{}, funct:{}",
+                ins,
+                get_funct(ins)
+            );
+        }
+    }
+}
 fn handle_store_misaligned(addr: usize, rt: &mut Runtime) {
     let ctx = rt.context_mut();
     let ins = unsafe { get_vaddr_u32(ctx.mepc) };
@@ -486,6 +494,114 @@ fn handle_store_misaligned(addr: usize, rt: &mut Runtime) {
         }
         _ => {
             panic!("Unknown funct code for store type. Failed to store misaligned data.");
+        }
+    }
+}
+fn handle_load_misal_native(addr: usize, rt: &mut Runtime) {
+    let ctx = rt.context_mut();
+    let ins = unsafe { get_vaddr_u32(ctx.mepc) };
+    let rd = get_rd(ins);
+    if rd == 0 {
+        return;
+    }
+    let dst_reg: &mut usize = match rd {
+        1 => &mut rt.context_mut().ra,
+        2 => &mut rt.context_mut().sp,
+        3 => &mut rt.context_mut().gp,
+        4 => &mut rt.context_mut().tp,
+
+        5 => &mut rt.context_mut().t0,
+        6 => &mut rt.context_mut().t1,
+        7 => &mut rt.context_mut().t2,
+
+        8 => &mut rt.context_mut().s0,
+        9 => &mut rt.context_mut().s1,
+
+        10 => &mut rt.context_mut().a0,
+        11 => &mut rt.context_mut().a1,
+        12 => &mut rt.context_mut().a2,
+        13 => &mut rt.context_mut().a3,
+        14 => &mut rt.context_mut().a4,
+        15 => &mut rt.context_mut().a5,
+        16 => &mut rt.context_mut().a6,
+        17 => &mut rt.context_mut().a7,
+
+        18 => &mut rt.context_mut().s2,
+        19 => &mut rt.context_mut().s3,
+        20 => &mut rt.context_mut().s4,
+        21 => &mut rt.context_mut().s5,
+        22 => &mut rt.context_mut().s6,
+        23 => &mut rt.context_mut().s7,
+        24 => &mut rt.context_mut().s8,
+        25 => &mut rt.context_mut().s9,
+        26 => &mut rt.context_mut().s10,
+        27 => &mut rt.context_mut().s11,
+
+        28 => &mut rt.context_mut().t3,
+        29 => &mut rt.context_mut().t4,
+        30 => &mut rt.context_mut().t5,
+        31 => &mut rt.context_mut().t6,
+        _ => panic!("unknown register: {}", rd),
+    };
+    match get_funct(ins) {
+        0b000 => {
+            //lb
+            unsafe {
+                s_lv_translation_mode_on();
+                *dst_reg = (addr as *const i8).read_unaligned() as usize;
+                s_lv_translation_mode_off();
+            }
+        }
+        0b001 => {
+            //lh
+            unsafe {
+                s_lv_translation_mode_on();
+                *dst_reg = (addr as *const i16).read_unaligned() as usize;
+                s_lv_translation_mode_off();
+            }
+        }
+        0b010 => {
+            //lw
+            unsafe {
+                s_lv_translation_mode_on();
+                *dst_reg = (addr as *const i32).read_unaligned() as usize;
+                s_lv_translation_mode_off();
+            }
+        }
+        0b011 => {
+            //ld
+            unsafe {
+                s_lv_translation_mode_on();
+                *dst_reg = (addr as *const u64).read_unaligned() as usize;
+                s_lv_translation_mode_off();
+            }
+        }
+        0b100 => {
+            //lbu
+            unsafe {
+                s_lv_translation_mode_on();
+                *dst_reg = (addr as *const u8).read_unaligned() as usize;
+                s_lv_translation_mode_off();
+            }
+        }
+        0b101 => {
+            //lhu
+            unsafe {
+                s_lv_translation_mode_on();
+                *dst_reg = (addr as *const u16).read_unaligned() as usize;
+                s_lv_translation_mode_off();
+            }
+        }
+        0b110 => {
+            //lwu
+            unsafe {
+                s_lv_translation_mode_on();
+                *dst_reg = (addr as *const u32).read_unaligned() as usize;
+                s_lv_translation_mode_off();
+            }
+        }
+        _ => {
+            panic!("Unsupported load version")
         }
     }
 }

@@ -99,10 +99,6 @@ pub fn trap_handler() -> ! {
             set_next_trigger();
             suspend_current_and_run_next();
         }
-        Trap::Exception(Exception::StoreMisaligned) => {
-            //            scause.
-            panic!("caught");
-        }
         _ => {
             panic!(
                 "Unsupported trap {:?}, stval = {:#x}!",
