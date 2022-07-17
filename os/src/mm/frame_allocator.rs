@@ -84,6 +84,7 @@ impl FrameAllocator for StackFrameAllocator {
     }
     /// Deallocate a physical page
     fn dealloc(&mut self, ppn: PhysPageNum) {
+        log::trace!("[frame_dealloc] {:?}", ppn);
         let ppn = ppn.0;
         // validity check, note that this should be unnecessary for RELEASE build and it may significantly draw the speed of recycle.
         if option_env!("MODE") == Some("debug") && ppn >= self.current
