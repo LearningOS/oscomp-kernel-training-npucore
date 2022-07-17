@@ -835,7 +835,7 @@ pub fn sys_clock_gettime(clk_id: usize, tp: *mut TimeSpec) -> isize {
 
 // int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 pub fn sys_sigaction(signum: usize, act: usize, oldact: usize) -> isize {
-    info!(
+    trace!(
         "[sys_sigaction] signum: {:?}, act: {:X}, oldact: {:X}",
         signum, act, oldact
     );

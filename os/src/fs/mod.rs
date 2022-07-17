@@ -38,7 +38,7 @@ lazy_static! {
 }
 
 pub fn is_relative(path: &str) -> bool {
-    !path.starts_with('/') && path != "" 
+    !path.starts_with('/') && path != "" && path != "."
 }
 
 #[derive(Clone)]
