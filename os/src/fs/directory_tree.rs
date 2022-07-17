@@ -206,9 +206,6 @@ impl DirectoryTreeNode {
         special_use: bool,
     ) -> Result<Arc<dyn File>, isize> {
         log::debug!("[open]: cwd: {}, path: {}", self.get_cwd(), path);
-        if path == "" {
-            return Err(ENOENT);
-        }
         const BUSYBOX_PATH: &str = "/busybox";
         const REDIRECT_TO_BUSYBOX: [&str; 3] = ["/touch", "/rm", "/ls"];
         let path = if REDIRECT_TO_BUSYBOX.contains(&path) {
@@ -304,9 +301,6 @@ impl DirectoryTreeNode {
     }
 
     pub fn mkdir(&self, path: &str) -> Result<(), isize> {
-        if path == "" {
-            return Err(ENOENT);
-        }
         let inode = if path.starts_with("/") {
             &**ROOT
         } else {
@@ -354,9 +348,6 @@ impl DirectoryTreeNode {
     }
 
     pub fn delete(&self, path: &str, delete_directory: bool) -> Result<(), isize> {
-        if path == "" {
-            return Err(ENOENT);
-        }
         if path.split('/').last().map_or(true, |x| x == ".") {
             return Err(EINVAL);
         }
@@ -405,13 +396,6 @@ impl DirectoryTreeNode {
     pub fn rename(old_path: &str, new_path: &str) -> Result<(), isize> {
         assert!(old_path.starts_with('/'));
         assert!(new_path.starts_with('/'));
-
-        if old_path == "" || new_path == "" {
-            return Err(ENOENT);
-        }
-        if old_path == "/" || new_path == "/" {
-            return Err(EBUSY);
-        }
 
         let mut old_comps = Self::parse_dir_path(old_path);
         let mut new_comps = Self::parse_dir_path(new_path);
@@ -511,7 +495,7 @@ impl DirectoryTreeNode {
 }
 
 pub fn oom() {
-    const MAX_FAIL_TIME: usize = 6;
+    const MAX_FAIL_TIME: usize = 3;
     let mut fail_time = 0;
     fn dfs(u: &Arc<DirectoryTreeNode>) -> usize {
         let mut dropped = u.file.oom();
