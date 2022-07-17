@@ -37,6 +37,10 @@ lazy_static! {
     ));
 }
 
+pub fn is_relative(path: &str) -> bool {
+    !path.starts_with('/') && path != "" 
+}
+
 #[derive(Clone)]
 pub struct FileDescriptor {
     cloexec: bool,
@@ -98,7 +102,7 @@ impl FileDescriptor {
         Box::new(self.file.get_stat())
     }
     pub fn open(&self, path: &str, flags: OpenFlags, special_use: bool) -> Result<Self, isize> {
-        if self.file.is_file() && !path.starts_with('/') {
+        if self.file.is_file() && is_relative(path) {
             return Err(ENOTDIR);
         }
         let inode = self.file.get_dirtree_node();
@@ -114,7 +118,7 @@ impl FileDescriptor {
         Ok(Self::new(cloexec, file))
     }
     pub fn mkdir(&self, path: &str) -> Result<(), isize> {
-        if self.file.is_file() && !path.starts_with('/') {
+        if self.file.is_file() && is_relative(path) {
             return Err(ENOTDIR);
         }
         let inode = self.file.get_dirtree_node();
@@ -125,7 +129,7 @@ impl FileDescriptor {
         inode.mkdir(path)
     }
     pub fn delete(&self, path: &str, delete_directory: bool) -> Result<(), isize> {
-        if self.file.is_file() && !path.starts_with('/') {
+        if self.file.is_file() && is_relative(path) {
             return Err(ENOTDIR);
         }
         let inode = self.file.get_dirtree_node();
@@ -141,10 +145,10 @@ impl FileDescriptor {
         new_fd: &Self,
         new_path: &str,
     ) -> Result<(), isize> {
-        if old_fd.file.is_file() && !old_path.starts_with('/') {
+        if old_fd.file.is_file() && is_relative(old_path) {
             return Err(ENOTDIR);
         }
-        if new_fd.file.is_file() && !new_path.starts_with('/') {
+        if new_fd.file.is_file() && is_relative(new_path) {
             return Err(ENOTDIR);
         }
         let old_inode = old_fd.file.get_dirtree_node();
