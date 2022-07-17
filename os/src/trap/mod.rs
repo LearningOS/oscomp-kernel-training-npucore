@@ -60,15 +60,15 @@ pub fn trap_handler() -> ! {
         Trap::Exception(Exception::UserEnvCall) => {
             // jump to next instruction anyway
             let mut cx = current_trap_cx();
-            cx.sepc += 4;
+            cx.gp.pc += 4;
             // get system call return value
             let result = syscall(
-                cx.gp.x[17],
-                [cx.gp.x[10], cx.gp.x[11], cx.gp.x[12], cx.gp.x[13], cx.gp.x[14], cx.gp.x[15]],
+                cx.gp.a7,
+                [cx.gp.a0, cx.gp.a1, cx.gp.a2, cx.gp.a3, cx.gp.a4, cx.gp.a5],
             );
             // cx is changed during sys_exec, so we have to call it again
             cx = current_trap_cx();
-            cx.gp.x[10] = result as usize;
+            cx.gp.a0 = result as usize;
         }
         Trap::Exception(Exception::StoreFault)
         | Trap::Exception(Exception::StorePageFault)
@@ -142,6 +142,6 @@ pub fn trap_from_kernel() -> ! {
         "a trap {:?} from kernel! bad addr = {:#x}, bad instruction = {:#x}",
         scause::read().cause(),
         stval::read(),
-        current_trap_cx().sepc
+        current_trap_cx().gp.pc
     );
 }

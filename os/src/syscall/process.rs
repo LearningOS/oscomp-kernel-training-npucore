@@ -868,20 +868,19 @@ pub fn sys_sigreturn() -> isize {
 
     let trap_cx = inner.get_trap_cx();
     // restore sigmask & trap context
-    let mut sp = trap_cx.gp.x[2];
-    sp += size_of::<SigInfo>();
+    let ucontext_addr = (trap_cx.gp.sp + size_of::<SigInfo>() + 0x7) & !0x7;
     copy_from_user(
         token,
-        (sp + 2 * size_of::<usize>() + size_of::<SignalStack>()) as *mut Signals,
+        (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>()) as *mut Signals,
         &mut inner.sigmask
     ); // restore sigmask
     copy_from_user(
         token,
-        (sp + 2 * size_of::<usize>() + size_of::<SignalStack>() + size_of::<Signals>())
-            as *mut TrapContext,
-        trap_cx as *mut TrapContext
+        (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>() + size_of::<Signals>())
+            as *mut MachineContext,
+        (trap_cx as *mut TrapContext).cast::<MachineContext>()
     ); // restore trap_cx
-    return trap_cx.gp.x[10] as isize; // return a0: not modify any of trap_cx
+    return trap_cx.gp.a0 as isize; // return a0: not modify any of trap_cx
 }
 
 /// Get process times

@@ -51,7 +51,7 @@ pub enum FutexCmd {
 }
 
 lazy_static! {
-    static ref FUTEX_WAIT_NO: Mutex<BTreeMap<usize, u32>> = Mutex::new(BTreeMap::new());
+    pub static ref FUTEX_WAIT_NO: Mutex<BTreeMap<usize, u32>> = Mutex::new(BTreeMap::new());
 }
 
 /// Currently the `rt_clk` is ignored.
