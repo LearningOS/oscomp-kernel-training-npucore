@@ -737,8 +737,8 @@ impl MemorySet {
                 }
             }
         });
-        for idx in delete {
-            self.areas.remove(idx);
+        for idx in delete.iter().rev() {
+            self.areas.remove(*idx);
         }
         if let Some(idx) = break_apart_idx {
             let (first, mut second, third) = self
