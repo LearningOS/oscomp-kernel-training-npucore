@@ -311,53 +311,62 @@ pub fn do_signal() {
         // user-defined handler
         if let Some(act) = result {
             let trap_cx = inner.get_trap_cx();
-            let mut sp = trap_cx.gp.x[2];
+            let ucontext_addr = (trap_cx.gp.sp - size_of::<UserContext>()) & !0x7;
+            let siginfo_addr = (ucontext_addr - size_of::<SigInfo>()) & !0x7;
             // check if we have enough space on user stack
-            let sig_sp = sp - size_of::<UserContext>() - size_of::<SigInfo>();
+            let sig_sp = siginfo_addr;
             let sig_size = sig_sp.checked_sub(task.ustack_base - USER_STACK_SIZE);
-            let ucontext: UserContext = unsafe { MaybeUninit::uninit().assume_init() };
             if let Some(sig_size) = sig_size {
                 let token = task.get_user_token();
                 let signum = signal.to_signum().unwrap();
-                // a lot of copy...
+                // In this case, signal hander have three parameters 
                 if act.flags.contains(SigActionFlags::SA_SIGINFO) {
-                    sp -= size_of::<UserContext>();
-                    copy_to_user(token, &UserContext {
-                        flags: 0,
-                        link: 0,
-                        stack: SignalStack::new(sig_sp, sig_size),
-                        sigmask: inner.sigmask,
-                        mcontext: (*trap_cx),
-                    }, sp as *mut UserContext); // push UserContext into user stack
-                    trap_cx.gp.x[12] = sp; // a2 <- *UserContext
-                    sp -= size_of::<SigInfo>();
-                    copy_to_user(token, &SigInfo::new(signum, 0, 0), sp as *mut SigInfo); // push SigInfo into user stack
-                    trap_cx.gp.x[11] = sp; // a1 <- *SigInfo
+                    copy_to_user(
+                        token,
+                        &UserContext {
+                            flags: 0,
+                            link: 0,
+                            stack: SignalStack::new(sig_sp, sig_size),
+                            sigmask: inner.sigmask,
+                            mcontext: unsafe {
+                                *(trap_cx as *const TrapContext).cast::<MachineContext>()
+                            },
+                        },
+                        ucontext_addr as *mut UserContext,
+                    ); // push UserContext into user stack
+                    trap_cx.gp.a2 = ucontext_addr; // a2 <- *UserContext
+                    copy_to_user(
+                        token,
+                        &SigInfo::new(signum, 0, 0),
+                        siginfo_addr as *mut SigInfo,
+                    ); // push SigInfo into user stack
+                    trap_cx.gp.a1 = siginfo_addr; // a1 <- *SigInfo
                 // In this case, signal handler only have one parameter (a0 <- signum), so only copy something necessary
                 // To simplify the implementation of sigreturn, here we keep the same layout as above...
                 } else {
-                    sp -= size_of::<UserContext>();
                     copy_to_user(
                         token,
                         &inner.sigmask,
-                        (sp + 2 * size_of::<usize>() + size_of::<SignalStack>()) as *mut Signals,
+                        (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>())
+                            as *mut Signals,
                     ); // push sigmask into user stack
                     copy_to_user(
                         token,
-                        trap_cx as *const TrapContext,
-                        (sp + 2 * size_of::<usize>() + size_of::<SignalStack>() + size_of::<Signals>())
-                            as *mut TrapContext,
+                        (trap_cx as *const TrapContext).cast::<MachineContext>(),
+                        (ucontext_addr
+                            + 2 * size_of::<usize>()
+                            + size_of::<SignalStack>()
+                            + size_of::<Signals>()) as *mut MachineContext,
                     ); // push MachineContext into user stack
-                    sp -= size_of::<SigInfo>();
                 }
-                trap_cx.gp.x[10] = signum; // a0 <- signum
-                trap_cx.set_sp(sp); // update sp, because we've pushed something into stack
-                trap_cx.gp.x[1] = if act.flags.contains(SigActionFlags::SA_RESTORER) {
+                trap_cx.gp.a0 = signum; // a0 <- signum
+                trap_cx.set_sp(sig_sp); // update sp, because we've pushed something into stack
+                trap_cx.gp.ra = if act.flags.contains(SigActionFlags::SA_RESTORER) {
                     act.restorer // legacy, signal trampoline provided by C library's wrapper function
                 } else {
                     SIGNAL_TRAMPOLINE // ra <- __call_sigreturn, when handler ret, we will go to __call_sigreturn
                 };
-                trap_cx.sepc = act.handler.addr().unwrap(); // restore pc with addr of handler
+                trap_cx.gp.pc = act.handler.addr().unwrap(); // restore pc with addr of handler
             } else {
                 error!(
                     "[do_signal] User stack will overflow after push trap context! Send SIGSEGV."
@@ -372,8 +381,8 @@ pub fn do_signal() {
                 signal,
                 signal.to_signum().unwrap(),
                 act.handler,
-                trap_cx.gp.x[1],
-                trap_cx.gp.x[2]
+                trap_cx.gp.ra,
+                trap_cx.gp.sp
             );
             // mask some signals
             inner.sigmask |= if act.flags.contains(SigActionFlags::SA_NODEFER) {
@@ -398,7 +407,7 @@ pub fn do_signal() {
                         "[kernel] {:?} in application, bad addr = {:#x}, bad instruction = {:#x}, core dumped.",
                         scause.cause(),
                         stval,
-                        inner.get_trap_cx().sepc,
+                        inner.get_trap_cx().gp.pc,
                     );
                     drop(inner);
                     drop(sighand);

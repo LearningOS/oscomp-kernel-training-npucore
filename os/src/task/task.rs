@@ -467,14 +467,14 @@ impl TaskControlBlock {
         }
         // we also do not need to prepare parameters on stack, musl has done it for us
         if !stack.is_null() {
-            trap_cx.gp.x[2] = stack as usize;
+            trap_cx.gp.sp = stack as usize;
         }
         // set tp
         if flags.contains(CloneFlags::CLONE_SETTLS) {
-            trap_cx.gp.x[4] = tls;
+            trap_cx.gp.tp = tls;
         }
         // for child process, fork returns 0
-        trap_cx.gp.x[10] = 0;
+        trap_cx.gp.a0 = 0;
         // modify kernel_sp in trap_cx
         trap_cx.kernel_sp = kstack_top;
         // return

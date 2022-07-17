@@ -8,7 +8,7 @@ mod switch;
 mod task;
 pub mod threads;
 
-use crate::fs::{OpenFlags, ROOT_FD};
+use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut, task::threads::FUTEX_WAIT_NO};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
@@ -108,6 +108,11 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     // this resource may not be recycled in a long period of time.
     if Arc::strong_count(&task.vm) == 1 {
         task.vm.lock().recycle_data_pages();
+    }
+    let clear_child_tid = inner.address.clear_child_tid;
+    if clear_child_tid != 0 {
+        *translated_refmut(task.get_user_token(), clear_child_tid as *mut u32) = 0;
+        FUTEX_WAIT_NO.lock().insert(clear_child_tid, 1);
     }
     drop(inner);
     // **** release current PCB lock
