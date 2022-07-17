@@ -61,7 +61,7 @@ impl Generator for Runtime {
             Trap::Exception(Exception::InstructionFault) => MachineTrap::InstructionFault(mtval),
             Trap::Exception(Exception::LoadFault) => MachineTrap::LoadFault(mtval),
             Trap::Exception(Exception::StoreFault) => MachineTrap::StoreFault(mtval),
-            //            Trap::Exception(Exception::StoreMisaligned) => MachineTrap::StoreMisaligned(mtval),
+            Trap::Exception(Exception::StoreMisaligned) => MachineTrap::StoreMisaligned(mtval),
             Trap::Exception(Exception::LoadMisaligned) => MachineTrap::LoadMisaligned(mtval),
             Trap::Interrupt(Interrupt::MachineExternal) => MachineTrap::ExternalInterrupt(),
             Trap::Interrupt(Interrupt::MachineTimer) => MachineTrap::MachineTimer(),
@@ -86,7 +86,7 @@ pub enum MachineTrap {
     InstructionFault(usize),
     LoadFault(usize),
     StoreFault(usize),
-    //    StoreMisaligned(usize),
+    StoreMisaligned(usize),
     LoadMisaligned(usize),
 }
 
