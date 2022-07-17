@@ -185,7 +185,7 @@ impl File for Teletype {
     }
 
     fn get_stat(&self) -> Stat {
-        Stat::new(5, 1, 0o100777, 1, 0x0000000400000040, 0, 0, 0, 0)
+        Stat::new(5, 1, 0o020777, 1, 0x0000000400000040, 0, 0, 0, 0)
     }
 
     fn get_file_type(&self) -> DiskInodeType {
