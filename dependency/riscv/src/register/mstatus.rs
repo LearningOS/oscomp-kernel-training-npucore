@@ -205,6 +205,12 @@ pub unsafe fn set_mpp(mpp: MPP) {
     _write(value);
 }
 
+#[inline]
+pub unsafe fn get_mpp() -> usize {
+    let value = _read();
+    value.get_bits(11..13)
+}
+
 /// Floating-point extension state
 #[inline]
 pub unsafe fn set_fs(fs: FS) {
