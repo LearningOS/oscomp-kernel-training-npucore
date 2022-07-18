@@ -8,7 +8,7 @@ mod switch;
 mod task;
 pub mod threads;
 
-use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut, task::threads::FUTEX_WAIT_NO};
+use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut, task::threads::{do_futex_wake_without_check}};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
@@ -113,7 +113,8 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     if clear_child_tid != 0 {
         let tid_ref = translated_refmut(task.get_user_token(), clear_child_tid as *mut u32);
         *tid_ref = 0;
-        FUTEX_WAIT_NO.lock().insert(tid_ref as *const u32 as usize, 1);
+        log::debug!("[exit_current_and_run_next] thread exit, try to do futex wake. uaddr: {:X}, val: 1", clear_child_tid);
+        do_futex_wake_without_check(tid_ref as *const u32 as usize, 1);
     }
     drop(inner);
     // **** release current PCB lock
