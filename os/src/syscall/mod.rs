@@ -8,6 +8,7 @@ const SYSCALL_UNLINKAT: usize = 35;
 const SYSCALL_LINKAT: usize = 37;
 const SYSCALL_UMOUNT2: usize = 39;
 const SYSCALL_MOUNT: usize = 40;
+const SYSCALL_STATFS: usize = 43;
 const SYSCALL_FACCESSAT: usize = 48;
 const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_OPENAT: usize = 56;
@@ -366,6 +367,10 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[0], 
             args[1], 
             args[2] as u32
+        ),
+        SYSCALL_STATFS => sys_statfs(
+            args[0] as *const u8,
+            args[1] as *mut Statfs
         ),
         _ => {
             error!(
