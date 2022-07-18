@@ -46,7 +46,7 @@ endif
 
 # Run K210
 K210-SERIALPORT-LINUX = /dev/ttyUSB0
-K210-SERIALPORT-WINDOWS = COM11
+K210-SERIALPORT-WINDOWS = COM3
 K210-BURNER = ../tools/kflash.py
 
 # Binutils
@@ -78,9 +78,9 @@ sdcard:
 		./buildfs.sh "$(SDCARD)"
     else
 		@echo "Are you sure write to E:/ ? [y/N] " && read ans && [ $${ans:-N} = y ]
-		@sudo mount ../fat32-fuse/fat32.img ../fat32-fuse/fs
-		@powershell.exe 'cd ../fat32-fuse; copy -Recurse -path "$$(pwd)/fs/*" -destination "E:/" -force'
-		@sudo umount ../fat32-fuse/fs
+		@sudo mount ../easy-fs-fuse/fat32.img ../easy-fs-fuse/fs
+		@powershell.exe 'cd ../easy-fs-fuse; copy -Recurse -path "$$(pwd)/fs/*" -destination "E:/" -force'
+		@sudo umount ../easy-fs-fuse/fs
     endif
 
 $(KERNEL_BIN): kernel
