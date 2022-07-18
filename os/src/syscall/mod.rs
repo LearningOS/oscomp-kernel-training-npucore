@@ -20,6 +20,8 @@ const SYSCALL_READ: usize = 63;
 const SYSCALL_WRITE: usize = 64;
 const SYSCALL_READV: usize = 65;
 const SYSCALL_WRITEV: usize = 66;
+const SYSCALL_PREAD: usize = 67;
+const SYSCALL_PWRITE: usize = 68;
 const SYSCALL_SENDFILE: usize = 71;
 const SYSCALL_PSELECT6: usize = 72;
 const SYSCALL_PPOLL: usize = 73;
@@ -115,12 +117,15 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_WRITE => "write",
         SYSCALL_READV => "readv",
         SYSCALL_WRITEV => "writev",
+        SYSCALL_PREAD => "pread",
+        SYSCALL_PWRITE => "pwrite",
         SYSCALL_SENDFILE => "sendfile",
         SYSCALL_PSELECT6 => "pselect6",
         SYSCALL_PPOLL => "ppoll",
         SYSCALL_READLINKAT => "readlinkat",
         SYSCALL_FSTATAT => "fstatat",
         SYSCALL_FSTAT => "fstat",
+        SYSCALL_STATFS => "statfs",
         SYSCALL_FSYNC => "fsync",
         SYSCALL_UTIMENSAT => "utimensat",
         SYSCALL_EXIT => "exit",
@@ -185,8 +190,8 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![
         //black list
         SYSCALL_YIELD,
-        // SYSCALL_READ,
-        // SYSCALL_WRITE,
+        SYSCALL_READ,
+        SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
         SYSCALL_READV,
         SYSCALL_WRITEV,
@@ -242,8 +247,10 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_GETDENTS64 => sys_getdents64(args[0], args[1] as *mut u8, args[2]),
         SYSCALL_READ => sys_read(args[0], args[1], args[2]),
         SYSCALL_READV => sys_readv(args[0], args[1], args[2]),
+        SYSCALL_PREAD => sys_pread(args[0], args[1], args[2], args[3]),
         SYSCALL_WRITE => sys_write(args[0], args[1], args[2]),
         SYSCALL_WRITEV => sys_writev(args[0], args[1], args[2]),
+        SYSCALL_PWRITE => sys_pwrite(args[0], args[1], args[2], args[3]),
         SYSCALL_LSEEK => sys_lseek(args[0], args[1], args[2] as u32),
         SYSCALL_SENDFILE => sys_sendfile(args[0], args[1], args[2] as *mut usize, args[3]),
         SYSCALL_READLINKAT => {

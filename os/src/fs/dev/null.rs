@@ -37,10 +37,10 @@ impl File for Null {
     fn get_stat(&self) -> Stat {
         Stat::new(5, 1, 0o020777, 1, 0x0000000400000040, 0, 0, 0, 0)
     }
-    fn read_user(&self, buf: UserBuffer) -> usize {
+    fn read_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         0
     }
-    fn write_user(&self, buf: UserBuffer) -> usize {
+    fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         buf.len()
     }
     fn get_file_type(&self) -> DiskInodeType {

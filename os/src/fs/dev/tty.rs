@@ -129,7 +129,10 @@ impl File for Teletype {
     }
 
     #[cfg(feature = "board_k210")]
-    fn read_user(&self, mut buf: UserBuffer) -> usize {
+    fn read_user(&self, offset: Option<usize>, mut buf: UserBuffer) -> usize {
+        if offset.is_some() {
+            return ESPIPE as usize;
+        }
         let mut inner = self.inner.lock();
         // block read here, infallible
         unsafe {
@@ -145,7 +148,10 @@ impl File for Teletype {
     }
 
     #[cfg(not(any(feature = "board_k210")))]
-    fn read_user(&self, buf: UserBuffer) -> usize {
+    fn read_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
+        if offset.is_some() {
+            return ESPIPE as usize;
+        }
         let mut inner = self.inner.lock();
         // todo: check foreground pgid
         let mut count = 0;
@@ -173,7 +179,10 @@ impl File for Teletype {
         count
     }
 
-    fn write_user(&self, user_buffer: UserBuffer) -> usize {
+    fn write_user(&self, offset: Option<usize>, user_buffer: UserBuffer) -> usize {
+        if offset.is_some() {
+            return ESPIPE as usize;
+        }
         let _inner = self.inner.lock();
         for buffer in user_buffer.buffers.iter() {
             match core::str::from_utf8(*buffer) {

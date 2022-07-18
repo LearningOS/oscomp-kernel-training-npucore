@@ -105,11 +105,14 @@ pub fn sys_read(fd: usize, buf: usize, count: usize) -> isize {
         return EFAULT;
     }
     let token = task.get_user_token();
-    file_descriptor.read_user(UserBuffer::new(translated_byte_buffer(
-        token,
-        buf as *const u8,
-        count,
-    ))) as isize
+    file_descriptor.read_user(
+        None,
+        UserBuffer::new(translated_byte_buffer(
+            token,
+            buf as *const u8,
+            count,
+        ))
+    ) as isize
 }
 
 pub fn sys_write(fd: usize, buf: usize, count: usize) -> isize {
@@ -133,11 +136,76 @@ pub fn sys_write(fd: usize, buf: usize, count: usize) -> isize {
         return EFAULT;
     }
     let token = task.get_user_token();
-    file_descriptor.write_user(UserBuffer::new(translated_byte_buffer(
-        token,
-        buf as *const u8,
-        count,
-    ))) as isize
+    file_descriptor.write_user(
+        None,
+        UserBuffer::new(translated_byte_buffer(
+            token,
+            buf as *const u8,
+            count,
+        ))
+    ) as isize
+}
+
+pub fn sys_pread(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
+    let task = current_task().unwrap();
+    let fd_table = task.files.lock();
+    // fd is not a valid file descriptor
+    if fd >= fd_table.len() || fd_table[fd].is_none() {
+        return EBADF;
+    }
+    let file_descriptor = fd_table[fd].as_ref().unwrap();
+    // fd is not open for reading
+    if !file_descriptor.readable() {
+        return EBADF;
+    }
+    // buf is outside your accessible address space.
+    if !task
+        .vm
+        .lock()
+        .contains_valid_buffer(buf, count, MapPermission::W)
+    {
+        return EFAULT;
+    }
+    let token = task.get_user_token();
+    file_descriptor.read_user(
+        Some(offset),
+        UserBuffer::new(translated_byte_buffer(
+            token,
+            buf as *const u8,
+            count,
+        ))
+    ) as isize
+}
+
+pub fn sys_pwrite(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
+    let task = current_task().unwrap();
+    let fd_table = task.files.lock();
+    // fd is not a valid file descriptor
+    if fd >= fd_table.len() || fd_table[fd].is_none() {
+        return EBADF;
+    }
+    let file_descriptor = fd_table[fd].as_ref().unwrap();
+    // fd is not open for writing
+    if !file_descriptor.writable() {
+        return EBADF;
+    }
+    // buf is outside your accessible address space.
+    if !task
+        .vm
+        .lock()
+        .contains_valid_buffer(buf, count, MapPermission::R)
+    {
+        return EFAULT;
+    }
+    let token = task.get_user_token();
+    file_descriptor.write_user(
+        Some(offset),
+        UserBuffer::new(translated_byte_buffer(
+            token,
+            buf as *const u8,
+            count,
+        ))
+    ) as isize
 }
 
 #[repr(C)]
@@ -163,18 +231,20 @@ pub fn sys_readv(fd: usize, iov: usize, iovcnt: usize) -> isize {
     let mut iovecs = Vec::<IOVec>::with_capacity(iovcnt);
     copy_from_user_array(token, iov as *const IOVec, iovecs.as_mut_ptr(), iovcnt);
     unsafe { iovecs.set_len(iovcnt) };
-    file_descriptor.read_user(UserBuffer::new(iovecs.iter().fold(
-        Vec::new(),
-        |buffer, iovec| {
-            // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
-            translated_byte_buffer_append_to_existing_vec(
-                Some(buffer),
-                token,
-                iovec.iov_base,
-                iovec.iov_len,
-            )
-        },
-    ))) as isize
+    file_descriptor.read_user(
+        None, 
+        UserBuffer::new(iovecs.iter().fold(
+            Vec::new(),
+            |buffer, iovec| {
+                // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
+                translated_byte_buffer_append_to_existing_vec(
+                    Some(buffer),
+                    token,
+                    iovec.iov_base,
+                    iovec.iov_len,
+                )
+            }))
+    ) as isize
 }
 
 pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
@@ -193,7 +263,9 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
     let mut iovecs = Vec::<IOVec>::with_capacity(iovcnt);
     copy_from_user_array(token, iov as *const IOVec, iovecs.as_mut_ptr(), iovcnt);
     unsafe { iovecs.set_len(iovcnt) };
-    file_descriptor.write_user(UserBuffer::new(iovecs.iter().fold(
+    file_descriptor.write_user(
+        None,
+        UserBuffer::new(iovecs.iter().fold(
         Vec::new(),
         |buffer, iovec| {
             // for debug

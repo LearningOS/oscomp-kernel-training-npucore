@@ -132,8 +132,10 @@ impl File for Pipe {
         let ring_buffer = self.buffer.lock();
         ring_buffer.status != RingBufferStatus::FULL
     }
-    fn read_user(&self, buf: UserBuffer) -> usize {
-        assert_eq!(self.readable(), true);
+    fn read_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
+        if offset.is_some() {
+            return ESPIPE as usize;
+        }        
         let mut read_size = 0usize;
         if buf.len() == 0 {
             return read_size;
@@ -178,8 +180,10 @@ impl File for Pipe {
             return read_size;
         }
     }
-    fn write_user(&self, buf: UserBuffer) -> usize {
-        assert_eq!(self.writable(), true);
+    fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
+        if offset.is_some() {
+            return ESPIPE as usize;
+        }
         let mut write_size = 0usize;
         if buf.len() == 0 {
             return write_size;

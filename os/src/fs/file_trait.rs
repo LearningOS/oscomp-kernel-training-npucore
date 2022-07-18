@@ -24,8 +24,8 @@ pub trait File: DowncastSync {
     fn write(&self, offset: Option<&mut usize>, buf: &[u8]) -> usize;
     fn r_ready(&self) -> bool;
     fn w_ready(&self) -> bool;
-    fn read_user(&self, buf: UserBuffer) -> usize;
-    fn write_user(&self, buf: UserBuffer) -> usize;
+    fn read_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize;
+    fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize;
     fn get_stat(&self) -> Stat;
     fn get_file_type(&self) -> DiskInodeType;
     fn is_dir(&self) -> bool {
