@@ -742,8 +742,12 @@ impl MemorySet {
                 }
             }
         });
-        for idx in delete.iter().rev() {
-            self.areas.remove(*idx);
+        let mut heap_area_idx = self.heap_area_idx.unwrap();
+        for idx in delete.into_iter().rev() {
+            self.areas.remove(idx);
+            if idx <= heap_area_idx {
+                heap_area_idx -= 1;
+            }
         }
         if let Some(idx) = break_apart_idx {
             let (first, mut second, third) = self
@@ -757,10 +761,11 @@ impl MemorySet {
             self.areas.insert(idx, first);
             self.areas.insert(idx + 1, third);
             if idx <= self.heap_area_idx.unwrap() {
-                self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
+                heap_area_idx += 1;
             }
         }
         if found_area {
+            self.heap_area_idx = Some(heap_area_idx);
             Ok(())
         } else {
             Err(EINVAL)
@@ -790,6 +795,7 @@ impl MemorySet {
             Some((mut idx, _)) => {
                 let area_start_vpn = self.areas[idx].data_frames.vpn_range.get_start();
                 let area_end_vpn = self.areas[idx].data_frames.vpn_range.get_end();
+                let mut heap_area_idx = self.heap_area_idx.unwrap();
                 // Addresses in the range [addr, addr+len-1] are invalid for the address space of the process,
                 // or specify one or more pages that are not mapped.
                 if end_vpn > area_end_vpn {
@@ -803,8 +809,8 @@ impl MemorySet {
                     trace!("[mprotect] change prot of lower part");
                     let (first, second) = self.areas.remove(idx).into_two(end_vpn).unwrap();
                     self.areas.insert(idx, second);
-                    if idx <= self.heap_area_idx.unwrap() {
-                        self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
+                    if idx <= heap_area_idx {
+                        heap_area_idx += 1;
                     }
                     // important, keep the order of areas
                     idx -= 1;
@@ -813,8 +819,8 @@ impl MemorySet {
                     trace!("[mprotect] change prot of higher part");
                     let (first, second) = self.areas.remove(idx).into_two(start_vpn).unwrap();
                     self.areas.insert(idx, first);
-                    if idx <= self.heap_area_idx.unwrap() {
-                        self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
+                    if idx <= heap_area_idx {
+                        heap_area_idx += 1;
                     }
                     second
                 } else {
@@ -826,8 +832,8 @@ impl MemorySet {
                         .unwrap();
                     self.areas.insert(idx, first);
                     self.areas.insert(idx + 1, third);
-                    if idx <= self.heap_area_idx.unwrap() {
-                        self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 2);
+                    if idx <= heap_area_idx {
+                        heap_area_idx += 2;
                     }
                     second
                 };
@@ -846,6 +852,7 @@ impl MemorySet {
                 // If `prot` contains W, store page fault & CoW will occur.
                 area.map_perm = prot;
                 self.areas.insert(idx + 1, area);
+                self.heap_area_idx = Some(heap_area_idx);
             }
             None => {
                 warn!("[mprotect] addr is not a valid pointer");
