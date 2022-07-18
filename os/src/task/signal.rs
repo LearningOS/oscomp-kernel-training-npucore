@@ -328,6 +328,7 @@ pub fn do_signal() {
                             link: 0,
                             stack: SignalStack::new(sig_sp, sig_size),
                             sigmask: inner.sigmask,
+                            __pad: [0; UserContext::PADDING_SIZE],
                             mcontext: unsafe {
                                 *(trap_cx as *const TrapContext).cast::<MachineContext>()
                             },
@@ -356,7 +357,8 @@ pub fn do_signal() {
                         (ucontext_addr
                             + 2 * size_of::<usize>()
                             + size_of::<SignalStack>()
-                            + size_of::<Signals>()) as *mut MachineContext,
+                            + size_of::<Signals>()
+                            + UserContext::PADDING_SIZE) as *mut MachineContext,
                     ); // push MachineContext into user stack
                 }
                 trap_cx.gp.a0 = signum; // a0 <- signum
