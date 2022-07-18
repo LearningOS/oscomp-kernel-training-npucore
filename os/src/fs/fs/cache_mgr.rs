@@ -284,6 +284,10 @@ impl PageCache {
             )
         };
         block_device.read_block(start_block_id, buf);
+        KERNEL_SPACE
+            .lock()
+            .clear_dirty_bit(self.tracker.ppn.0.into())
+            .unwrap();
     }
 
     pub fn write_back(&self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {

@@ -553,6 +553,12 @@ impl MemorySet {
     pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result<(), ()> {
         self.page_table.set_pte_flags(vpn, flags)
     }
+    pub fn clear_access_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        self.page_table.clear_access_bit(vpn)
+    }
+    pub fn clear_dirty_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        self.page_table.clear_dirty_bit(vpn)
+    }
     pub fn recycle_data_pages(&mut self) {
         //*self = Self::new_bare();
         self.areas.clear();
