@@ -1,12 +1,13 @@
 use crate::config::{PAGE_SIZE, USER_STACK_SIZE};
 use crate::fs::{FdTable, OpenFlags};
 use crate::mm::{
-    copy_from_user, copy_to_user, copy_to_user_string, get_from_user_checked, translated_byte_buffer,
-    translated_ref, translated_refmut, translated_str, MapFlags, MapPermission, UserBuffer,
+    copy_from_user, copy_to_user, copy_to_user_string, get_from_user_checked,
+    translated_byte_buffer, translated_ref, translated_refmut, translated_str, MapFlags,
+    MapPermission, UserBuffer,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
-use crate::task::threads::{futex, FutexCmd};
+use crate::task::threads::{do_futex_wait, FutexCmd, do_futex_requeue, do_futex_wake};
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
     exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
@@ -15,7 +16,7 @@ use crate::task::{
 use crate::timer::{
     get_time, get_time_ms, get_time_sec, ITimerVal, TimeSpec, TimeVal, TimeZone, Times,
 };
-use crate::trap::{TrapContext, MachineContext};
+use crate::trap::{MachineContext, TrapContext};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -420,7 +421,10 @@ pub fn sys_clone(
     let exit_signal = match Signals::from_signum((flags & 0xff) as usize) {
         Ok(signal) => signal,
         Err(_) => {
-            warn!("[sys_clone] signum of exit_signal is unspecified or invalid: {}", (flags & 0xff) as usize);
+            warn!(
+                "[sys_clone] signum of exit_signal is unspecified or invalid: {}",
+                (flags & 0xff) as usize
+            );
             // This is permitted by standard, but we only support 64 signals
             Signals::empty()
         }
@@ -718,7 +722,6 @@ pub fn sys_set_tid_address(tidptr: usize) -> isize {
     sys_gettid()
 }
 
-
 bitflags! {
     pub struct FutexOption: u32 {
         const PRIVATE = 128;
@@ -759,21 +762,34 @@ pub fn sys_futex(
     if !option.contains(FutexOption::PRIVATE) {
         warn!("[futex] process-shared futex is unimplemented");
     }
-    let timeout = match cmd {
-        FutexCmd::Wait | FutexCmd::LockPi | FutexCmd::WaitBitset => get_from_user_checked(token, timeout),
-        _ => None,
-    };
     info!(
         "[futex] uaddr: {:?}, futex_op: {:?}, option: {:?}, val: {:X}, timeout: {:?}, uaddr2: {:?}, val3: {:X}",
         uaddr, cmd, option, val, timeout, uaddr2, val3
     );
-    futex(
-        futex_word,
-        val,
-        cmd,
-        option,
-        timeout,
-    )
+    match cmd {
+        FutexCmd::Wait => {
+            let timeout = match cmd {
+                FutexCmd::Wait | FutexCmd::LockPi | FutexCmd::WaitBitset => {
+                    get_from_user_checked(token, timeout)
+                }
+                _ => None,
+            };
+            do_futex_wait(futex_word, val, timeout)
+        },
+        FutexCmd::Wake => {
+            let futex_word_addr = futex_word as *const u32 as usize;
+            do_futex_wake(futex_word_addr, val)
+        },
+        FutexCmd::Requeue => {
+            if uaddr2.is_null() || uaddr2.align_offset(4) != 0 {
+                return EINVAL;
+            }
+            let futex_word_2 = translated_refmut(token, uaddr2);
+            do_futex_requeue(futex_word, futex_word_2, val, timeout as u32)
+        }
+        FutexCmd::Invalid => EINVAL,
+        _ => todo!()
+    }
 }
 
 pub fn sys_mmap(
@@ -840,7 +856,9 @@ pub fn sys_clock_gettime(clk_id: usize, tp: *mut TimeSpec) -> isize {
 pub fn sys_sigaction(signum: usize, act: usize, oldact: usize) -> isize {
     trace!(
         "[sys_sigaction] signum: {:?}, act: {:X}, oldact: {:X}",
-        signum, act, oldact
+        signum,
+        act,
+        oldact
     );
     sigaction(signum, act as *const SigAction, oldact as *mut SigAction)
 }
@@ -875,13 +893,16 @@ pub fn sys_sigreturn() -> isize {
     copy_from_user(
         token,
         (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>()) as *mut Signals,
-        &mut inner.sigmask
+        &mut inner.sigmask,
     ); // restore sigmask
     copy_from_user(
         token,
-        (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>() + size_of::<Signals>() + crate::trap::UserContext::PADDING_SIZE)
-            as *mut MachineContext,
-        (trap_cx as *mut TrapContext).cast::<MachineContext>()
+        (ucontext_addr
+            + 2 * size_of::<usize>()
+            + size_of::<SignalStack>()
+            + size_of::<Signals>()
+            + crate::trap::UserContext::PADDING_SIZE) as *mut MachineContext,
+        (trap_cx as *mut TrapContext).cast::<MachineContext>(),
     ); // restore trap_cx
     return trap_cx.gp.a0 as isize; // return a0: not modify any of trap_cx
 }
