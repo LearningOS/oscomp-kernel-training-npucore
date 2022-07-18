@@ -166,16 +166,20 @@ impl MemorySet {
     }
     pub fn last_mmap_area_idx(&self) -> Option<usize> {
         // Kernel space
-        let idx = if self.heap_area_idx.is_none() {
-            self.areas.len() - 1
+        if self.heap_area_idx.is_none() {
+            Some(self.areas.len() - 1)
         } else {
-            self.areas.len() - 3
-        };
-        let map_start = self.areas[idx].data_frames.vpn_range.get_start();
-        if VirtAddr::from(map_start).0 >= MMAP_BASE {
-            Some(idx)
-        } else {
-            None
+            for (idx, area) in self.areas.iter().enumerate().rev().skip(2) {
+                let start_vpn = area.data_frames.vpn_range.get_start();
+                if start_vpn >= VirtAddr::from(MMAP_END).into() {
+                    continue;
+                } else if start_vpn >= VirtAddr::from(MMAP_BASE).into() && start_vpn < VirtAddr::from(MMAP_END).into() {
+                    return Some(idx);
+                } else {
+                    return None;
+                }
+            }
+            unreachable!();
         }
     }
     pub fn last_mmap_area(&self) -> Option<&MapArea> {
@@ -682,13 +686,14 @@ impl MemorySet {
                 return EBADF as usize;
             }
         }
-        // the last one is trap context, we inserst mmap area to the slot right before trap context (len - 2)
-        let idx = if start_va.0 < MMAP_BASE {
-            self.heap_area_idx.unwrap() + 1
-        } else {
-            self.areas.len() - 2
-        };
+        // insert MapArea and keep the order
+        let (idx, _) = self.areas.iter().enumerate().skip(self.heap_area_idx.unwrap()).find(|(_, area)| {
+            area.data_frames.vpn_range.get_start() >= start_va.into()
+        }).unwrap();
         self.areas.insert(idx, new_area);
+        if idx <= self.heap_area_idx.unwrap() {
+            self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
+        }
         start_va.0
     }
     pub fn munmap(&mut self, start: usize, len: usize) -> Result<(), isize> {
