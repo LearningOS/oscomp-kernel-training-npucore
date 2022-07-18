@@ -2,7 +2,7 @@ use crate::fs::poll::pselect;
 use crate::fs::{make_pipe, OpenFlags, StatMode};
 use crate::fs::{
     poll::{ppoll, FdSet},
-    Dirent, FileDescriptor, Null, Stat, Zero, TTY,
+    Dirent, FileDescriptor, Stat,
 };
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string,
@@ -11,6 +11,7 @@ use crate::mm::{
 };
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
@@ -539,6 +540,56 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
         file_descriptor.get_stat().as_ref(),
         statbuf as *mut Stat,
     );
+    SUCCESS
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Statfs{
+    /// Type of filesystem
+    f_type: usize,
+    /// Optimal transfer block size
+    f_bsize: usize,
+    /// Total data blocks in filesystem
+    f_blocks: u64,
+    /// Free blocks in filesystem
+    f_bfree: u64,
+    /// Free blocks available to
+    /// unprivileged user
+    f_bavail: u64,
+    /// Total file nodes in filesystem
+    f_files: u64,
+    /// Free file nodes in filesystem
+    f_ffree: u64,
+    /// Filesystem ID
+    f_fsid: [i32; 2],
+    /// Maximum length of filenames
+    f_namelen: usize,
+    /// Fragment size (since Linux 2.6)
+    f_frsize: usize,
+    /// Mount flags of filesystem
+    f_flag: usize,
+    /// Padding bytes reserved for future use
+    f_spare: [usize; 4],
+}
+/// Fake implement for statfs syscall
+pub fn sys_statfs(_path: *const u8, buf: *mut Statfs) -> isize {
+    let statfs = Box::new(Statfs {
+        f_type: 0xf2f52010,
+        f_bsize: 512,
+        f_blocks: 10000,
+        f_bfree: 9000,
+        f_bavail: 9000,
+        f_files: 1000,
+        f_ffree: 960,
+        f_fsid: [114, 514],
+        f_namelen: 256,
+        f_frsize: 0,
+        f_flag: 0,
+        f_spare: [0; 4],
+    });
+    let token = current_task().unwrap().get_user_token();
+    copy_to_user(token, statfs.as_ref(), buf);
     SUCCESS
 }
 
