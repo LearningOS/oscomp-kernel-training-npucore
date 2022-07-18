@@ -879,7 +879,7 @@ pub fn sys_sigreturn() -> isize {
     ); // restore sigmask
     copy_from_user(
         token,
-        (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>() + size_of::<Signals>())
+        (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>() + size_of::<Signals>() + crate::trap::UserContext::PADDING_SIZE)
             as *mut MachineContext,
         (trap_cx as *mut TrapContext).cast::<MachineContext>()
     ); // restore trap_cx

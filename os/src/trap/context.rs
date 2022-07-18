@@ -63,7 +63,12 @@ pub struct UserContext
 	pub link: usize,
 	pub stack: SignalStack,
 	pub sigmask: Signals,
+    pub __pad: [u8; 128],
     pub mcontext: MachineContext,
+}
+
+impl UserContext {
+    pub const PADDING_SIZE: usize = 128;
 }
 
 #[repr(C)]
