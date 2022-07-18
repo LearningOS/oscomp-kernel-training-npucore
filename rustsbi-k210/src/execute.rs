@@ -335,11 +335,12 @@ fn handle_store_misal_native(addr: usize, rt: &mut Runtime) {
             }
         }
         _ => {
-            panic!(
+            println!(
                 "Unsupported store version, ins:{}, funct:{}",
                 ins,
                 get_funct(ins)
             );
+            feature::forward_supervisor_soft()
         }
     }
 }
@@ -352,6 +353,7 @@ fn handle_load_misal_native(addr: usize, rt: &mut Runtime) {
      *     //entry-static.exe memstream
      *     return;
      * } */
+    let mut fake_zero = 0;
     let dst_reg: &mut usize = match rd {
         1 => &mut rt.context_mut().ra,
         2 => &mut rt.context_mut().sp,
@@ -389,7 +391,7 @@ fn handle_load_misal_native(addr: usize, rt: &mut Runtime) {
         29 => &mut rt.context_mut().t4,
         30 => &mut rt.context_mut().t5,
         31 => &mut rt.context_mut().t6,
-        _ => panic!("unknown register: {}", rd),
+        _ => &mut fake_zero,
     };
     match get_funct(ins) {
         0b000 => {
