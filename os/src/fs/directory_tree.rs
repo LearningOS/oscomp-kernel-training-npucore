@@ -537,6 +537,8 @@ fn init_device_directory() {
         Err(_) => panic!("dev directory doesn't exist"),
     };
 
+    dev_inode.mkdir("shm").unwrap();
+
     let null_dev = DirectoryTreeNode::new(
         "null".to_string(),
         Arc::new(FileSystem::new(FS::Null)),

@@ -67,12 +67,11 @@ pub fn futex(
     match cmd {
         // Returns  0  if the caller was woken up.
         FutexCmd::Wait => {
-            // old rev.
-
             if *futex_word != val {
-                info!(
-                    "[FUTEX_WAIT] quit for value change, futex: {:X}, val: {:X}",
-                    *futex_word, val
+                trace!(
+                    "[futex] --wait-- **not match** futex: {:X}, val: {:X}",
+                    *futex_word,
+                    val
                 );
                 return EAGAIN;
             } else {
@@ -85,17 +84,22 @@ pub fn futex(
                     drop(inner);
                     drop(task);
                     let mut lock = FUTEX_WAIT_NO.lock();
-                    if let Some(i) = lock.get(&futex_word_addr) {
-                        info!("[FUTEX_WAIT] released for a new ticket.");
-                        let num = *i;
-                        lock.insert(futex_word_addr, num - 1);
-                        drop(lock);
+                    let ticket = lock.remove(&futex_word_addr);
+                    if let Some(remain) = ticket {
+                        trace!(
+                            "[futex] --wait-- found existing ticket, remain times: {}",
+                            remain
+                        );
+                        if remain - 1 > 0 {
+                            lock.insert(futex_word_addr, remain - 1);
+                        }
+                        trace!("[futex] --wait-- update remain times: {}", remain - 1);
                         return SUCCESS;
                     }
                     drop(lock);
                     if let Some(t) = timeout {
-                        info!("[FUTEX_WAIT] released timed out.");
                         if t <= TimeSpec::now() {
+                            trace!("[futex] --wait-- time out");
                             return SUCCESS;
                         }
                     }
@@ -104,28 +108,38 @@ pub fn futex(
             }
         }
         // Returns the number of waiters that were woken up.
-        // 我这算法挺智障的...我还是找机会换WaitQueue吧
         FutexCmd::Wake => {
-            let result = 0;
             loop {
                 let mut lock = FUTEX_WAIT_NO.lock();
-                if let Some(_) = lock.get(&futex_word_addr) {
-                    drop(lock);
-                    suspend_current_and_run_next();
+                let ticket = lock.remove(&futex_word_addr);
+                let before = if let Some(remain) = ticket {
+                    trace!(
+                        "[futex] --wake-- found existing ticket, remain times: {}",
+                        remain
+                    );
+                    lock.insert(futex_word_addr, remain + val);
+                    trace!("[futex] --wake-- update remain times: {}", remain + val);
+                    remain + val
                 } else {
-                    info!("[FUTEX_WAKE] no tickets");
+                    trace!(
+                        "[futex] --wake-- insert a ticket with remain times: {}",
+                        val
+                    );
                     lock.insert(futex_word_addr, val);
-                    drop(lock);
-                    suspend_current_and_run_next();
-                    let mut lock = FUTEX_WAIT_NO.lock();
-                    let diff = *lock.get(&futex_word_addr).unwrap();
-                    if diff == 0 {
-                        lock.remove(&futex_word_addr);
-                    }
-                    drop(lock);
-                    info!("[FUTEX_WAKE] woke {} proc(s)", (val - diff));
-                    return (val - diff) as isize;
-                }
+                    val
+                };
+                drop(lock);
+                suspend_current_and_run_next();
+                // We use RR schedule, so all threads should have tried to consume...
+                let lock = FUTEX_WAIT_NO.lock();
+                let after = if let Some(&remain) = lock.get(&futex_word_addr) {
+                    remain
+                } else {
+                    0
+                };
+                drop(lock);
+                info!("[futex] --wake-- woke {} proc(s)", val.min(after - before));
+                return val.min(after - before) as isize;
             }
         }
         FutexCmd::Invalid => EINVAL,
