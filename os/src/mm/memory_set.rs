@@ -675,7 +675,7 @@ impl MemorySet {
                 if !file.readable() {
                     return EACCES as usize;
                 }
-                file.lseek(offset as isize, SeekWhence::SEEK_SET);
+                file.lseek(offset as isize, SeekWhence::SEEK_SET).unwrap();
                 new_area.map_file = Some(file);
             } else {
                 // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
@@ -782,7 +782,7 @@ impl MemorySet {
                 && start_vpn < area.data_frames.vpn_range.get_end()
         });
         match result {
-            Some((idx, _)) => {
+            Some((mut idx, _)) => {
                 let area_start_vpn = self.areas[idx].data_frames.vpn_range.get_start();
                 let area_end_vpn = self.areas[idx].data_frames.vpn_range.get_end();
                 // Addresses in the range [addr, addr+len-1] are invalid for the address space of the process,
@@ -801,6 +801,8 @@ impl MemorySet {
                     if idx <= self.heap_area_idx.unwrap() {
                         self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
                     }
+                    // important, keep the order of areas
+                    idx -= 1;
                     first
                 } else if end_vpn == area_end_vpn {
                     trace!("[mprotect] change prot of higher part");
@@ -1530,7 +1532,7 @@ impl MapArea {
                     - VirtAddr::from(self.data_frames.vpn_range.get_start()).0)
                     as isize,
                 SeekWhence::SEEK_SET,
-            );
+            ).unwrap();
             Some(new_file)
         } else {
             None
