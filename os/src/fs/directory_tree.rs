@@ -527,17 +527,16 @@ pub fn init_fs() {
     init_device_directory();
     init_tmp_directory();
 }
+#[allow(unused)]
 fn init_device_directory() {
-    match ROOT.mkdir("/dev") {
-        _ => {}
-    }
+    ROOT.mkdir("/dev");
 
     let dev_inode = match ROOT.cd_path("/dev") {
         Ok(inode) => inode,
         Err(_) => panic!("dev directory doesn't exist"),
     };
 
-    dev_inode.mkdir("shm").unwrap();
+    dev_inode.mkdir("shm");
 
     let null_dev = DirectoryTreeNode::new(
         "null".to_string(),

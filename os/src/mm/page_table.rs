@@ -65,6 +65,12 @@ impl PageTableEntry {
     pub fn executable(&self) -> bool {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
+    pub fn clear_access(&mut self) {
+        self.bits &= ! (PTEFlags::A.bits() as usize);
+    }
+    pub fn clear_dirty(&mut self) {
+        self.bits &= ! (PTEFlags::D.bits() as usize);
+    }
     pub fn set_permission(&mut self, flags: MapPermission) {
         self.bits = (self.bits & 0xffff_ffff_ffff_ffe1) | (flags.bits() as usize)
     }
@@ -211,6 +217,22 @@ impl PageTable {
     pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result<(), ()> {
         if let Some(pte) = self.find_pte_refmut(vpn) {
             pte.set_permission(flags);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    pub fn clear_access_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        if let Some(pte) = self.find_pte_refmut(vpn) {
+            pte.clear_access();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    pub fn clear_dirty_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        if let Some(pte) = self.find_pte_refmut(vpn) {
+            pte.clear_dirty();
             Ok(())
         } else {
             Err(())

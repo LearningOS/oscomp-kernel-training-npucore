@@ -1060,6 +1060,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     ) -> Result<(), isize> {
         log::debug!("[delete_from_disk] inode: {:?}, type: {:?}", self.get_inode_num_lock(&lock), self.file_type);
         // Remove directory entries
+        if self.parent_dir.lock().is_none() {
+            return Ok(());
+        }
         if self.delete_self_dir_ent().is_err() {
             panic!()
         }
