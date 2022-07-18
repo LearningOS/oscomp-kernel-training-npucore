@@ -111,8 +111,9 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     }
     let clear_child_tid = inner.address.clear_child_tid;
     if clear_child_tid != 0 {
-        *translated_refmut(task.get_user_token(), clear_child_tid as *mut u32) = 0;
-        FUTEX_WAIT_NO.lock().insert(clear_child_tid, 1);
+        let tid_ref = translated_refmut(task.get_user_token(), clear_child_tid as *mut u32);
+        *tid_ref = 0;
+        FUTEX_WAIT_NO.lock().insert(tid_ref as *const u32 as usize, 1);
     }
     drop(inner);
     // **** release current PCB lock

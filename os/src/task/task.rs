@@ -448,18 +448,20 @@ impl TaskControlBlock {
                 exit_code: 0,
             }),
         });
-        // add child
-        if flags.contains(CloneFlags::CLONE_PARENT) | flags.contains(CloneFlags::CLONE_THREAD) {
-            if let Some(grandparent) = &parent_inner.parent {
-                grandparent
-                    .upgrade()
-                    .unwrap()
-                    .acquire_inner_lock()
-                    .children
-                    .push(task_control_block.clone());
+        if !flags.contains(CloneFlags::CLONE_THREAD) {
+            // add child
+            if flags.contains(CloneFlags::CLONE_PARENT) {
+                if let Some(grandparent) = &parent_inner.parent {
+                    grandparent
+                        .upgrade()
+                        .unwrap()
+                        .acquire_inner_lock()
+                        .children
+                        .push(task_control_block.clone());
+                }
+            } else {
+                parent_inner.children.push(task_control_block.clone());
             }
-        } else {
-            parent_inner.children.push(task_control_block.clone());
         }
         let trap_cx = task_control_block.acquire_inner_lock().get_trap_cx();
         if flags.contains(CloneFlags::CLONE_THREAD) {

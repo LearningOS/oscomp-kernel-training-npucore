@@ -6,7 +6,7 @@ use crate::mm::{
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
-use crate::task::threads::futex;
+use crate::task::threads::{futex, FutexCmd};
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
     exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
@@ -759,7 +759,10 @@ pub fn sys_futex(
     if !option.contains(FutexOption::PRIVATE) {
         warn!("[futex] process-shared futex is unimplemented");
     }
-    let timeout = get_from_user_checked(token, timeout);
+    let timeout = match cmd {
+        FutexCmd::Wait | FutexCmd::LockPi | FutexCmd::WaitBitset => get_from_user_checked(token, timeout),
+        _ => None,
+    };
     info!(
         "[futex] uaddr: {:?}, futex_op: {:?}, option: {:?}, val: {:X}, timeout: {:?}, uaddr2: {:?}, val3: {:X}",
         uaddr, cmd, option, val, timeout, uaddr2, val3
