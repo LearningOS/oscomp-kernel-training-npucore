@@ -146,38 +146,70 @@ impl File for OSInode {
     fn w_ready(&self) -> bool {
         true
     }
-    fn read_user(&self, mut buf: UserBuffer) -> usize {
+    fn read_user(&self, offset: Option<usize>, mut buf: UserBuffer) -> usize {
         let mut total_read_size = 0usize;
 
-        let mut offset = self.offset.lock();
         let mut file_cont_lock = self.inner.lock();
-        for slice in buf.buffers.iter_mut() {
-            let read_size =
-                self.inner
-                    .read_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
-            if read_size == 0 {
-                break;
-            }
-            *offset += read_size;
-            total_read_size += read_size;
+        match offset {
+            Some(mut offset) => {
+                let mut offset = &mut offset;
+                for slice in buf.buffers.iter_mut() {
+                    let read_size =
+                        self.inner
+                            .read_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                    if read_size == 0 {
+                        break;
+                    }
+                    *offset += read_size;
+                    total_read_size += read_size;
+                }
+            },
+            None => {
+                let mut offset = self.offset.lock();
+                for slice in buf.buffers.iter_mut() {
+                    let read_size =
+                        self.inner
+                            .read_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                    if read_size == 0 {
+                        break;
+                    }
+                    *offset += read_size;
+                    total_read_size += read_size;
+                }
+            },
         }
         total_read_size
     }
-    fn write_user(&self, buf: UserBuffer) -> usize {
+    fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         let mut total_write_size = 0usize;
 
-        let mut offset = self.offset.lock();
         let mut file_cont_lock = self.inner.lock();
-        if self.append {
-            *offset = file_cont_lock.get_file_size() as usize;
-        }
-        for slice in buf.buffers.iter() {
-            let write_size =
-                self.inner
-                    .write_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
-            assert_eq!(write_size, slice.len());
-            *offset += write_size;
-            total_write_size += write_size;
+        match offset {
+            Some(mut offset) => {
+                let mut offset = &mut offset;
+                for slice in buf.buffers.iter() {
+                    let write_size =
+                        self.inner
+                            .write_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                    assert_eq!(write_size, slice.len());
+                    *offset += write_size;
+                    total_write_size += write_size;
+                }
+            },
+            None => {
+                let mut offset = self.offset.lock();
+                if self.append {
+                    *offset = file_cont_lock.get_file_size() as usize;
+                }
+                for slice in buf.buffers.iter() {
+                    let write_size =
+                        self.inner
+                            .write_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                    assert_eq!(write_size, slice.len());
+                    *offset += write_size;
+                    total_write_size += write_size;
+                }
+            },
         }
         total_write_size
     }

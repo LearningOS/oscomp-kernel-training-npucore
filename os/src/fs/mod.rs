@@ -92,11 +92,11 @@ impl FileDescriptor {
     pub fn w_ready(&self) -> bool {
         self.file.w_ready()
     }
-    pub fn read_user(&self, buf: UserBuffer) -> usize {
-        self.file.read_user(buf)
+    pub fn read_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
+        self.file.read_user(offset, buf)
     }
-    pub fn write_user(&self, buf: UserBuffer) -> usize {
-        self.file.write_user(buf)
+    pub fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
+        self.file.write_user(offset, buf)
     }
     pub fn get_stat(&self) -> Box<Stat> {
         Box::new(self.file.get_stat())

@@ -239,7 +239,7 @@ impl MemorySet {
                             as isize,
                         SeekWhence::SEEK_CUR,
                     ).unwrap();
-                    file.read_user(page);
+                    file.read_user(None, page);
                     file.lseek(old_offset as isize, SeekWhence::SEEK_SET).unwrap();
                 }
                 // if mapped successfully,
