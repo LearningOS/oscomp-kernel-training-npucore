@@ -490,7 +490,7 @@ impl Iterator for UserBufferIterator {
 pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
     let size = core::mem::size_of::<T>();
     // if all data of `*src` is in the same page, read directly
-    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size - 1) {
+    if VirtAddr::from(src as usize).floor() == VirtAddr::from(src as usize + size - 1).floor() {
         unsafe { _core::ptr::copy_nonoverlapping(translated_ref(token, src), dst, 1) };
     // or we should use UserBuffer to read across user space pages
     } else {
@@ -509,7 +509,7 @@ pub fn copy_from_user_array<T: 'static + Copy>(
 ) {
     let size = core::mem::size_of::<T>() * len;
     // if all data of `*src` is in the same page, read directly
-    if VirtPageNum::from(src as usize) == VirtPageNum::from(src as usize + size - 1) {
+    if VirtAddr::from(src as usize).floor() == VirtAddr::from(src as usize + size - 1).floor() {
         let page_table = PageTable::from_token(token);
         let src_pa = page_table
             .translate_va(VirtAddr::from(src as usize))
@@ -530,7 +530,7 @@ pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T)
     let size = core::mem::size_of::<T>();
     // A nice predicate. Well done!
     // Re: Thanks!
-    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size - 1) {
+    if VirtAddr::from(dst as usize).floor() == VirtAddr::from(dst as usize + size - 1).floor() {
         unsafe { _core::ptr::copy_nonoverlapping(src, translated_refmut(token, dst), 1) };
     // use UserBuffer to write across user space pages
     } else {
@@ -567,7 +567,7 @@ pub fn get_from_user_checked<T: 'static +  Copy>(
 pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
     let size = core::mem::size_of::<T>() * len;
     // if all data of `*dst` is in the same page, write directly
-    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size - 1) {
+    if VirtAddr::from(dst as usize).floor() == VirtAddr::from(dst as usize + size - 1).floor() {
         let page_table = PageTable::from_token(token);
         let dst_pa = page_table
             .translate_va(VirtAddr::from(dst as usize))
@@ -594,7 +594,7 @@ pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
             .unwrap();
     let dst_ptr = dst_pa.0 as *mut u8;
     // if all data of `*dst` is in the same page, write directly
-    if VirtPageNum::from(dst as usize) == VirtPageNum::from(dst as usize + size) {
+    if VirtAddr::from(dst as usize).floor() == VirtAddr::from(dst as usize + size).floor() {
         unsafe {
             _core::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, size);
             dst_ptr.add(size).write(b'\0');
