@@ -326,7 +326,7 @@ fn handle_store_misal_native(addr: usize, rt: &mut Runtime) {
                 s_lv_translation_mode_off();
             }
         }
-        0b011 => {
+        0b011 | 0b110 | 0b111 => {
             //sd
             unsafe {
                 s_lv_translation_mode_on();
@@ -459,7 +459,12 @@ fn handle_load_misal_native(addr: usize, rt: &mut Runtime) {
             }
         }
         _ => {
-            panic!("Unsupported load version")
+            println!(
+                "Unsupported load version, ins:{}, funct:{}",
+                ins,
+                get_funct(ins)
+            );
+            feature::forward_supervisor_soft()
         }
     }
 }
