@@ -17,6 +17,8 @@ extern crate alloc;
 use buddy_system_allocator::LockedHeap;
 use core::arch::asm;
 use core::panic::PanicInfo;
+pub use execute::s_lv_translation_mode_off;
+pub use execute::s_lv_translation_mode_on;
 
 use rustsbi::println;
 

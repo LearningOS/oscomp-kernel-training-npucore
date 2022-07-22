@@ -123,10 +123,48 @@ pub struct SupervisorContext {
     pub t3: usize,
     pub t4: usize,
     pub t5: usize,
-    pub t6: usize,            // 30
-    pub mstatus: Mstatus,     // 31
-    pub mepc: usize,          // 32
+    pub t6: usize, // 30
+
+    pub mstatus: Mstatus, // 31
+    pub mepc: usize,      // 32
     pub machine_stack: usize, // 33
+
+                          /*    pub ft0: f64,
+                          pub ft1: f64,
+                          pub ft2: f64,
+                          pub ft3: f64,
+                          pub ft4: f64,
+                          pub ft5: f64,
+                          pub ft6: f64,
+                          pub ft7: f64,
+
+                          pub fs0: f64,
+                          pub fs1: f64,
+
+                          pub fa0: f64,
+                          pub fa1: f64,
+                          pub fa2: f64,
+                          pub fa3: f64,
+                          pub fa4: f64,
+                          pub fa5: f64,
+                          pub fa6: f64,
+                          pub fa7: f64,
+
+                          pub fs2: f64,
+                          pub fs3: f64,
+                          pub fs4: f64,
+                          pub fs5: f64,
+                          pub fs6: f64,
+                          pub fs7: f64,
+                          pub fs8: f64,
+                          pub fs9: f64,
+                          pub fs10: f64,
+                          pub fs11: f64,
+
+                          pub ft8: f64,
+                          pub ft9: f64,
+                          pub ft10: f64,
+                          pub ft11: f64,*/
 }
 
 #[naked]
@@ -139,9 +177,10 @@ unsafe extern "C" fn do_resume(_supervisor_context: *mut SupervisorContext) {
 #[link_section = ".text"]
 unsafe extern "C" fn from_machine_save(_supervisor_context: *mut SupervisorContext) -> ! {
     asm!( // sp:机器栈顶
-        "addi   sp, sp, -15*8", // sp:机器栈顶
-        // 进入函数之前，已经保存了调用者寄存器，应当保存被调用者寄存器
-        "sd     ra, 0*8(sp)
+        "addi   sp, sp, -15*8",
+         //   "addi   sp, sp, -27*8", // sp:机器栈顶
+            // 进入函数之前，已经保存了调用者寄存器，应当保存被调用者寄存器
+            "sd     ra, 0*8(sp)
         sd      gp, 1*8(sp)
         sd      tp, 2*8(sp)
         sd      s0, 3*8(sp)
@@ -155,12 +194,26 @@ unsafe extern "C" fn from_machine_save(_supervisor_context: *mut SupervisorConte
         sd      s8, 11*8(sp)
         sd      s9, 12*8(sp)
         sd      s10, 13*8(sp)
-        sd      s11, 14*8(sp)", 
-        // a0:特权级上下文
-        "j      {to_supervisor_restore}",
-        to_supervisor_restore = sym to_supervisor_restore,
-        options(noreturn)
-    )
+        sd      s11, 14*8(sp)",
+
+    /*        fld     fs0, 34*8+8*8(sp)
+            fld     fs1, 34*8+9*8(sp)
+
+            fld     fs2, 34*8+18*8(sp)
+            fld     fs3, 34*8+19*8(sp)
+            fld     fs4, 34*8+20*8(sp)
+            fld     fs5, 34*8+21*8(sp)
+            fld     fs6, 34*8+22*8(sp)
+            fld     fs7, 34*8+23*8(sp)
+            fld     fs8, 34*8+24*8(sp)
+            fld     fs9, 34*8+25*8(sp)
+            fld    fs10, 34*8+26*8(sp)
+            fld    fs11, 34*8+27*8(sp)" */
+            // a0:特权级上下文
+            "j      {to_supervisor_restore}",
+            to_supervisor_restore = sym to_supervisor_restore,
+            options(noreturn)
+        )
 }
 
 #[naked]
@@ -205,7 +258,44 @@ pub unsafe extern "C" fn to_supervisor_restore(_supervisor_context: *mut Supervi
         ld      t3, 27*8(sp)
         ld      t4, 28*8(sp)
         ld      t5, 29*8(sp)
-        ld      t6, 30*8(sp)",
+        ld      t6, 30*8(sp)
+",
+        /*      fld     ft0, 34*8+0*8(sp)
+        fld     ft1, 34*8+1*8(sp)
+        fld     ft2, 34*8+2*8(sp)
+        fld     ft3, 34*8+3*8(sp)
+        fld     ft4, 34*8+4*8(sp)
+        fld     ft5, 34*8+5*8(sp)
+        fld     ft6, 34*8+6*8(sp)
+        fld     ft7, 34*8+7*8(sp)
+
+        fld     fs0, 34*8+8*8(sp)
+        fld     fs1, 34*8+9*8(sp)
+
+        fld     fa0, 34*8+10*8(sp)
+        fld     fa1, 34*8+11*8(sp)
+        fld     fa2, 34*8+12*8(sp)
+        fld     fa3, 34*8+13*8(sp)
+        fld     fa4, 34*8+14*8(sp)
+        fld     fa5, 34*8+15*8(sp)
+        fld     fa6, 34*8+16*8(sp)
+        fld     fa7, 34*8+17*8(sp)
+
+        fld     fs2, 34*8+18*8(sp)
+        fld     fs3, 34*8+19*8(sp)
+        fld     fs4, 34*8+20*8(sp)
+        fld     fs5, 34*8+21*8(sp)
+        fld     fs6, 34*8+22*8(sp)
+        fld     fs7, 34*8+23*8(sp)
+        fld     fs8, 34*8+24*8(sp)
+        fld     fs9, 34*8+25*8(sp)
+        fld    fs10, 34*8+26*8(sp)
+        fld    fs11, 34*8+27*8(sp)
+
+        fld     ft8, 34*8+28*8(sp)
+        fld     ft9, 34*8+29*8(sp)
+        fld    ft10, 34*8+30*8(sp)
+        fld    ft11, 34*8+31*8(sp)*/
         "ld     sp, 1*8(sp)", // 新sp:特权级栈
         // sp:特权级栈, mscratch:特权级上下文
         "mret",
@@ -219,9 +309,9 @@ pub unsafe extern "C" fn to_supervisor_restore(_supervisor_context: *mut Supervi
 #[link_section = ".text"]
 pub unsafe extern "C" fn from_supervisor_save() -> ! {
     asm!( // sp:特权级栈,mscratch:特权级上下文
-        ".p2align 2",
-        "csrrw  sp, mscratch, sp", // 新mscratch:特权级栈, 新sp:特权级上下文
-        "sd     ra, 0*8(sp)
+          ".p2align 2",
+          "csrrw  sp, mscratch, sp", // 新mscratch:特权级栈, 新sp:特权级上下文
+          "sd     ra, 0*8(sp)
         sd      gp, 2*8(sp)
         sd      tp, 3*8(sp)
         sd      t0, 4*8(sp)
@@ -250,18 +340,56 @@ pub unsafe extern "C" fn from_supervisor_save() -> ! {
         sd      t3, 27*8(sp)
         sd      t4, 28*8(sp)
         sd      t5, 29*8(sp)
-        sd      t6, 30*8(sp)",
-        "csrr   t0, mstatus
-        sd      t0, 31*8(sp)",
-        "csrr   t1, mepc
-        sd      t1, 32*8(sp)",
-        // mscratch:特权级栈,sp:特权级上下文
-        "csrrw  t2, mscratch, sp", // 新mscratch:特权级上下文,t2:特权级栈
-        "sd     t2, 1*8(sp)", // 保存特权级栈
-        "j      {to_machine_restore}",
-        to_machine_restore = sym to_machine_restore,
-        options(noreturn)
-    )
+        sd      t6, 30*8(sp)
+",
+
+    /*      fsd     ft0, 34*8+0*8(sp)
+          fsd     ft1, 34*8+1*8(sp)
+          fsd     ft2, 34*8+2*8(sp)
+          fsd     ft3, 34*8+3*8(sp)
+          fsd     ft4, 34*8+4*8(sp)
+          fsd     ft5, 34*8+5*8(sp)
+          fsd     ft6, 34*8+6*8(sp)
+          fsd     ft7, 34*8+7*8(sp)
+
+          fsd     fs0, 34*8+8*8(sp)
+          fsd     fs1, 34*8+9*8(sp)
+
+          fsd     fa0, 34*8+10*8(sp)
+          fsd     fa1, 34*8+11*8(sp)
+          fsd     fa2, 34*8+12*8(sp)
+          fsd     fa3, 34*8+13*8(sp)
+          fsd     fa4, 34*8+14*8(sp)
+          fsd     fa5, 34*8+15*8(sp)
+          fsd     fa6, 34*8+16*8(sp)
+          fsd     fa7, 34*8+17*8(sp)
+
+          fsd     fs2, 34*8+18*8(sp)
+          fsd     fs3, 34*8+19*8(sp)
+          fsd     fs4, 34*8+20*8(sp)
+          fsd     fs5, 34*8+21*8(sp)
+          fsd     fs6, 34*8+22*8(sp)
+          fsd     fs7, 34*8+23*8(sp)
+          fsd     fs8, 34*8+24*8(sp)
+          fsd     fs9, 34*8+25*8(sp)
+          fsd    fs10, 34*8+26*8(sp)
+          fsd    fs11, 34*8+27*8(sp)
+
+          fsd     ft8, 34*8+28*8(sp)
+          fsd     ft9, 34*8+29*8(sp)
+          fsd    ft10, 34*8+30*8(sp)
+          fsd    ft11, 34*8+31*8(sp)*/
+          "csrr   t0, mstatus
+          sd      t0, 31*8(sp)",
+          "csrr   t1, mepc
+          sd      t1, 32*8(sp)",
+          // mscratch:特权级栈,sp:特权级上下文
+          "csrrw  t2, mscratch, sp", // 新mscratch:特权级上下文,t2:特权级栈
+          "sd     t2, 1*8(sp)", // 保存特权级栈
+          "j      {to_machine_restore}",
+          to_machine_restore = sym to_machine_restore,
+          options(noreturn)
+      )
 }
 
 #[naked]
@@ -285,9 +413,24 @@ unsafe extern "C" fn to_machine_restore() -> ! {
         ld      s8, 11*8(sp)
         ld      s9, 12*8(sp)
         ld      s10, 13*8(sp)
-        ld      s11, 14*8(sp)",
+        ld      s11, 14*8(sp)
+",
+        /*      fld     fs0, 34*8+8*8(sp)
+        fld     fs1, 34*8+9*8(sp)
+
+        fld     fs2, 34*8+18*8(sp)
+        fld     fs3, 34*8+19*8(sp)
+        fld     fs4, 34*8+20*8(sp)
+        fld     fs5, 34*8+21*8(sp)
+        fld     fs6, 34*8+22*8(sp)
+        fld     fs7, 34*8+23*8(sp)
+        fld     fs8, 34*8+24*8(sp)
+        fld     fs9, 34*8+25*8(sp)
+        fld    fs10, 34*8+26*8(sp)
+        fld    fs11, 34*8+27*8(sp)*/
         "addi   sp, sp, 15*8", // sp:机器栈顶
-        "jr     ra",           // 其实就是ret
+        //        "addi   sp, sp, 27*8",
+        "jr     ra", // 其实就是ret
         options(noreturn)
     )
 }
