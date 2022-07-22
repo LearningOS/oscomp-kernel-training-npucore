@@ -190,7 +190,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     if ![
         //black list
         SYSCALL_YIELD,
-        SYSCALL_READ,
+        // SYSCALL_READ,
         SYSCALL_WRITE,
         SYSCALL_GETDENTS64,
         SYSCALL_READV,
@@ -199,7 +199,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_SIGACTION,
         SYSCALL_SIGPROCMASK,
         // SYSCALL_WAIT4,
-        SYSCALL_GETPPID,
+        // SYSCALL_GETPPID,
         SYSCALL_CLOCK_GETTIME,
     ]
     .contains(&syscall_id)

@@ -1,6 +1,7 @@
 use core::fmt::{self, Debug, Formatter};
 use core::mem::{size_of, MaybeUninit};
 use log::{debug, error, info, trace, warn};
+use riscv::register::scause::{Trap, Exception};
 use riscv::register::{scause, stval};
 
 use crate::config::*;
@@ -311,6 +312,21 @@ pub fn do_signal() {
         // user-defined handler
         if let Some(act) = result {
             let trap_cx = inner.get_trap_cx();
+            // if this syscall wants to restart
+            if scause::read().cause() == Trap::Exception(Exception::UserEnvCall) && trap_cx.gp.a0 == ERESTART as usize {
+                // and if `SA_RESTART` is set
+                if act.flags.contains(SigActionFlags::SA_RESTART) {
+                    debug!("[do_signal] syscall will restart after sigreturn");
+                    // back to `ecall`
+                    trap_cx.gp.pc -= 4;
+                    // restore syscall parameter `a0`
+                    trap_cx.gp.a0 = trap_cx.origin_a0;
+                } else {
+                    debug!("[do_signal] syscall was interrupted");
+                    // will return EINTR after sigreturn
+                    trap_cx.gp.a0 = EINTR as usize;
+                }
+            }
             let ucontext_addr = (trap_cx.gp.sp - size_of::<UserContext>()) & !0x7;
             let siginfo_addr = (ucontext_addr - size_of::<SigInfo>()) & !0x7;
             // check if we have enough space on user stack

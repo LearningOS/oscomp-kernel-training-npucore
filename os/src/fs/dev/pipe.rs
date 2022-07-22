@@ -143,8 +143,13 @@ impl File for Pipe {
         loop {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
-            if !inner.sigpending.is_empty() {
-                return EINTR as usize;
+            if !inner.sigpending.difference(inner.sigmask).is_empty() {
+                if read_size == 0 {
+                    return ERESTART as usize;
+                } else {
+                    // interrupted but has read something
+                    return read_size;
+                }
             }
             drop(inner);
             drop(task);
@@ -191,8 +196,13 @@ impl File for Pipe {
         loop {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
-            if !inner.sigpending.is_empty() {
-                return EINTR as usize;
+            if !inner.sigpending.difference(inner.sigmask).is_empty() {
+                if write_size == 0 {
+                    return ERESTART as usize;
+                } else {
+                    // interrupted but has written something
+                    return write_size;
+                }
             }
             drop(inner);
             drop(task);
