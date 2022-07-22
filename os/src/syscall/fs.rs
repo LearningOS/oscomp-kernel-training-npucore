@@ -405,6 +405,7 @@ pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
     };
     fd_table[read_fd] = Some(FileDescriptor::new(
         flags.contains(OpenFlags::O_CLOEXEC),
+        false,
         pipe_read,
     ));
     let write_fd = match fd_table.alloc_fd() {
@@ -413,6 +414,7 @@ pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
     };
     fd_table[write_fd] = Some(FileDescriptor::new(
         flags.contains(OpenFlags::O_CLOEXEC),
+        false,
         pipe_write,
     ));
     let token = task.get_user_token();
@@ -1101,7 +1103,11 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
         }
         Fcntl_Command::GETFL => {
             // Access control is not fully implemented
-            OpenFlags::O_RDWR.bits() as isize
+            let mut res = OpenFlags::O_RDWR.bits() as isize;
+            if file_descriptor.get_nonblock() {
+                res |= OpenFlags::O_NONBLOCK.bits() as isize;
+            }
+            res
         }
         command => {
             warn!("[fcntl] Unsupported command: {:?}", command);

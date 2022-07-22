@@ -10,7 +10,7 @@ use core::{
     ops::{Index, IndexMut},
     slice::{Iter, IterMut},
 };
-pub use {self::dev::null::*, self::dev::pipe::*, self::dev::tty::*, self::dev::zero::*};
+pub use {self::dev::{null::*, pipe::*, socket::*, tty::*, zero::*}};
 
 pub use self::layout::*;
 
@@ -31,6 +31,7 @@ use spin::Mutex;
 lazy_static! {
     pub static ref ROOT_FD: Arc<FileDescriptor> = Arc::new(FileDescriptor::new(
         false,
+        false,
         self::directory_tree::ROOT
             .open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true)
             .unwrap()
@@ -44,20 +45,24 @@ pub fn is_relative(path: &str) -> bool {
 #[derive(Clone)]
 pub struct FileDescriptor {
     cloexec: bool,
+    nonblock: bool,
     pub file: Arc<dyn File>,
 }
 #[allow(unused)]
 impl FileDescriptor {
-    pub fn new(cloexec: bool, file: Arc<dyn File>) -> Self {
-        Self { cloexec, file }
+    pub fn new(cloexec: bool, nonblock: bool, file: Arc<dyn File>) -> Self {
+        Self { cloexec, nonblock, file }
     }
     pub fn set_cloexec(&mut self, flag: bool) {
         self.cloexec = flag;
     }
-
     pub fn get_cloexec(&self) -> bool {
         self.cloexec
     }
+
+    pub fn get_nonblock(&self) -> bool {
+        self.nonblock
+    } 
 
     pub fn get_cwd(&self) -> Option<String> {
         let inode = self.file.get_dirtree_node();
@@ -115,7 +120,7 @@ impl FileDescriptor {
             Err(errno) => return Err(errno),
         };
         let cloexec = flags.contains(OpenFlags::O_CLOEXEC);
-        Ok(Self::new(cloexec, file))
+        Ok(Self::new(cloexec, false, file))
     }
     pub fn mkdir(&self, path: &str) -> Result<(), isize> {
         if self.file.is_file() && is_relative(path) {
