@@ -91,7 +91,7 @@ pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
             file.read(Some(&mut 0usize), magic_number.as_mut_slice());
             match magic_number.as_slice() {
                 b"\x7fELF" => {
-                    let buffer_addr = KERNEL_SPACE.lock().last_mmap_area_end();
+                    let buffer_addr = KERNEL_SPACE.lock().highest_addr();
                     let buffer = unsafe {
                         core::slice::from_raw_parts_mut(buffer_addr.0 as *mut u8, file.get_size())
                     };

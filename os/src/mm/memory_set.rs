@@ -58,8 +58,6 @@ pub struct MemorySet {
     /// Segments are implemented using this mechanism. In other words, they may be considered a subset of MapArea.
     /// Yet, other purposes may exist in this struct, such as file mapping.
     areas: Vec<MapArea>,
-    /// The pointer to store the heap area in order to ease the heap lookup and allocation/CoW.
-    heap_area_idx: Option<usize>,
 }
 
 impl MemorySet {
@@ -68,7 +66,6 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
-            heap_area_idx: None,
         }
     }
     /// Getter to the token of current memory space, or "this" page table.
@@ -109,7 +106,10 @@ impl MemorySet {
         self.push_no_alloc(map_area)?;
         Ok(())
     }
-    pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) -> Result<(), MemoryError> {
+    pub fn remove_area_with_start_vpn(
+        &mut self,
+        start_vpn: VirtPageNum,
+    ) -> Result<(), MemoryError> {
         if let Some((idx, area)) = self
             .areas
             .iter_mut()
@@ -165,38 +165,28 @@ impl MemorySet {
         Ok(())
     }
     pub fn last_mmap_area_idx(&self) -> Option<usize> {
-        // Kernel space
-        if self.heap_area_idx.is_none() {
-            Some(self.areas.len() - 1)
-        } else {
-            for (idx, area) in self.areas.iter().enumerate().rev().skip(2) {
-                let start_vpn = area.data_frames.vpn_range.get_start();
-                if start_vpn >= VirtAddr::from(MMAP_END).into() {
-                    continue;
-                } else if start_vpn >= VirtAddr::from(MMAP_BASE).into() && start_vpn < VirtAddr::from(MMAP_END).into() {
-                    return Some(idx);
-                } else {
-                    return None;
-                }
+        for (idx, area) in self.areas.iter().enumerate().rev().skip(2) {
+            let start_vpn = area.data_frames.vpn_range.get_start();
+            if start_vpn >= VirtAddr::from(MMAP_END).into() {
+                continue;
+            } else if start_vpn >= VirtAddr::from(MMAP_BASE).into()
+                && start_vpn < VirtAddr::from(MMAP_END).into()
+            {
+                return Some(idx);
+            } else {
+                return None;
             }
-            unreachable!();
         }
+        unreachable!();
     }
-    pub fn last_mmap_area(&self) -> Option<&MapArea> {
-        match self.last_mmap_area_idx() {
-            Some(idx) => Some(&self.areas[idx]),
-            None => None,
-        }
-    }
-    pub fn last_mmap_area_end(&self) -> VirtAddr {
-        match self.last_mmap_area() {
-            Some(area) => {
-                let end_va: VirtAddr = area.data_frames.vpn_range.get_end().into();
-                debug!("[last_mmap_area_end] end_va: {:?}", end_va);
-                end_va
-            }
-            None => MMAP_BASE.into(),
-        }
+    pub fn highest_addr(&self) -> VirtAddr {
+        self.areas
+            .last()
+            .unwrap()
+            .data_frames
+            .vpn_range
+            .get_end()
+            .into()
     }
     pub fn contains_valid_buffer(&self, buf: usize, size: usize, perm: MapPermission) -> bool {
         let start_vpn = VirtAddr::from(buf).floor();
@@ -238,9 +228,11 @@ impl MemorySet {
                         (target - VirtAddr::from(area.data_frames.vpn_range.get_start()).0)
                             as isize,
                         SeekWhence::SEEK_CUR,
-                    ).unwrap();
+                    )
+                    .unwrap();
                     file.read_user(None, page);
-                    file.lseek(old_offset as isize, SeekWhence::SEEK_SET).unwrap();
+                    file.lseek(old_offset as isize, SeekWhence::SEEK_SET)
+                        .unwrap();
                 }
                 // if mapped successfully,
                 // in other words, not previously mapped before last statement(let result = ...)
@@ -465,7 +457,6 @@ impl MemorySet {
                 _ => {}
             }
         }
-        self.heap_area_idx = Some(load_segment_count + self.heap_area_idx.unwrap_or_default());
         match (program_break, load_addr) {
             (Some(program_break), Some(load_addr)) => Ok((
                 program_break,
@@ -535,7 +526,6 @@ impl MemorySet {
             "[fork] copy trap_cx area: {:?}",
             trap_cx_area.data_frames.vpn_range
         );
-        memory_set.heap_area_idx = user_space.heap_area_idx;
         memory_set
     }
     pub fn activate(&self) {
@@ -585,25 +575,32 @@ impl MemorySet {
                 );
                 return old_pt;
             } else {
-                let idx = self.heap_area_idx.unwrap();
-                // first time to expand heap area, insert heap area
-                if old_pt == heap_bottom {
-                    let area = MapArea::new(
-                        old_pt.into(),
-                        new_pt.into(),
-                        MapType::Framed,
-                        MapPermission::R | MapPermission::W | MapPermission::U,
-                        None,
-                    );
-                    self.areas.insert(idx, area);
-                    debug!("[sbrk] heap area allocated");
-                // the process already have a heap area, adjust it
-                } else {
-                    self.areas[idx]
-                        .expand_to(&mut self.page_table, VirtAddr::from(new_pt))
-                        .unwrap();
-                    trace!("[sbrk] heap area expanded to {:X}", new_pt);
-                }
+                self.mmap(
+                    old_pt,
+                    increment as usize,
+                    MapPermission::R | MapPermission::W | MapPermission::U,
+                    MapFlags::MAP_ANONYMOUS | MapFlags::MAP_FIXED | MapFlags::MAP_PRIVATE,
+                    1usize.wrapping_neg(),
+                    0,
+                );
+                // // first time to expand heap area, insert heap area
+                // if old_pt == heap_bottom {
+                //     let area = MapArea::new(
+                //         old_pt.into(),
+                //         new_pt.into(),
+                //         MapType::Framed,
+                //         MapPermission::R | MapPermission::W | MapPermission::U,
+                //         None,
+                //     );
+                //     self.areas.insert(idx, area);
+                //     debug!("[sbrk] heap area allocated");
+                // // the process already have a heap area, adjust it
+                // } else {
+                //     self.areas[idx]
+                //         .expand_to(&mut self.page_table, VirtAddr::from(new_pt))
+                //         .unwrap();
+                trace!("[sbrk] heap area expanded to {:X}", new_pt);
+                // }
             }
         } else if increment < 0 {
             // shrink to `heap_bottom` would cause duplicated insertion of heap area in future
@@ -617,12 +614,13 @@ impl MemorySet {
             // attention that if the process never call sbrk before, it would have no heap area
             // we only do shrinking when it does have a heap area
             } else {
-                if let Some(idx) = self.heap_area_idx {
-                    self.areas[idx]
-                        .shrink_to(&mut self.page_table, VirtAddr::from(new_pt))
-                        .unwrap();
-                    trace!("[sbrk] heap area shrinked to {:X}", new_pt);
-                }
+                self.munmap(old_pt, increment as usize).unwrap();
+                // if let Some(idx) = self.heap_area_idx {
+                //     self.areas[idx]
+                //         .shrink_to(&mut self.page_table, VirtAddr::from(new_pt))
+                //         .unwrap();
+                trace!("[sbrk] heap area shrinked to {:X}", new_pt);
+                // }
             }
             // we need to adjust `heap_pt` if it's not out of bound
             // in spite of whether the process has a heap area
@@ -647,7 +645,8 @@ impl MemorySet {
         let idx = self.last_mmap_area_idx();
         let page_table = &mut self.page_table;
         let start_va: VirtAddr = if flags.contains(MapFlags::MAP_FIXED) {
-            self.munmap(start, len).unwrap();
+            // unmap if exists
+            self.munmap(start, len);
             start.into()
         } else {
             if let Some(idx) = idx {
@@ -693,13 +692,16 @@ impl MemorySet {
             }
         }
         // insert MapArea and keep the order
-        let (idx, _) = self.areas.iter().enumerate().skip(self.heap_area_idx.unwrap()).find(|(_, area)| {
-            area.data_frames.vpn_range.get_start() >= start_va.into()
-        }).unwrap();
+        let (idx, _) = self
+            .areas
+            .iter()
+            .enumerate()
+            .skip_while(|(_, area)| {
+                area.data_frames.vpn_range.get_start() >= VirtAddr::from(MMAP_END).into()
+            })
+            .find(|(_, area)| area.data_frames.vpn_range.get_start() >= start_va.into())
+            .unwrap();
         self.areas.insert(idx, new_area);
-        if idx <= self.heap_area_idx.unwrap() {
-            self.heap_area_idx = Some(self.heap_area_idx.unwrap() + 1);
-        }
         start_va.0
     }
     pub fn munmap(&mut self, start: usize, len: usize) -> Result<(), isize> {
@@ -748,12 +750,8 @@ impl MemorySet {
                 }
             }
         });
-        let mut heap_area_idx = self.heap_area_idx.unwrap();
         for idx in delete.into_iter().rev() {
             self.areas.remove(idx);
-            if idx <= heap_area_idx {
-                heap_area_idx -= 1;
-            }
         }
         if let Some(idx) = break_apart_idx {
             let (first, mut second, third) = self
@@ -766,12 +764,8 @@ impl MemorySet {
             }
             self.areas.insert(idx, first);
             self.areas.insert(idx + 1, third);
-            if idx <= self.heap_area_idx.unwrap() {
-                heap_area_idx += 1;
-            }
         }
         if found_area {
-            self.heap_area_idx = Some(heap_area_idx);
             Ok(())
         } else {
             Err(EINVAL)
@@ -801,7 +795,6 @@ impl MemorySet {
             Some((mut idx, _)) => {
                 let area_start_vpn = self.areas[idx].data_frames.vpn_range.get_start();
                 let area_end_vpn = self.areas[idx].data_frames.vpn_range.get_end();
-                let mut heap_area_idx = self.heap_area_idx.unwrap();
                 // Addresses in the range [addr, addr+len-1] are invalid for the address space of the process,
                 // or specify one or more pages that are not mapped.
                 if end_vpn > area_end_vpn {
@@ -815,9 +808,6 @@ impl MemorySet {
                     trace!("[mprotect] change prot of lower part");
                     let (first, second) = self.areas.remove(idx).into_two(end_vpn).unwrap();
                     self.areas.insert(idx, second);
-                    if idx <= heap_area_idx {
-                        heap_area_idx += 1;
-                    }
                     // important, keep the order of areas
                     idx -= 1;
                     first
@@ -825,9 +815,6 @@ impl MemorySet {
                     trace!("[mprotect] change prot of higher part");
                     let (first, second) = self.areas.remove(idx).into_two(start_vpn).unwrap();
                     self.areas.insert(idx, first);
-                    if idx <= heap_area_idx {
-                        heap_area_idx += 1;
-                    }
                     second
                 } else {
                     trace!("[mprotect] change prot of internal part, call into_three");
@@ -838,9 +825,6 @@ impl MemorySet {
                         .unwrap();
                     self.areas.insert(idx, first);
                     self.areas.insert(idx + 1, third);
-                    if idx <= heap_area_idx {
-                        heap_area_idx += 2;
-                    }
                     second
                 };
                 let page_table = &mut self.page_table;
@@ -858,7 +842,6 @@ impl MemorySet {
                 // If `prot` contains W, store page fault & CoW will occur.
                 area.map_perm = prot;
                 self.areas.insert(idx + 1, area);
-                self.heap_area_idx = Some(heap_area_idx);
             }
             None => {
                 warn!("[mprotect] addr is not a valid pointer");
@@ -1045,13 +1028,16 @@ impl MemorySet {
         let ustack_top_va: VirtAddr = (ustack_bottom_from_tid(tid) - USER_STACK_SIZE).into();
         if let Err(err) = self.remove_area_with_start_vpn(ustack_top_va.into()) {
             match err {
-                MemoryError::AreaNotFound => warn!("[dealloc_user_res] user stack is not allocated"),
+                MemoryError::AreaNotFound => {
+                    warn!("[dealloc_user_res] user stack is not allocated")
+                }
                 _ => unreachable!(),
             }
         }
         // dealloc trap_cx manually
         let trap_cx_bottom_va: VirtAddr = trap_cx_bottom_from_tid(tid).into();
-        self.remove_area_with_start_vpn(trap_cx_bottom_va.into()).unwrap();
+        self.remove_area_with_start_vpn(trap_cx_bottom_va.into())
+            .unwrap();
     }
 }
 
@@ -1246,7 +1232,11 @@ impl MapArea {
     /// the virtual page will be mapped directly to the physical page with an identical address to the page.
     /// # Note
     /// Vpn should be in this map area, but the check is not enforced in this function!
-    pub fn map_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result<(), MemoryError> {
+    pub fn map_one(
+        &mut self,
+        page_table: &mut PageTable,
+        vpn: VirtPageNum,
+    ) -> Result<(), MemoryError> {
         if !page_table.is_mapped(vpn) {
             //if not mapped
             let ppn: PhysPageNum;
@@ -1273,7 +1263,11 @@ impl MapArea {
     /// This is unnecessary if the area is directly mapped.
     /// # Note
     /// Vpn should be in this map area, but the check is not enforced in this function!
-    pub fn unmap_one(&mut self, page_table: &mut PageTable, vpn: VirtPageNum) -> Result<(), MemoryError> {
+    pub fn unmap_one(
+        &mut self,
+        page_table: &mut PageTable,
+        vpn: VirtPageNum,
+    ) -> Result<(), MemoryError> {
         if !page_table.is_mapped(vpn) {
             return Err(MemoryError::NotMapped);
         }
@@ -1545,12 +1539,14 @@ impl MapArea {
     pub fn into_two(self, cut: VirtPageNum) -> Result<(Self, Self), ()> {
         let second_file = if let Some(file) = &self.map_file {
             let new_file = file.deep_clone();
-            new_file.lseek(
-                (file.get_offset() + VirtAddr::from(cut).0
-                    - VirtAddr::from(self.data_frames.vpn_range.get_start()).0)
-                    as isize,
-                SeekWhence::SEEK_SET,
-            ).unwrap();
+            new_file
+                .lseek(
+                    (file.get_offset() + VirtAddr::from(cut).0
+                        - VirtAddr::from(self.data_frames.vpn_range.get_start()).0)
+                        as isize,
+                    SeekWhence::SEEK_SET,
+                )
+                .unwrap();
             Some(new_file)
         } else {
             None
