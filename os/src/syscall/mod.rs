@@ -61,6 +61,15 @@ const SYSCALL_GETGID: usize = 176;
 const SYSCALL_GETEGID: usize = 177;
 const SYSCALL_GETTID: usize = 178;
 const SYSCALL_SYSINFO: usize = 179;
+const SYSCALL_SOCKET: usize = 198;
+const SYSCALL_BIND: usize = 200;
+const SYSCALL_LISTEN: usize = 201;
+const SYSCALL_ACCEPT: usize = 202;
+const SYSCALL_CONNECT: usize = 203;
+const SYSCALL_GETSOCKNAME: usize = 204;
+const SYSCALL_SENDTO: usize = 206;
+const SYSCALL_RECVFROM: usize = 207;
+const SYSCALL_SETSOCKOPT: usize = 208;
 const SYSCALL_SBRK: usize = 213;
 const SYSCALL_BRK: usize = 214;
 const SYSCALL_MUNMAP: usize = 215;
@@ -85,9 +94,11 @@ const SYSCALL_GET_TIME: usize = 1690; //you mean get time of day by 169?
 pub mod errno;
 pub mod fs;
 mod process;
+mod socket;
 
 use core::convert::TryFrom;
 use fs::*;
+use socket::*;
 use log::{debug, error, info, trace, warn};
 pub use process::{CloneFlags, FutexOption};
 use process::*;
@@ -159,6 +170,15 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_GETEGID => "getegid",
         SYSCALL_GETTID => "gettid",
         SYSCALL_SYSINFO => "sysinfo",
+        SYSCALL_SOCKET => "socket",
+        SYSCALL_BIND => "bind",
+        SYSCALL_LISTEN => "listen",
+        SYSCALL_ACCEPT => "accept",
+        SYSCALL_CONNECT => "connect",
+        SYSCALL_GETSOCKNAME => "getsockname",
+        SYSCALL_SENDTO => "sendto",
+        SYSCALL_RECVFROM => "recvfrom",
+        SYSCALL_SETSOCKOPT => "setsockopt",
         SYSCALL_SBRK => "sbrk",
         SYSCALL_BRK => "brk",
         SYSCALL_MUNMAP => "munmap",
@@ -378,6 +398,58 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         SYSCALL_STATFS => sys_statfs(
             args[0] as *const u8,
             args[1] as *mut Statfs
+        ),
+        SYSCALL_SOCKET => sys_socket(
+            args[0] as u32, 
+            args[1] as u32, 
+            args[2] as u32
+        ),
+        SYSCALL_BIND => sys_bind(
+            args[0], 
+            args[1] as *const u8, 
+            args[2] as u32
+        ),
+        SYSCALL_LISTEN => sys_listen(
+            args[0],
+            args[1] as u32
+        ),
+        SYSCALL_ACCEPT => sys_accept(
+            args[0], 
+            args[1] as *const u8, 
+            args[2] as u32
+        ),
+        SYSCALL_CONNECT => sys_connect(
+            args[0], 
+            args[1] as *const u8, 
+            args[2] as u32
+        ),
+        SYSCALL_GETSOCKNAME => sys_getsockname(
+            args[0], 
+            args[1] as *const u8, 
+            args[2] as u32
+        ),
+        SYSCALL_SENDTO => sys_sendto(
+            args[0], 
+            args[1] as *const u8, 
+            args[2],
+            args[3] as u32,
+            args[4] as *const u8, 
+            args[5] as u32,
+        ),
+        SYSCALL_RECVFROM => sys_recvfrom(
+            args[0], 
+            args[1] as *mut u8, 
+            args[2],
+            args[3] as u32,
+            args[4] as *const u8, 
+            args[5] as u32,
+        ),
+        SYSCALL_SETSOCKOPT => sys_setsockopt(
+            args[0],
+            args[1] as u32, 
+            args[2] as u32, 
+            args[3] as *const u8, 
+            args[4] as u32
         ),
         _ => {
             error!(
