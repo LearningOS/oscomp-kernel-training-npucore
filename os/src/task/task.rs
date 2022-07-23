@@ -53,7 +53,7 @@ pub struct TaskControlBlockInner {
     pub parent: Option<Weak<TaskControlBlock>>,
     pub children: Vec<Arc<TaskControlBlock>>,
     pub exit_code: u32,
-    pub address: ProcAddress,
+    pub clear_child_tid: usize,
     pub heap_bottom: usize,
     pub heap_pt: usize,
     pub pgid: usize,
@@ -260,7 +260,7 @@ impl TaskControlBlock {
                 parent: None,
                 children: Vec::new(),
                 exit_code: 0,
-                address: ProcAddress::new(),
+                clear_child_tid: 0,
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
                 pgid,
@@ -320,11 +320,11 @@ impl TaskControlBlock {
             .unwrap()
             .ppn();
         *inner.get_trap_cx() = trap_cx;
+        // clear clear_child_tid
+        inner.clear_child_tid = 0;
         // update heap pointers
         inner.heap_bottom = program_break;
         inner.heap_pt = program_break;
-        // flush clear_child_tid
-        inner.address = ProcAddress::new();
         // track the change of ELF file
         *self.exe.lock() = elf;
         // flush cloexec fd
@@ -433,7 +433,7 @@ impl TaskControlBlock {
                 children: Vec::new(),
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
-                address: ProcAddress::new(),
+                clear_child_tid: 0,
                 timer: [ITimerVal::new(); 3],
                 sigmask: Signals::empty(),
                 // compute
@@ -519,18 +519,4 @@ pub enum TaskStatus {
     Running,
     Zombie,
     Interruptible,
-}
-
-pub struct ProcAddress {
-    pub set_child_tid: usize,
-    pub clear_child_tid: usize,
-}
-
-impl ProcAddress {
-    pub fn new() -> Self {
-        Self {
-            set_child_tid: 0,
-            clear_child_tid: 0,
-        }
-    }
 }

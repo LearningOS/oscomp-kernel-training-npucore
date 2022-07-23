@@ -444,12 +444,10 @@ pub fn sys_clone(
         *translated_refmut(parent.get_user_token(), ptid) = child.pid.0 as u32;
     }
     if flags.contains(CloneFlags::CLONE_CHILD_SETTID) {
-        child.acquire_inner_lock().address.set_child_tid = ctid as usize;
         *translated_refmut(child.get_user_token(), ctid) = child.pid.0 as u32;
     }
     if flags.contains(CloneFlags::CLONE_CHILD_CLEARTID) {
-        child.acquire_inner_lock().address.clear_child_tid = ctid as usize;
-        *translated_refmut(child.get_user_token(), ctid) = 0u32;
+        child.acquire_inner_lock().clear_child_tid = ctid as usize;
     }
     // add new task to scheduler
     add_task(child);
@@ -717,7 +715,6 @@ pub fn sys_set_tid_address(tidptr: usize) -> isize {
     current_task()
         .unwrap()
         .acquire_inner_lock()
-        .address
         .clear_child_tid = tidptr;
     sys_gettid()
 }
