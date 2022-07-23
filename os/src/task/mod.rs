@@ -102,12 +102,11 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     // ++++++ release parent PCB lock here
 
     inner.children.clear();
-    let clear_child_tid = inner.address.clear_child_tid;
-    if clear_child_tid != 0 {
-        log::debug!("[exit_current_and_run_next] thread exit, try to do futex wake. uaddr: {:X}, val: 1", clear_child_tid);
-        let tid_ref = translated_refmut(task.get_user_token(), clear_child_tid as *mut u32);
-        *tid_ref = 0;
-        do_futex_wake_without_check(tid_ref as *const u32 as usize, 1);
+    if inner.clear_child_tid != 0 {
+        log::debug!("[exit_current_and_run_next] do futex wake on clear_child_tid: {:X}", inner.clear_child_tid);
+        let phys_ref = translated_refmut(task.get_user_token(), inner.clear_child_tid as *mut u32);
+        *phys_ref = 0;
+        do_futex_wake_without_check(phys_ref as *const u32 as usize, 1);
     }
     // deallocate user resource (trap context and user stack)
     task.vm.lock().dealloc_user_res(task.tid);
