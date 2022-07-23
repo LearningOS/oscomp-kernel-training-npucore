@@ -320,8 +320,11 @@ impl TaskControlBlock {
             .unwrap()
             .ppn();
         *inner.get_trap_cx() = trap_cx;
+        // update heap pointers
         inner.heap_bottom = program_break;
         inner.heap_pt = program_break;
+        // flush clear_child_tid
+        inner.address = ProcAddress::new();
         // track the change of ELF file
         *self.exe.lock() = elf;
         // flush cloexec fd
