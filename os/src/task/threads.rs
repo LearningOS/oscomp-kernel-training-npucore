@@ -152,13 +152,16 @@ pub fn do_futex_wake(futex_word_addr: usize, val: u32) -> isize {
     let before = do_futex_wake_without_check(futex_word_addr, val);
     suspend_current_and_run_next();
     // We use RR schedule, so all threads should have tried to consume...
-    let lock = FUTEX_WAIT_NO.lock();
-    let after = if let Some(result) = lock.get(&futex_word_addr) {
+    let mut lock = FUTEX_WAIT_NO.lock();
+    let after = if let Some(result) = lock.remove(&futex_word_addr) {
         match result {
-            Ticket::Valid(remain) => *remain,
+            Ticket::Valid(remain) => remain,
             // emmm, somebody broadcast `Move`, after we insert tickets...
-            // pretend that all tickets were used
-            Ticket::Move(_) => 0,
+            // pretend that all tickets were used and insert back
+            Ticket::Move(_) => {
+                lock.insert(futex_word_addr, result);
+                0
+            },
         }
     } else {
         0
@@ -178,13 +181,16 @@ pub fn broadcast_move(futex_word_addr: usize, addr: usize, val2: u32) -> isize {
     drop(lock);
     suspend_current_and_run_next();
     // We use RR schedule, so all threads should have received the broadcast, try to take it back.
-    let lock = FUTEX_WAIT_NO.lock();
-    let after = if let Some(result) = lock.get(&futex_word_addr) {
+    let mut lock = FUTEX_WAIT_NO.lock();
+    let after = if let Some(result) = lock.remove(&futex_word_addr) {
         match result {
             // emmm, somebody try `futex_wake`, after we broadcast...
-            // pretend that all ticket were used
-            Ticket::Valid(_) => 0,
-            Ticket::Move((_, remain)) => *remain,
+            // pretend that all ticket were used and insert back
+            Ticket::Valid(_) => {
+                lock.insert(futex_word_addr, result);
+                0
+            },
+            Ticket::Move((_, remain)) => remain,
         }
     } else {
         0
