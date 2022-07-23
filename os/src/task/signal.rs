@@ -480,13 +480,14 @@ pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize
     let token = task.get_user_token();
     // If oldset is non-NULL, the previous value of the signal mask is stored in oldset
     if oldset as usize != 0 {
-        *translated_refmut(token, oldset) = inner.sigmask;
+        copy_to_user(token, &inner.sigmask, oldset);
         trace!("[sigprocmask] *oldset: ({:?})", inner.sigmask);
     }
     // If set is NULL, then the signal mask is unchanged
     if set as usize != 0 {
         let how = SigMaskHow::from_bits(how);
-        let signal_set = *translated_ref(token, set);
+        let mut signal_set: Signals = unsafe { MaybeUninit::uninit().assume_init() };
+        copy_from_user(token, set, &mut signal_set);
         trace!("[sigprocmask] how: {:?}, *set: ({:?})", how, signal_set);
         match how {
             // add the signals not yet blocked in the given set to the mask
@@ -519,7 +520,7 @@ pub struct SigInfo {
     si_errno: u32,
     si_code: u32,
     // unsupported fields
-    __pad: [u8; 128 - 2 * core::mem::size_of::<i32>() - core::mem::size_of::<usize>()],
+    __pad: [u8; 128 - 3 * core::mem::size_of::<u32>()],
 }
 
 impl SigInfo {
@@ -528,7 +529,7 @@ impl SigInfo {
             si_signo: si_signo as u32,
             si_errno: si_errno as u32,
             si_code: si_code as u32,
-            __pad: [0; 128 - 2 * core::mem::size_of::<i32>() - core::mem::size_of::<usize>()],
+            __pad: [0; 128 - 3 * core::mem::size_of::<u32>()],
         }
     }
 }
