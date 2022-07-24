@@ -133,7 +133,8 @@ pub fn sys_getpid() -> isize {
 }
 
 pub fn sys_fork() -> isize {
-    syscall(SYSCALL_CLONE, [0, 0, 0])
+    const SIGCHLD: usize = 17;
+    syscall(SYSCALL_CLONE, [SIGCHLD, 0, 0])
 }
 
 pub fn sys_exec(path: &str, args: &[*const u8], envp: &[*const u8]) -> isize {
