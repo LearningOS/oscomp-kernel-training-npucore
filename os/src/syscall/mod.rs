@@ -34,6 +34,8 @@ const SYSCALL_EXIT: usize = 93;
 const SYSCALL_EXIT_GROUP: usize = 94;
 const SYSCALL_SET_TID_ADDRESS: usize = 96;
 const SYSCALL_FUTEX: usize = 98;
+const SYSCALL_SET_ROBUST_LIST: usize = 99;
+const SYSCALL_GET_ROBUST_LIST: usize = 100;
 const SYSCALL_NANOSLEEP: usize = 101;
 const SYSCALL_GETITIMER: usize = 102;
 const SYSCALL_SETITIMER: usize = 103;
@@ -98,10 +100,10 @@ mod socket;
 
 use core::convert::TryFrom;
 use fs::*;
-use socket::*;
 use log::{debug, error, info, trace, warn};
-pub use process::{CloneFlags, FutexOption};
 use process::*;
+pub use process::{CloneFlags, FutexOption};
+use socket::*;
 
 pub fn syscall_name(id: usize) -> &'static str {
     match id {
@@ -143,6 +145,8 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_EXIT_GROUP => "exit_GROUP",
         SYSCALL_SET_TID_ADDRESS => "set_tid_address",
         SYSCALL_FUTEX => "futex",
+        SYSCALL_SET_ROBUST_LIST => "set_robust_list",
+        SYSCALL_GET_ROBUST_LIST => "get_robust_list",
         SYSCALL_NANOSLEEP => "nanosleep",
         SYSCALL_GETITIMER => "getitimer",
         SYSCALL_SETITIMER => "setitimer",
@@ -201,8 +205,9 @@ pub fn syscall_name(id: usize) -> &'static str {
 }
 use crate::{
     fs::poll::FdSet,
+    syscall::errno::Errno,
     task::Rusage,
-    timer::{ITimerVal, TimeSpec, Times}, syscall::errno::Errno,
+    timer::{ITimerVal, TimeSpec, Times},
 };
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
@@ -356,6 +361,10 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[4] as *mut u32,
             args[5] as u32,
         ),
+        SYSCALL_SET_ROBUST_LIST => sys_set_robust_list(args[0], args[1]),
+        SYSCALL_GET_ROBUST_LIST => {
+            sys_get_robust_list(args[0] as u32, args[1] as *mut usize, args[2] as *mut usize)
+        }
         SYSCALL_GETUID => sys_getuid(),
         SYSCALL_GETEUID => sys_geteuid(),
         SYSCALL_GETGID => sys_getgid(),
@@ -390,66 +399,36 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as *const u8,
             args[4] as u32,
         ),
-        SYSCALL_MSYNC => sys_msync(
-            args[0], 
-            args[1], 
-            args[2] as u32
-        ),
-        SYSCALL_STATFS => sys_statfs(
-            args[0] as *const u8,
-            args[1] as *mut Statfs
-        ),
-        SYSCALL_SOCKET => sys_socket(
-            args[0] as u32, 
-            args[1] as u32, 
-            args[2] as u32
-        ),
-        SYSCALL_BIND => sys_bind(
-            args[0], 
-            args[1] as *const u8, 
-            args[2] as u32
-        ),
-        SYSCALL_LISTEN => sys_listen(
-            args[0],
-            args[1] as u32
-        ),
-        SYSCALL_ACCEPT => sys_accept(
-            args[0], 
-            args[1] as *const u8, 
-            args[2] as u32
-        ),
-        SYSCALL_CONNECT => sys_connect(
-            args[0], 
-            args[1] as *const u8, 
-            args[2] as u32
-        ),
-        SYSCALL_GETSOCKNAME => sys_getsockname(
-            args[0], 
-            args[1] as *const u8, 
-            args[2] as u32
-        ),
+        SYSCALL_MSYNC => sys_msync(args[0], args[1], args[2] as u32),
+        SYSCALL_STATFS => sys_statfs(args[0] as *const u8, args[1] as *mut Statfs),
+        SYSCALL_SOCKET => sys_socket(args[0] as u32, args[1] as u32, args[2] as u32),
+        SYSCALL_BIND => sys_bind(args[0], args[1] as *const u8, args[2] as u32),
+        SYSCALL_LISTEN => sys_listen(args[0], args[1] as u32),
+        SYSCALL_ACCEPT => sys_accept(args[0], args[1] as *const u8, args[2] as u32),
+        SYSCALL_CONNECT => sys_connect(args[0], args[1] as *const u8, args[2] as u32),
+        SYSCALL_GETSOCKNAME => sys_getsockname(args[0], args[1] as *const u8, args[2] as u32),
         SYSCALL_SENDTO => sys_sendto(
-            args[0], 
-            args[1] as *const u8, 
+            args[0],
+            args[1] as *const u8,
             args[2],
             args[3] as u32,
-            args[4] as *const u8, 
+            args[4] as *const u8,
             args[5] as u32,
         ),
         SYSCALL_RECVFROM => sys_recvfrom(
-            args[0], 
-            args[1] as *mut u8, 
+            args[0],
+            args[1] as *mut u8,
             args[2],
             args[3] as u32,
-            args[4] as *const u8, 
+            args[4] as *const u8,
             args[5] as u32,
         ),
         SYSCALL_SETSOCKOPT => sys_setsockopt(
             args[0],
-            args[1] as u32, 
-            args[2] as u32, 
-            args[3] as *const u8, 
-            args[4] as u32
+            args[1] as u32,
+            args[2] as u32,
+            args[3] as *const u8,
+            args[4] as u32,
         ),
         _ => {
             error!(

@@ -804,6 +804,35 @@ pub fn sys_futex(
     }
 }
 
+pub fn sys_set_robust_list(head: usize, len: usize) -> isize {
+    if len != crate::task::RobustList::HEAD_SIZE {
+        return EINVAL;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.acquire_inner_lock();
+    inner.robust_list.head = head;
+    //inner.robust_list.len = len;
+    SUCCESS
+}
+
+pub fn sys_get_robust_list(pid: u32, head_ptr: *mut usize, len_ptr: *mut usize) -> isize {
+    let task = if pid == 0 {
+        current_task().unwrap()
+    } else {
+        match find_task_by_pid(pid as usize) {
+            Some(task) => {
+                task
+            },
+            None => return ESRCH,
+        }
+    };
+    let inner = task.acquire_inner_lock();
+    let token = current_user_token();
+    copy_to_user(token, &inner.robust_list.head, head_ptr);
+    copy_to_user(token, &inner.robust_list.len, len_ptr);
+    SUCCESS
+}
+
 pub fn sys_mmap(
     start: usize,
     len: usize,

@@ -24,7 +24,7 @@ pub use processor::{
 };
 pub use signal::*;
 use switch::__switch;
-pub use task::{Rusage, TaskControlBlock, TaskStatus};
+pub use task::{RobustList, Rusage, TaskControlBlock, TaskStatus};
 
 pub fn suspend_current_and_run_next() {
     // There must be an application running.

@@ -56,12 +56,33 @@ pub struct TaskControlBlockInner {
     pub children: Vec<Arc<TaskControlBlock>>,
     pub exit_code: u32,
     pub clear_child_tid: usize,
+    pub robust_list: RobustList,
     pub heap_bottom: usize,
     pub heap_pt: usize,
     pub pgid: usize,
     pub rusage: Rusage,
     pub clock: ProcClock,
     pub timer: [ITimerVal; 3],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RobustList {
+    pub head: usize,
+    pub len: usize,
+}
+
+impl RobustList {
+    // from strace
+    pub const HEAD_SIZE: usize = 24;
+}
+
+impl Default for RobustList {
+    fn default() -> Self {
+        Self {
+            head: 0,
+            len: Self::HEAD_SIZE,
+        }
+    }
 }
 
 pub struct ProcClock {
@@ -265,6 +286,7 @@ impl TaskControlBlock {
                 children: Vec::new(),
                 exit_code: 0,
                 clear_child_tid: 0,
+                robust_list: RobustList::default(),
                 heap_bottom: user_heap,
                 heap_pt: user_heap,
                 pgid,
@@ -326,6 +348,8 @@ impl TaskControlBlock {
         *inner.get_trap_cx() = trap_cx;
         // clear clear_child_tid
         inner.clear_child_tid = 0;
+        // clear robust_list
+        inner.robust_list = RobustList::default();
         // update heap pointers
         inner.heap_bottom = program_break;
         inner.heap_pt = program_break;
@@ -448,6 +472,7 @@ impl TaskControlBlock {
                 rusage: Rusage::new(),
                 clock: ProcClock::new(),
                 clear_child_tid: 0,
+                robust_list: RobustList::default(),
                 timer: [ITimerVal::new(); 3],
                 sigmask: Signals::empty(),
                 // compute
