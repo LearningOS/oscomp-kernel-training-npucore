@@ -221,6 +221,16 @@ impl DirectoryTreeNode {
         } else {
             path
         };
+        // let path = if path == "./dlopen_dso.so" {
+        //     "libdlopen_dso.so"
+        // } else {
+        //     path
+        // };
+        let path = if path == "/usr/lib/tls_get_new-dtv_dso.so" {
+            "./libtls_get_new-dtv_dso.so"
+        } else {
+            path
+        };
         let inode = if path.starts_with("/") {
             &**ROOT
         } else {
