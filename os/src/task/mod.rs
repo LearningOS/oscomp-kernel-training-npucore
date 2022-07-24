@@ -66,7 +66,7 @@ pub fn block_current_and_run_next() {
 pub fn do_exit(task: Arc<TaskControlBlock>, exit_code: u32) {
     // **** hold current PCB lock
     let mut inner = task.acquire_inner_lock();
-    {
+    if !task.exit_signal.is_empty() {
         let parent_task = inner.parent.as_ref().unwrap().upgrade().unwrap(); // this will acquire inner of current task
         let mut parent_inner = parent_task.acquire_inner_lock();
         parent_inner.add_signal(task.exit_signal);
@@ -79,8 +79,8 @@ pub fn do_exit(task: Arc<TaskControlBlock>, exit_code: u32) {
             wake_interruptible(parent_task);
         }
     }
-    log::info!(
-        "[sys_exit] Trying to exit pid {} with {}",
+    log::trace!(
+        "[do_exit] Trying to exit pid {} with {}",
         task.pid.0,
         exit_code
     );
@@ -106,7 +106,7 @@ pub fn do_exit(task: Arc<TaskControlBlock>, exit_code: u32) {
 
     inner.children.clear();
     if inner.clear_child_tid != 0 {
-        log::debug!("[exit_current_and_run_next] do futex wake on clear_child_tid: {:X}", inner.clear_child_tid);
+        log::debug!("[do_exit] do futex wake on clear_child_tid: {:X}", inner.clear_child_tid);
         let phys_ref = translated_refmut(task.get_user_token(), inner.clear_child_tid as *mut u32);
         *phys_ref = 0;
         task.futex.lock().wake(phys_ref as *const u32 as usize, 1);
@@ -121,7 +121,7 @@ pub fn do_exit(task: Arc<TaskControlBlock>, exit_code: u32) {
     drop(inner);
     // **** release current PCB lock
     // drop task manually to maintain rc correctly
-    log::info!("[sys_exit] Pid {} exited with {}", task.pid.0, exit_code);
+    log::info!("[do_exit] Pid {} exited with {}", task.pid.0, exit_code);
 }
 
 pub fn exit_current_and_run_next(exit_code: u32) -> ! {
