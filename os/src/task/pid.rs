@@ -82,6 +82,7 @@ impl Drop for KernelStack {
             .lock()
             .remove_area_with_start_vpn(kernel_stack_bottom_va.into())
             .unwrap();
+        KSTACK_ALLOCATOR.lock().dealloc(self.0)
     }
 }
 
