@@ -11,7 +11,7 @@ use crate::task::threads::{do_futex_wait, FutexCmd};
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
     exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
-    suspend_current_and_run_next, threads, wake_interruptible, Rusage, TaskStatus,
+    suspend_current_and_run_next, threads, wake_interruptible, Rusage, TaskStatus, exit_group_and_run_next,
 };
 use crate::timer::{
     get_time, get_time_ms, get_time_sec, ITimerVal, TimeSpec, TimeVal, TimeZone, Times,
@@ -27,6 +27,10 @@ use num_enum::FromPrimitive;
 
 pub fn sys_exit(exit_code: u32) -> ! {
     exit_current_and_run_next((exit_code & 0xff) << 8);
+}
+
+pub fn sys_exit_group(exit_code: u32) -> ! {
+    exit_group_and_run_next((exit_code & 0xff) << 8);
 }
 
 #[allow(non_camel_case_types)]
