@@ -749,9 +749,46 @@ impl SDCardWrapper {
 
 impl BlockDevice for SDCardWrapper {
     fn read_block(&self, block_id: usize, buf: &mut [u8]) {
-        self.0.lock().read_sector(buf, block_id as u32).unwrap();
+        let lock = self.0.lock();
+        let mut result = lock.read_sector(buf, block_id as u32);
+        let mut cont_cnt = 0;
+        while result.is_err() {
+            log::error!("[sdcard] read_sector(buf, {}) error. Retrying...", block_id);
+            if cont_cnt >= 0 {
+                result = lock.read_sector(buf, block_id as u32);
+            }
+            cont_cnt += 1;
+            if cont_cnt == 20 {
+                log::error!(
+                    "[sdcard] read_sector(buf[{}], {}) error exceeded contineous retry count, waiting...",
+                    buf.len(),
+                    block_id
+                );
+                cont_cnt = -100;
+            }
+        }
     }
     fn write_block(&self, block_id: usize, buf: &[u8]) {
-        self.0.lock().write_sector(buf, block_id as u32).unwrap();
+        let lock = self.0.lock();
+        let mut result = lock.write_sector(buf, block_id as u32);
+        let mut cont_cnt = 0;
+        while result.is_err() {
+            log::error!(
+                "[sdcard] write_sector(buf, {}) error. Retrying...",
+                block_id
+            );
+            if cont_cnt >= 0 {
+                result = lock.write_sector(buf, block_id as u32);
+            }
+            cont_cnt += 1;
+            if cont_cnt == 20 {
+                log::error!(
+                    "[sdcard] write_sector(buf[{}], {}) error exceeded contineous retry count, waiting...",
+                    buf.len(),
+                    block_id
+                );
+                cont_cnt = -100;
+            }
+        }
     }
 }
