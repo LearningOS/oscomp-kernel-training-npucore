@@ -256,7 +256,12 @@ impl DirectoryTreeNode {
         } else {
             path
         };
-        const LIBC_PATH: &str = "/lib/libc.so";
+        let path = if path == "/bin/bash" {
+            "/bash"
+        } else {
+            path
+        };
+        const LIBC_PATH: &str = "/libc.so";
         const REDIRECT_TO_LIBC: [&str; 3] = [
             "/lib/ld-musl-riscv64.so.1",
             "/lib/ld-musl-riscv64-sf.so.1",
@@ -264,11 +269,6 @@ impl DirectoryTreeNode {
         ];
         let path = if REDIRECT_TO_LIBC.contains(&path) {
             LIBC_PATH
-        } else {
-            path
-        };
-        let path = if path == "/usr/lib/tls_get_new-dtv_dso.so" {
-            "./libtls_get_new-dtv_dso.so"
         } else {
             path
         };
