@@ -102,14 +102,15 @@ impl Futex {
         }
     }
     pub fn wake(&mut self, futex_word_addr: usize, val: u32) -> isize {
-        let mut wait_queue = if let Some(wait_queue) = self.inner.remove(&futex_word_addr) {
-            wait_queue
+        if let Some(mut wait_queue) = self.inner.remove(&futex_word_addr) {
+            let ret = wait_queue.wake_at_most(val as usize);
+            if !wait_queue.is_empty() {
+                self.inner.insert(futex_word_addr, wait_queue);
+            }
+            ret as isize
         } else {
-            WaitQueue::new()
-        };
-        let ret = wait_queue.wake_at_most(val as usize);
-        self.inner.insert(futex_word_addr, wait_queue);
-        ret as isize
+            0
+        }
     }
     pub fn requeue(&mut self, futex_word: &u32, futex_word_2: &u32, val: u32, val2: u32) -> isize {
         let futex_word_addr = futex_word as *const u32 as usize;
@@ -119,28 +120,31 @@ impl Futex {
         } else {
             0
         };
-        let mut wait_queue = if let Some(wait_queue) = self.inner.remove(&futex_word_addr) {
-            wait_queue
-        } else {
-            WaitQueue::new()
-        };
-        let mut wait_queue_2 = if let Some(wait_queue) = self.inner.remove(&futex_word_addr_2) {
-            wait_queue
-        } else {
-            WaitQueue::new()
-        };
-        let mut requeue_cnt = 0;
-        if val2 != 0 {
-            while let Some(task) = wait_queue.pop_task() {
-                wait_queue_2.add_task(task);
-                requeue_cnt += 1;
-                if requeue_cnt == val2 as isize {
-                    break;
+        if let Some(mut wait_queue) = self.inner.remove(&futex_word_addr) {
+            let mut wait_queue_2 = if let Some(wait_queue) = self.inner.remove(&futex_word_addr_2) {
+                wait_queue
+            } else {
+                WaitQueue::new()
+            };
+            let mut requeue_cnt = 0;
+            if val2 != 0 {
+                while let Some(task) = wait_queue.pop_task() {
+                    wait_queue_2.add_task(task);
+                    requeue_cnt += 1;
+                    if requeue_cnt == val2 as isize {
+                        break;
+                    }
                 }
             }
+            if !wait_queue.is_empty() {
+                self.inner.insert(futex_word_addr, wait_queue);
+            }
+            if !wait_queue_2.is_empty() {
+                self.inner.insert(futex_word_addr_2, wait_queue_2);
+            }
+            wake_cnt + requeue_cnt
+        } else {
+            wake_cnt
         }
-        self.inner.insert(futex_word_addr, wait_queue);
-        self.inner.insert(futex_word_addr_2, wait_queue_2);
-        wake_cnt + requeue_cnt
-    }    
+    }  
 }
