@@ -1,7 +1,7 @@
-use super::manager::TASK_MANAGER;
-use super::pid::kstack_alloc;
-use super::pid::RecycleAllocator;
+use super::manager::{TASK_MANAGER};
+use super::pid::{kstack_alloc, RecycleAllocator};
 use super::signal::*;
+use super::threads::Futex;
 use super::trap_cx_bottom_from_tid;
 use super::ustack_bottom_from_tid;
 use super::TaskContext;
@@ -43,6 +43,7 @@ pub struct TaskControlBlock {
     pub fs: Arc<Mutex<FsStatus>>,
     pub vm: Arc<Mutex<MemorySet>>,
     pub sighand: Arc<Mutex<BTreeMap<Signals, SigAction>>>,
+    pub futex: Arc<Mutex<Futex>>,
 }
 
 pub struct TaskControlBlockInner {
@@ -253,6 +254,7 @@ impl TaskControlBlock {
             })),
             vm: Arc::new(Mutex::new(memory_set)),
             sighand: Arc::new(Mutex::new(BTreeMap::new())),
+            futex: Arc::new(Mutex::new(Futex::new())),
             inner: Mutex::new(TaskControlBlockInner {
                 sigmask: Signals::empty(),
                 sigpending: Signals::empty(),
@@ -342,6 +344,8 @@ impl TaskControlBlock {
         *self.vm.lock() = memory_set;
         // flush signal handler
         *self.sighand.lock() = BTreeMap::new();
+        // flush futex
+        *self.futex.lock() = Futex::new();
         // destory all other threads
         TASK_MANAGER
             .lock()
@@ -425,6 +429,12 @@ impl TaskControlBlock {
                 self.sighand.clone()
             } else {
                 Arc::new(Mutex::new(self.sighand.lock().clone()))
+            },
+            futex: if flags.contains(CloneFlags::CLONE_SYSVSEM) {
+                self.futex.clone()
+            } else {
+                // maybe should do clone here?
+                Arc::new(Mutex::new(Futex::new()))
             },
             inner: Mutex::new(TaskControlBlockInner {
                 // inherited

@@ -3,11 +3,9 @@ use crate::{
     task::{current_task, suspend_current_and_run_next},
     timer::TimeSpec,
 };
-use alloc::collections::BTreeMap;
-use lazy_static::lazy_static;
+use alloc::{sync::Arc, collections::BTreeMap};
 use log::*;
 use num_enum::FromPrimitive;
-use spin::Mutex;
 
 use super::{block_current_and_run_next, manager::WaitQueue};
 
@@ -52,8 +50,8 @@ pub enum FutexCmd {
     Invalid,
 }
 
-lazy_static! {
-    pub static ref FUTEX_WAIT_NO: Mutex<BTreeMap<usize, WaitQueue>> = Mutex::new(BTreeMap::new());
+pub struct Futex {
+    inner: BTreeMap<usize, WaitQueue>,
 }
 
 /// Currently the `rt_clk` is ignored.
@@ -74,65 +72,75 @@ pub fn do_futex_wait(futex_word: &mut u32, val: u32, timeout: Option<TimeSpec>) 
             suspend_current_and_run_next();
         } else {
             let task = current_task().unwrap();
-            let mut lock = FUTEX_WAIT_NO.lock();
-            let mut wait_queue = if let Some(wait_queue) = lock.remove(&futex_word_addr) {
+            let mut futex = task.futex.lock();
+            let mut wait_queue = if let Some(wait_queue) = futex.inner.remove(&futex_word_addr) {
                 wait_queue
             } else {
                 WaitQueue::new()
             };
-            wait_queue.add_task(task);
-            lock.insert(futex_word_addr, wait_queue);
-            drop(lock);
+            wait_queue.add_task(Arc::downgrade(&task));
+            futex.inner.insert(futex_word_addr, wait_queue);
+            drop(futex);
+            drop(task);
 
             block_current_and_run_next();
+            let task = current_task().unwrap();
+            let inner = task.acquire_inner_lock();
+            // woke by signal
+            if !inner.sigpending.difference(inner.sigmask).is_empty() {
+                return EINTR;
+            }
         }
         SUCCESS
     }
 }
 
-pub fn do_futex_wake(futex_word_addr: usize, val: u32) -> isize {
-    let mut lock = FUTEX_WAIT_NO.lock();
-    let result = lock.remove(&futex_word_addr);
-    let mut wait_queue = if let Some(wait_queue) = result {
-        wait_queue
-    } else {
-        WaitQueue::new()
-    };
-    let ret = wait_queue.wake_at_most(val as usize);
-    lock.insert(futex_word_addr, wait_queue);
-    ret as isize
-}
-
-pub fn do_futex_requeue(futex_word: &u32, futex_word_2: &u32, val: u32, val2: u32) -> isize {
-    let futex_word_addr = futex_word as *const u32 as usize;
-    let futex_word_addr_2 = futex_word_2 as *const u32 as usize;
-    let wake_cnt = if val != 0 {
-        do_futex_wake(futex_word_addr, val)
-    } else {
-        0
-    };
-    let mut lock = FUTEX_WAIT_NO.lock();
-    let mut wait_queue = if let Some(wait_queue) = lock.remove(&futex_word_addr) {
-        wait_queue
-    } else {
-        WaitQueue::new()
-    };
-    let mut wait_queue_2 = if let Some(wait_queue) = lock.remove(&futex_word_addr_2) {
-        wait_queue
-    } else {
-        WaitQueue::new()
-    };
-    let mut requeue_cnt = 0;
-    if val2 != 0 {
-        while let Some(task) = wait_queue.pop_task() {
-            wait_queue_2.add_task(task);
-            requeue_cnt += 1;
-            if requeue_cnt == val2 as isize {
-                break;
-            }
+impl Futex {
+    pub fn new() -> Self {
+        Self {
+            inner: BTreeMap::new()
         }
     }
-    lock.insert(futex_word_addr, wait_queue);
-    lock.insert(futex_word_addr_2, wait_queue_2);
-    wake_cnt + requeue_cnt
+    pub fn wake(&mut self, futex_word_addr: usize, val: u32) -> isize {
+        let mut wait_queue = if let Some(wait_queue) = self.inner.remove(&futex_word_addr) {
+            wait_queue
+        } else {
+            WaitQueue::new()
+        };
+        let ret = wait_queue.wake_at_most(val as usize);
+        self.inner.insert(futex_word_addr, wait_queue);
+        ret as isize
+    }
+    pub fn requeue(&mut self, futex_word: &u32, futex_word_2: &u32, val: u32, val2: u32) -> isize {
+        let futex_word_addr = futex_word as *const u32 as usize;
+        let futex_word_addr_2 = futex_word_2 as *const u32 as usize;
+        let wake_cnt = if val != 0 {
+            self.wake(futex_word_addr, val)
+        } else {
+            0
+        };
+        let mut wait_queue = if let Some(wait_queue) = self.inner.remove(&futex_word_addr) {
+            wait_queue
+        } else {
+            WaitQueue::new()
+        };
+        let mut wait_queue_2 = if let Some(wait_queue) = self.inner.remove(&futex_word_addr_2) {
+            wait_queue
+        } else {
+            WaitQueue::new()
+        };
+        let mut requeue_cnt = 0;
+        if val2 != 0 {
+            while let Some(task) = wait_queue.pop_task() {
+                wait_queue_2.add_task(task);
+                requeue_cnt += 1;
+                if requeue_cnt == val2 as isize {
+                    break;
+                }
+            }
+        }
+        self.inner.insert(futex_word_addr, wait_queue);
+        self.inner.insert(futex_word_addr_2, wait_queue_2);
+        wake_cnt + requeue_cnt
+    }    
 }
