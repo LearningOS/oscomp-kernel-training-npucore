@@ -8,7 +8,7 @@ mod switch;
 mod task;
 pub mod threads;
 
-use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut, task::threads::{do_futex_wake_without_check}};
+use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut, task::threads::{do_futex_wake}};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
@@ -106,7 +106,7 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
         log::debug!("[exit_current_and_run_next] do futex wake on clear_child_tid: {:X}", inner.clear_child_tid);
         let phys_ref = translated_refmut(task.get_user_token(), inner.clear_child_tid as *mut u32);
         *phys_ref = 0;
-        do_futex_wake_without_check(phys_ref as *const u32 as usize, 1);
+        do_futex_wake(phys_ref as *const u32 as usize, 1);
     }
     // deallocate user resource (trap context and user stack)
     task.vm.lock().dealloc_user_res(task.tid);

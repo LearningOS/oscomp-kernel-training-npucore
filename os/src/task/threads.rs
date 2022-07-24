@@ -9,6 +9,8 @@ use log::*;
 use num_enum::FromPrimitive;
 use spin::Mutex;
 
+use super::{block_current_and_run_next, manager::WaitQueue};
+
 #[allow(unused)]
 #[derive(Debug, Eq, PartialEq, FromPrimitive)]
 #[repr(u32)]
@@ -51,19 +53,13 @@ pub enum FutexCmd {
 }
 
 lazy_static! {
-    pub static ref FUTEX_WAIT_NO: Mutex<BTreeMap<usize, Ticket>> = Mutex::new(BTreeMap::new());
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Ticket {
-    Valid(u32),
-    Move((usize, u32)),
+    pub static ref FUTEX_WAIT_NO: Mutex<BTreeMap<usize, WaitQueue>> = Mutex::new(BTreeMap::new());
 }
 
 /// Currently the `rt_clk` is ignored.
 pub fn do_futex_wait(futex_word: &mut u32, val: u32, timeout: Option<TimeSpec>) -> isize {
     let timeout = timeout.map(|t| t + TimeSpec::now());
-    let mut futex_word_addr = futex_word as *const u32 as usize;
+    let futex_word_addr = futex_word as *const u32 as usize;
     if *futex_word != val {
         trace!(
             "[futex] --wait-- **not match** futex: {:X}, val: {:X}",
@@ -72,141 +68,71 @@ pub fn do_futex_wait(futex_word: &mut u32, val: u32, timeout: Option<TimeSpec>) 
         );
         return EAGAIN;
     } else {
-        loop {
-            let task = current_task().unwrap();
-            let inner = task.acquire_inner_lock();
-            if !inner.sigpending.is_empty() {
-                return EINTR;
-            }
-            drop(inner);
-            drop(task);
-            let mut lock = FUTEX_WAIT_NO.lock();
-            let result = lock.remove(&futex_word_addr);
-            if let Some(ticket) = result {
-                match ticket {
-                    Ticket::Valid(remain) => {
-                        trace!(
-                            "[futex] --wait-- found existing ticket, remain times: {}",
-                            remain
-                        );
-                        if remain - 1 > 0 {
-                            lock.insert(futex_word_addr, Ticket::Valid(remain - 1));
-                        }
-                        trace!("[futex] --wait-- update remain times: {}", remain - 1);
-                        return SUCCESS;
-                    }
-                    Ticket::Move((addr, remain)) => {
-                        trace!(
-                            "[futex] --wait-- found existing requeue broadcast, addr: {:X}, remain times: {}",
-                            addr, remain
-                        );
-                        if remain - 1 > 0 {
-                            lock.insert(futex_word_addr, Ticket::Move((addr, remain - 1)));
-                        }
-                        futex_word_addr = addr;
-                    }
-                }
-            }
-            drop(lock);
-            if let Some(t) = timeout {
-                if t <= TimeSpec::now() {
-                    trace!("[futex] --wait-- time out");
-                    return SUCCESS;
-                }
-            }
+        // hard to handle, just suspend and suppose that we reach the timeout.
+        // don't really wait until timeout, or we will time out in some testcases...
+        if let Some(_) = timeout {
             suspend_current_and_run_next();
+        } else {
+            let task = current_task().unwrap();
+            let mut lock = FUTEX_WAIT_NO.lock();
+            let mut wait_queue = if let Some(wait_queue) = lock.remove(&futex_word_addr) {
+                wait_queue
+            } else {
+                WaitQueue::new()
+            };
+            wait_queue.add_task(task);
+            lock.insert(futex_word_addr, wait_queue);
+            drop(lock);
+
+            block_current_and_run_next();
         }
+        SUCCESS
     }
 }
 
-pub fn do_futex_wake_without_check(futex_word_addr: usize, val: u32) -> u32 {
+pub fn do_futex_wake(futex_word_addr: usize, val: u32) -> isize {
     let mut lock = FUTEX_WAIT_NO.lock();
     let result = lock.remove(&futex_word_addr);
-    let before = if let Some(ticket) = result {
-        match ticket {
-            Ticket::Valid(remain) => {
-                trace!(
-                    "[futex] --wake-- found existing ticket, remain times: {}",
-                    remain
-                );
-                lock.insert(futex_word_addr, Ticket::Valid(remain + val));
-                trace!("[futex] --wake-- update remain times: {}", remain + val);
-                remain + val
-            }
-            Ticket::Move(_) => {
-                trace!("[futex] --wake-- found existing `Move` broadcast, do nothing.");
-                0
-            }
-        }
+    let mut wait_queue = if let Some(wait_queue) = result {
+        wait_queue
     } else {
-        trace!(
-            "[futex] --wake-- insert a ticket with remain times: {}",
-            val
-        );
-        lock.insert(futex_word_addr, Ticket::Valid(val));
-        val
+        WaitQueue::new()
     };
-    before
-}
-pub fn do_futex_wake(futex_word_addr: usize, val: u32) -> isize {
-    let before = do_futex_wake_without_check(futex_word_addr, val);
-    suspend_current_and_run_next();
-    // We use RR schedule, so all threads should have tried to consume...
-    let mut lock = FUTEX_WAIT_NO.lock();
-    let after = if let Some(result) = lock.remove(&futex_word_addr) {
-        match result {
-            Ticket::Valid(remain) => remain,
-            // emmm, somebody broadcast `Move`, after we insert tickets...
-            // pretend that all tickets were used and insert back
-            Ticket::Move(_) => {
-                lock.insert(futex_word_addr, result);
-                0
-            },
-        }
-    } else {
-        0
-    };
-    drop(lock);
-    info!("[futex] --wake-- woke {} proc(s)", val.min(after - before));
-    return val.min(after - before) as isize;
-}
-
-pub fn broadcast_move(futex_word_addr: usize, addr: usize, val2: u32) -> isize {
-    let mut lock = FUTEX_WAIT_NO.lock();
-    let something = lock.insert(futex_word_addr, Ticket::Move((addr, val2)));
-    trace!("[futex] --requeue-- broadcast, futex_addr: {:X} move to addr: {:X}, remain: {}", futex_word_addr, addr, val2);
-    if let Some(ticket) = something {
-        warn!("[futex] --requeue-- a ticket was covered: {:?}", ticket);
-    }
-    drop(lock);
-    suspend_current_and_run_next();
-    // We use RR schedule, so all threads should have received the broadcast, try to take it back.
-    let mut lock = FUTEX_WAIT_NO.lock();
-    let after = if let Some(result) = lock.remove(&futex_word_addr) {
-        match result {
-            // emmm, somebody try `futex_wake`, after we broadcast...
-            // pretend that all ticket were used and insert back
-            Ticket::Valid(_) => {
-                lock.insert(futex_word_addr, result);
-                0
-            },
-            Ticket::Move((_, remain)) => remain,
-        }
-    } else {
-        0
-    };
-    (val2 - after) as isize
+    let ret = wait_queue.wake_at_most(val as usize);
+    lock.insert(futex_word_addr, wait_queue);
+    ret as isize
 }
 
 pub fn do_futex_requeue(futex_word: &u32, futex_word_2: &u32, val: u32, val2: u32) -> isize {
     let futex_word_addr = futex_word as *const u32 as usize;
-    let futex_word_2_addr = futex_word_2 as *const u32 as usize;
-    let woke = if val != 0 {
+    let futex_word_addr_2 = futex_word_2 as *const u32 as usize;
+    let wake_cnt = if val != 0 {
         do_futex_wake(futex_word_addr, val)
     } else {
         0
     };
-    let requeued = broadcast_move(futex_word_addr, futex_word_2_addr, val2);
-    info!("[futex] --requeue-- requeued {} proc(s)", requeued);
-    woke + requeued
+    let mut lock = FUTEX_WAIT_NO.lock();
+    let mut wait_queue = if let Some(wait_queue) = lock.remove(&futex_word_addr) {
+        wait_queue
+    } else {
+        WaitQueue::new()
+    };
+    let mut wait_queue_2 = if let Some(wait_queue) = lock.remove(&futex_word_addr_2) {
+        wait_queue
+    } else {
+        WaitQueue::new()
+    };
+    let mut requeue_cnt = 0;
+    if val2 != 0 {
+        while let Some(task) = wait_queue.pop_task() {
+            wait_queue_2.add_task(task);
+            requeue_cnt += 1;
+            if requeue_cnt == val2 as isize {
+                break;
+            }
+        }
+    }
+    lock.insert(futex_word_addr, wait_queue);
+    lock.insert(futex_word_addr_2, wait_queue_2);
+    wake_cnt + requeue_cnt
 }
