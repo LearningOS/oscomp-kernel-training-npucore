@@ -59,11 +59,11 @@ const SYSCALL_GETTID: usize = 178;
 const SYSCALL_SBRK: usize = 213;
 const SYSCALL_BRK: usize = 214;
 const SYSCALL_MUNMAP: usize = 215;
-const SYSCALL_CLONE: usize = 220; // fork is a warpper
+const SYSCALL_CLONE: usize = 220;
 const SYSCALL_EXECVE: usize = 221;
 const SYSCALL_MMAP: usize = 222;
 const SYSCALL_MPROTECT: usize = 226;
-const SYSCALL_WAIT4: usize = 260; // waitpid is a warpper of this
+const SYSCALL_WAIT4: usize = 260;
 const SYSCALL_PRLIMIT: usize = 261;
 const SYSCALL_RENAMEAT2: usize = 276;
 
@@ -133,7 +133,8 @@ pub fn sys_getpid() -> isize {
 }
 
 pub fn sys_fork() -> isize {
-    syscall(SYSCALL_CLONE, [0, 0, 0])
+    const SIGCHLD: usize = 17;
+    syscall(SYSCALL_CLONE, [SIGCHLD, 0, 0])
 }
 
 pub fn sys_exec(path: &str, args: &[*const u8], envp: &[*const u8]) -> isize {
