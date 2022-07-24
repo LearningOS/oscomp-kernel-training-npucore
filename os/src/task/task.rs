@@ -350,11 +350,11 @@ impl TaskControlBlock {
         TASK_MANAGER
             .lock()
             .ready_queue
-            .retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
+            .retain(|task| (*task).tgid != (*self).tgid);
         TASK_MANAGER
             .lock()
             .interruptible_queue
-            .retain(|task| (*task).tgid != (*self).tgid || Arc::as_ptr(task) == self);
+            .retain(|task| (*task).tgid != (*self).tgid);
         Ok(())
         // **** release current PCB lock
     }

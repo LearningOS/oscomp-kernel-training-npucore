@@ -31,7 +31,7 @@ const SYSCALL_FSTAT: usize = 80;
 const SYSCALL_FSYNC: usize = 82;
 const SYSCALL_UTIMENSAT: usize = 88;
 const SYSCALL_EXIT: usize = 93;
-const SYSCALL_EXIT_GRUOP: usize = 94;
+const SYSCALL_EXIT_GROUP: usize = 94;
 const SYSCALL_SET_TID_ADDRESS: usize = 96;
 const SYSCALL_FUTEX: usize = 98;
 const SYSCALL_NANOSLEEP: usize = 101;
@@ -140,7 +140,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_FSYNC => "fsync",
         SYSCALL_UTIMENSAT => "utimensat",
         SYSCALL_EXIT => "exit",
-        SYSCALL_EXIT_GRUOP => "exit_GRUOP",
+        SYSCALL_EXIT_GROUP => "exit_GROUP",
         SYSCALL_SET_TID_ADDRESS => "set_tid_address",
         SYSCALL_FUTEX => "futex",
         SYSCALL_NANOSLEEP => "nanosleep",
@@ -291,7 +291,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as u32,
         ),
         SYSCALL_EXIT => sys_exit(args[0] as u32),
-        SYSCALL_EXIT_GRUOP => sys_exit(args[0] as u32),
+        SYSCALL_EXIT_GROUP => sys_exit_group(args[0] as u32),
         SYSCALL_CLOCK_GETTIME => sys_clock_gettime(args[0], args[1] as *mut TimeSpec),
         SYSCALL_KILL => sys_kill(args[0], args[1]),
         SYSCALL_TKILL => sys_tkill(args[0], args[1]),

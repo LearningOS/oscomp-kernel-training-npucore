@@ -1,13 +1,13 @@
 use core::fmt::{self, Debug, Formatter};
 use core::mem::{size_of, MaybeUninit};
 use log::{debug, error, info, trace, warn};
-use riscv::register::scause::{Trap, Exception};
+use riscv::register::scause::{Exception, Trap};
 use riscv::register::{scause, stval};
 
 use crate::config::*;
-use crate::mm::{copy_from_user, copy_to_user, translated_ref, translated_refmut};
+use crate::mm::{copy_from_user, copy_to_user, translated_ref};
 use crate::syscall::errno::*;
-use crate::task::{block_current_and_run_next, exit_current_and_run_next, ustack_bottom_from_tid};
+use crate::task::{block_current_and_run_next, exit_current_and_run_next, exit_group_and_run_next};
 use crate::timer::TimeSpec;
 use crate::trap::{MachineContext, TrapContext, UserContext};
 
@@ -313,7 +313,9 @@ pub fn do_signal() {
         if let Some(act) = result {
             let trap_cx = inner.get_trap_cx();
             // if this syscall wants to restart
-            if scause::read().cause() == Trap::Exception(Exception::UserEnvCall) && trap_cx.gp.a0 == ERESTART as usize {
+            if scause::read().cause() == Trap::Exception(Exception::UserEnvCall)
+                && trap_cx.gp.a0 == ERESTART as usize
+            {
                 // and if `SA_RESTART` is set
                 if act.flags.contains(SigActionFlags::SA_RESTART) {
                     debug!("[do_signal] syscall will restart after sigreturn");
@@ -335,7 +337,7 @@ pub fn do_signal() {
             if let Some(sig_size) = sig_size {
                 let token = task.get_user_token();
                 let signum = signal.to_signum().unwrap();
-                // In this case, signal hander have three parameters 
+                // In this case, signal hander have three parameters
                 if act.flags.contains(SigActionFlags::SA_SIGINFO) {
                     copy_to_user(
                         token,
@@ -358,8 +360,8 @@ pub fn do_signal() {
                         siginfo_addr as *mut SigInfo,
                     ); // push SigInfo into user stack
                     trap_cx.gp.a1 = siginfo_addr; // a1 <- *SigInfo
-                // In this case, signal handler only have one parameter (a0 <- signum), so only copy something necessary
-                // To simplify the implementation of sigreturn, here we keep the same layout as above...
+                                                  // In this case, signal handler only have one parameter (a0 <- signum), so only copy something necessary
+                                                  // To simplify the implementation of sigreturn, here we keep the same layout as above...
                 } else {
                     copy_to_user(
                         token,
@@ -374,7 +376,8 @@ pub fn do_signal() {
                             + 2 * size_of::<usize>()
                             + size_of::<SignalStack>()
                             + size_of::<Signals>()
-                            + UserContext::PADDING_SIZE) as *mut MachineContext,
+                            + UserContext::PADDING_SIZE)
+                            as *mut MachineContext,
                     ); // push MachineContext into user stack
                 }
                 trap_cx.gp.a0 = signum; // a0 <- signum
@@ -430,7 +433,7 @@ pub fn do_signal() {
                     drop(inner);
                     drop(sighand);
                     drop(task);
-                    exit_current_and_run_next(signal.to_signum().unwrap() as u32);
+                    exit_group_and_run_next(signal.to_signum().unwrap() as u32);
                 }
                 // the current process we are handing is sure to be in RUNNING status, so just ignore SIGCONT
                 // where we really wake up this process is where we sent SIGCONT, such as `sys_kill()`
@@ -455,7 +458,7 @@ pub fn do_signal() {
                     drop(inner);
                     drop(sighand);
                     drop(task);
-                    exit_current_and_run_next(signal.to_signum().unwrap() as u32);
+                    exit_group_and_run_next(signal.to_signum().unwrap() as u32);
                 }
             }
         }

@@ -63,9 +63,7 @@ pub fn block_current_and_run_next() {
     schedule(task_cx_ptr);
 }
 
-pub fn exit_current_and_run_next(exit_code: u32) -> ! {
-    // take from Processor
-    let task = take_current_task().unwrap();
+pub fn do_exit(task: Arc<TaskControlBlock>, exit_code: u32) {
     // **** hold current PCB lock
     let mut inner = task.acquire_inner_lock();
     {
@@ -124,7 +122,36 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     // **** release current PCB lock
     // drop task manually to maintain rc correctly
     log::info!("[sys_exit] Pid {} exited with {}", task.pid.0, exit_code);
-    drop(task);
+}
+
+pub fn exit_current_and_run_next(exit_code: u32) -> ! {
+    // take from Processor
+    let task = take_current_task().unwrap();
+    do_exit(task, exit_code);
+    // we do not have to save task context
+    let mut _unused = TaskContext::zero_init();
+    schedule(&mut _unused as *mut _);
+    panic!("Unreachable");
+}
+
+pub fn exit_group_and_run_next(exit_code: u32) -> ! {
+    // exit current, take from Processor
+    let task = take_current_task().unwrap();
+    let tgid = task.tgid;
+    do_exit(task, exit_code);
+    let mut manager = manager::TASK_MANAGER.lock();
+    for task in manager.ready_queue.iter().chain(manager.interruptible_queue.iter()).filter(|task_in_queue| {
+        task_in_queue.tgid == tgid
+    }) {
+        do_exit(task.clone(), exit_code);
+    }
+    manager
+        .ready_queue
+        .retain(|task_in_queue| (*task_in_queue).tgid != tgid);
+    manager
+        .interruptible_queue
+        .retain(|task_in_queue| (*task_in_queue).tgid != tgid);
+    drop(manager);
     // we do not have to save task context
     let mut _unused = TaskContext::zero_init();
     schedule(&mut _unused as *mut _);
