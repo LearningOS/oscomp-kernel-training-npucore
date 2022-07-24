@@ -1,6 +1,6 @@
 use super::{current_task, TaskControlBlock};
 use alloc::collections::{VecDeque};
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use lazy_static::*;
 use spin::Mutex;
 
@@ -126,7 +126,7 @@ pub fn procs_count() -> u16 {
 }
 
 pub struct WaitQueue {
-    inner: Mutex<VecDeque<Arc<TaskControlBlock>>>,
+    inner: Mutex<VecDeque<Weak<TaskControlBlock>>>,
 }
 
 #[allow(unused)]
@@ -138,17 +138,17 @@ impl WaitQueue {
     }
     /// This function add a task to WaitQueue but **won't block it**,
     /// if you want to block a task, use `block_current_and_run_next()`.
-    pub fn add_task(&mut self, task: Arc<TaskControlBlock>) {
+    pub fn add_task(&mut self, task: Weak<TaskControlBlock>) {
         self.inner.lock().push_back(task);
     }
     /// This function will try to pop a task from WaitQueue but **won't wake it up**
-    pub fn pop_task(&mut self) -> Option<Arc<TaskControlBlock>> {
+    pub fn pop_task(&mut self) -> Option<Weak<TaskControlBlock>> {
         self.inner.lock().pop_front()
     }
     /// Returns `true` if the `WaitQueue` contains an element equal to the given `task`
-    pub fn contains(&self, task: &Arc<TaskControlBlock>) -> bool {
+    pub fn contains(&self, task: &Weak<TaskControlBlock>) -> bool {
         self.inner.lock().iter().any(|task_in_queue| {
-            Arc::as_ptr(task_in_queue) == Arc::as_ptr(task)
+            Weak::as_ptr(task_in_queue) == Weak::as_ptr(task)
         })
     }
     /// Returns `true` if the `WaitQueue` is empty
@@ -172,11 +172,17 @@ impl WaitQueue {
         let mut vec = self.inner.lock();
         let mut cnt = 0;
         while let Some(task) = vec.pop_front() {
-            task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
-            wake_interruptible(task);
-            cnt += 1;
-            if cnt == limit {
-                break;
+            match task.upgrade() {
+                Some(task) => {
+                    task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
+                    wake_interruptible(task);
+                    cnt += 1;
+                    if cnt == limit {
+                        break;
+                    }
+                },
+                // task is dead, just ignore
+                None => continue,
             }
         }
         cnt

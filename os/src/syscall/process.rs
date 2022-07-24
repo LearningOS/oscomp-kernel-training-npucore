@@ -7,7 +7,7 @@ use crate::mm::{
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
-use crate::task::threads::{do_futex_wait, FutexCmd, do_futex_requeue, do_futex_wake};
+use crate::task::threads::{do_futex_wait, FutexCmd};
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
     exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
@@ -782,14 +782,14 @@ pub fn sys_futex(
         },
         FutexCmd::Wake => {
             let futex_word_addr = futex_word as *const u32 as usize;
-            do_futex_wake(futex_word_addr, val)
+            task.futex.lock().wake(futex_word_addr, val)
         },
         FutexCmd::Requeue => {
             if uaddr2.is_null() || uaddr2.align_offset(4) != 0 {
                 return EINVAL;
             }
             let futex_word_2 = translated_refmut(token, uaddr2);
-            do_futex_requeue(futex_word, futex_word_2, val, timeout as u32)
+            task.futex.lock().requeue(futex_word, futex_word_2, val, timeout as u32)
         }
         FutexCmd::Invalid => EINVAL,
         _ => todo!()

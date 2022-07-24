@@ -8,7 +8,7 @@ mod switch;
 mod task;
 pub mod threads;
 
-use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut, task::threads::{do_futex_wake}};
+use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut};
 use alloc::sync::Arc;
 pub use context::TaskContext;
 pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
@@ -90,14 +90,13 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     inner.task_status = TaskStatus::Zombie;
     // Record exit code
     inner.exit_code = exit_code;
-    // do not move to its parent but under initproc
 
-    // ++++++ hold initproc PCB lock here
-    {
+    // move children to initproc
+    if !inner.children.is_empty() {
         let mut initproc_inner = INITPROC.acquire_inner_lock();
-        for child in inner.children.iter() {
+        while let Some(child) = inner.children.pop() {
             child.acquire_inner_lock().parent = Some(Arc::downgrade(&INITPROC));
-            initproc_inner.children.push(child.clone());
+            initproc_inner.children.push(child);
         }
         if initproc_inner.task_status == TaskStatus::Interruptible {
             // wake up initproc if initproc is waiting.
@@ -106,14 +105,13 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
             wake_interruptible(INITPROC.clone());
         }
     }
-    // ++++++ release parent PCB lock here
 
     inner.children.clear();
     if inner.clear_child_tid != 0 {
         log::debug!("[exit_current_and_run_next] do futex wake on clear_child_tid: {:X}", inner.clear_child_tid);
         let phys_ref = translated_refmut(task.get_user_token(), inner.clear_child_tid as *mut u32);
         *phys_ref = 0;
-        do_futex_wake(phys_ref as *const u32 as usize, 1);
+        task.futex.lock().wake(phys_ref as *const u32 as usize, 1);
     }
     // deallocate user resource (trap context and user stack)
     task.vm.lock().dealloc_user_res(task.tid);
