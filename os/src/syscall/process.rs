@@ -159,12 +159,14 @@ pub fn sys_nanosleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
             suspend_current_and_run_next();
         }
     } else {
-        let task = current_task().unwrap();
         let mut remain = end - TimeSpec::now();
         while !remain.is_zero() {
+            let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
             if inner.sigpending.difference(inner.sigmask).is_empty() {
                 drop(inner);
+                drop(task);
+                // guess what will happen if we don't do `drop(task)` before this function
                 suspend_current_and_run_next();
             } else {
                 // this will ensure that *rem > 0
@@ -782,6 +784,8 @@ pub fn sys_futex(
                 }
                 _ => None,
             };
+            // guess what will happen if we don't do `drop(task)` here?
+            drop(task);
             do_futex_wait(futex_word, val, timeout)
         },
         FutexCmd::Wake => {
