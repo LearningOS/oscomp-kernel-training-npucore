@@ -1,11 +1,6 @@
-use crate::timer::{TimeRange, TimeSpec, TimeVal};
-
-use super::processor::current_kstack_top;
 use super::{current_task, TaskControlBlock};
-use alloc::collections::{BTreeSet, LinkedList, VecDeque};
+use alloc::collections::{VecDeque};
 use alloc::sync::Arc;
-use alloc::vec::Vec;
-use k210_soc::sleep;
 use lazy_static::*;
 use spin::Mutex;
 
@@ -31,9 +26,9 @@ impl TaskManager {
     pub fn add_interruptible(&mut self, task: Arc<TaskControlBlock>) {
         self.interruptible_queue.push_back(task);
     }
-    pub fn drop_interruptible(&mut self, task: Arc<TaskControlBlock>) {
+    pub fn drop_interruptible(&mut self, task: &Arc<TaskControlBlock>) {
         self.interruptible_queue
-            .retain(|task_in_queue| Arc::as_ptr(task_in_queue) != Arc::as_ptr(&task));
+            .retain(|task_in_queue| Arc::as_ptr(task_in_queue) != Arc::as_ptr(task));
     }
     pub fn find_by_pid(&self, pid: usize) -> Option<Arc<TaskControlBlock>> {
         self.ready_queue
@@ -88,8 +83,8 @@ pub fn sleep_interruptible(task: Arc<TaskControlBlock>) {
 /// This function **won't change task_status**, you should change it manully to insure consistency.
 pub fn wake_interruptible(task: Arc<TaskControlBlock>) {
     let mut manager = TASK_MANAGER.lock();
-    manager.drop_interruptible(task.clone());
-    manager.add(task.clone());
+    manager.drop_interruptible(&task);
+    manager.add(task);
 }
 
 /// # Warning
@@ -119,94 +114,108 @@ pub fn procs_count() -> u16 {
 }
 
 pub struct WaitQueue {
-    inner: Mutex<Vec<Arc<TaskControlBlock>>>,
+    inner: Mutex<VecDeque<Arc<TaskControlBlock>>>,
 }
 
+#[allow(unused)]
 impl WaitQueue {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(Vec::new()),
+            inner: Mutex::new(VecDeque::new()),
         }
     }
     /// This function add a task to WaitQueue but **won't block it**,
     /// if you want to block a task, use `block_current_and_run_next()`.
     pub fn add_task(&mut self, task: Arc<TaskControlBlock>) {
-        self.inner.lock().push(task);
+        self.inner.lock().push_back(task);
+    }
+    /// This function will try to pop a task from WaitQueue but **won't wake it up**
+    pub fn pop_task(&mut self) -> Option<Arc<TaskControlBlock>> {
+        self.inner.lock().pop_front()
+    }
+    /// Returns `true` if the `WaitQueue` contains an element equal to the given `task`
+    pub fn contains(&self, task: &Arc<TaskControlBlock>) -> bool {
+        self.inner.lock().iter().any(|task_in_queue| {
+            Arc::as_ptr(task_in_queue) == Arc::as_ptr(task)
+        })
+    }
+    /// Returns `true` if the `WaitQueue` is empty
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().is_empty()
     }
     /// This funtion will wake up all tasks in inner Vec and change their `task_status`
     /// to `Ready`, so it will try to acquire inner lock and **dead lock could happen**.
     /// These tasks will be scheduled if everything goes well.
     pub fn wake_all(&mut self) -> usize {
-        let mut vec = self.inner.lock();
-        let ret = vec.len();
-        vec.iter().for_each(|task| {
-            wake_interruptible(task.clone());
-            task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
-        });
-        vec.clear();
-        ret
+        self.wake_at_most(usize::MAX)
     }
     /// Wake no more than `limit` processes in this queue.
     /// # DEADLOCK
     /// This funtion will wake up all tasks in inner Vec and change their `task_status`
     /// to `Ready`, so it will try to acquire inner lock and **deadlocks could happen**.
     pub fn wake_at_most(&mut self, limit: usize) -> usize {
-        let mut vec = self.inner.lock();
-        let rm_no = limit.min(vec.len());
-        for i in 0..rm_no {
-            wake_interruptible(vec[i].clone());
-            vec[i].acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
+        if limit == 0 {
+            return 0;
         }
-        vec.drain(0..rm_no);
-        rm_no
+        let mut vec = self.inner.lock();
+        let mut cnt = 0;
+        while let Some(task) = vec.pop_front() {
+            task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
+            wake_interruptible(task);
+            cnt += 1;
+            if cnt == limit {
+                break;
+            }
+        }
+        cnt
     }
 }
 
-pub struct TimeOut {
-    time: TimeRange,
-    task: Arc<TaskControlBlock>,
-}
-impl TimeOut {
-    pub fn from_cur_task_rel_time(mut time: TimeRange) -> Self {
-        time = match time {
-            TimeRange::TimeSpec(t) => TimeRange::TimeSpec(t + TimeSpec::now()),
-            TimeRange::TimeVal(t) => TimeRange::TimeVal(t + TimeVal::now()),
-        };
-        Self {
-            task: current_task().unwrap(),
-            time,
-        }
-    }
-    pub fn from_cur_task_abs_time(time: TimeRange) -> Self {
-        Self {
-            time,
-            task: current_task().unwrap(),
-        }
-    }
-    pub fn is_wake_time(&self) -> bool {
-        match self.time {
-            TimeRange::TimeSpec(t) => {
-                if TimeSpec::now() <= t {
-                    true
-                } else {
-                    false
-                }
-            }
-            TimeRange::TimeVal(t) => {
-                if TimeVal::now() <= t {
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-    }
-}
-impl Drop for TimeOut {
-    fn drop(&mut self) {
-        assert!(self.is_wake_time());
-        wake_interruptible(self.task.clone());
-        log::info!("[TimeOut::drop] Woke due to timeout.");
-        self.task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
-    }
-}
+// pub struct TimeOut {
+//     time: TimeRange,
+//     task: Arc<TaskControlBlock>,
+// }
+// impl TimeOut {
+//     pub fn from_cur_task_rel_time(mut time: TimeRange) -> Self {
+//         time = match time {
+//             TimeRange::TimeSpec(t) => TimeRange::TimeSpec(t + TimeSpec::now()),
+//             TimeRange::TimeVal(t) => TimeRange::TimeVal(t + TimeVal::now()),
+//         };
+//         Self {
+//             task: current_task().unwrap(),
+//             time,
+//         }
+//     }
+//     pub fn from_cur_task_abs_time(time: TimeRange) -> Self {
+//         Self {
+//             time,
+//             task: current_task().unwrap(),
+//         }
+//     }
+//     pub fn is_wake_time(&self) -> bool {
+//         match self.time {
+//             TimeRange::TimeSpec(t) => {
+//                 if TimeSpec::now() <= t {
+//                     true
+//                 } else {
+//                     false
+//                 }
+//             }
+//             TimeRange::TimeVal(t) => {
+//                 if TimeVal::now() <= t {
+//                     true
+//                 } else {
+//                     false
+//                 }
+//             }
+//         }
+//     }
+// }
+// impl Drop for TimeOut {
+//     fn drop(&mut self) {
+//         assert!(self.is_wake_time());
+//         wake_interruptible(self.task.clone());
+//         log::info!("[TimeOut::drop] Woke due to timeout.");
+//         self.task.acquire_inner_lock().task_status = super::task::TaskStatus::Ready;
+//     }
+// }
