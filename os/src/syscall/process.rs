@@ -95,7 +95,8 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
             // wake up target process if it is sleeping
             if inner.task_status == TaskStatus::Interruptible {
                 inner.task_status = TaskStatus::Ready;
-                wake_interruptible(task.clone());
+                drop(inner);
+                wake_interruptible(task);
             }
             SUCCESS
         } else {
@@ -123,7 +124,8 @@ pub fn sys_tkill(tid: usize, sig: usize) -> isize {
             // wake up target process if it is sleeping
             if inner.task_status == TaskStatus::Interruptible {
                 inner.task_status = TaskStatus::Ready;
-                wake_interruptible(task.clone());
+                drop(inner);
+                wake_interruptible(task);
             }
             SUCCESS
         } else {
@@ -437,7 +439,7 @@ pub fn sys_clone(
     );
     show_frame_consumption! {
         "clone";
-        let child = parent.sys_clone(flags, stack, tls);
+        let child = parent.sys_clone(flags, stack, tls, exit_signal);
     }
     let new_pid = child.pid.0;
     if flags.contains(CloneFlags::CLONE_PARENT_SETTID) {
@@ -579,18 +581,23 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
             // ++++ release child PCB lock
         });
         if let Some((idx, _)) = pair {
+            // drop last TCB of child
             let child = inner.children.remove(idx);
+            trace!("[wait4] release zombie task, pid: {}", child.pid.0);
             // confirm that child will be deallocated after being removed from children list
             assert_eq!(Arc::strong_count(&child), 1);
-            let found_pid = child.getpid();
-            // ++++ temporarily hold child lock
-            let exit_code = child.acquire_inner_lock().exit_code;
-            // ++++ release child PCB lock
-            if !status.is_null() {
-                // this may NULL!!!
-                *translated_refmut(token, status) = exit_code;
+            // if main thread exit
+            if child.pid.0 == child.tgid {
+                let found_pid = child.getpid();
+                // ++++ temporarily hold child lock
+                let exit_code = child.acquire_inner_lock().exit_code;
+                // ++++ release child PCB lock
+                if !status.is_null() {
+                    // this may NULL!!!
+                    *translated_refmut(token, status) = exit_code;
+                }
+                return found_pid as isize;
             }
-            return found_pid as isize;
         } else {
             drop(inner);
             if option.contains(WaitOption::WNOHANG) {

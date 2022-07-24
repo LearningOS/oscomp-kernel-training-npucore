@@ -33,6 +33,7 @@ pub struct TaskControlBlock {
     pub tgid: usize,
     pub kstack: KernelStack,
     pub ustack_base: usize,
+    pub exit_signal: Signals,
     // mutable
     inner: Mutex<TaskControlBlockInner>,
     // shareable and mutable
@@ -232,6 +233,7 @@ impl TaskControlBlock {
             tgid,
             kstack,
             ustack_base: ustack_bottom_from_tid(tid),
+            exit_signal: Signals::empty(),
             exe: Arc::new(Mutex::new(elf)),
             tid_allocator,
             files: Arc::new(Mutex::new(FdTable::new(vec![
@@ -357,6 +359,7 @@ impl TaskControlBlock {
         flags: CloneFlags,
         stack: *const u8,
         tls: usize,
+        exit_signal: Signals,
     ) -> Arc<TaskControlBlock> {
         // ---- hold parent PCB lock
         let mut parent_inner = self.acquire_inner_lock();
@@ -404,6 +407,7 @@ impl TaskControlBlock {
             } else {
                 ustack_bottom_from_tid(tid)
             },
+            exit_signal,
             exe: self.exe.clone(),
             tid_allocator,
             files: if flags.contains(CloneFlags::CLONE_FILES) {
@@ -451,20 +455,18 @@ impl TaskControlBlock {
                 exit_code: 0,
             }),
         });
-        if !flags.contains(CloneFlags::CLONE_THREAD) {
-            // add child
-            if flags.contains(CloneFlags::CLONE_PARENT) {
-                if let Some(grandparent) = &parent_inner.parent {
-                    grandparent
-                        .upgrade()
-                        .unwrap()
-                        .acquire_inner_lock()
-                        .children
-                        .push(task_control_block.clone());
-                }
-            } else {
-                parent_inner.children.push(task_control_block.clone());
+        // add child
+        if flags.contains(CloneFlags::CLONE_PARENT) || flags.contains(CloneFlags::CLONE_THREAD) {
+            if let Some(grandparent) = &parent_inner.parent {
+                grandparent
+                    .upgrade()
+                    .unwrap()
+                    .acquire_inner_lock()
+                    .children
+                    .push(task_control_block.clone());
             }
+        } else {
+            parent_inner.children.push(task_control_block.clone());
         }
         let trap_cx = task_control_block.acquire_inner_lock().get_trap_cx();
         if flags.contains(CloneFlags::CLONE_THREAD) {

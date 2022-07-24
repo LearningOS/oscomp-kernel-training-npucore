@@ -50,6 +50,16 @@ impl TaskManager {
     pub fn interruptible_count(&self) -> u16 {
         self.interruptible_queue.len() as u16
     }
+    pub fn show_ready(&self) {
+        self.ready_queue.iter().for_each(|task| {
+            log::error!("[show_ready] pid: {}", task.pid.0);
+        })
+    }
+    pub fn show_interruptible(&self) {
+        self.interruptible_queue.iter().for_each(|task| {
+            log::error!("[show_interruptible] pid: {}", task.pid.0);
+        })
+    }
 }
 
 lazy_static! {
@@ -84,7 +94,9 @@ pub fn sleep_interruptible(task: Arc<TaskControlBlock>) {
 pub fn wake_interruptible(task: Arc<TaskControlBlock>) {
     let mut manager = TASK_MANAGER.lock();
     manager.drop_interruptible(&task);
-    manager.add(task);
+    if manager.find_by_pid(task.pid.0).is_none() {
+        manager.add(task);
+    }
 }
 
 /// # Warning

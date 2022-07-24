@@ -71,13 +71,14 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
     {
         let parent_task = inner.parent.as_ref().unwrap().upgrade().unwrap(); // this will acquire inner of current task
         let mut parent_inner = parent_task.acquire_inner_lock();
-        parent_inner.add_signal(Signals::SIGCHLD);
+        parent_inner.add_signal(task.exit_signal);
 
         if parent_inner.task_status == TaskStatus::Interruptible {
             // wake up parent if parent is waiting.
             parent_inner.task_status = TaskStatus::Ready;
+            drop(parent_inner);
             // push back to ready queue.
-            wake_interruptible(parent_task.clone());
+            wake_interruptible(parent_task);
         }
     }
     log::info!(
@@ -97,6 +98,12 @@ pub fn exit_current_and_run_next(exit_code: u32) -> ! {
         for child in inner.children.iter() {
             child.acquire_inner_lock().parent = Some(Arc::downgrade(&INITPROC));
             initproc_inner.children.push(child.clone());
+        }
+        if initproc_inner.task_status == TaskStatus::Interruptible {
+            // wake up initproc if initproc is waiting.
+            initproc_inner.task_status = TaskStatus::Ready;
+            // push back to ready queue.
+            wake_interruptible(INITPROC.clone());
         }
     }
     // ++++++ release parent PCB lock here
