@@ -4,6 +4,8 @@ mod heap_allocator;
 mod memory_set;
 mod page_table;
 
+use core::arch::asm;
+
 use address::VPNRange;
 pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 pub use frame_allocator::{frame_alloc, frame_dealloc, unallocated_frames, FrameTracker};
@@ -21,6 +23,12 @@ pub fn init() {
     heap_allocator::init_heap();
     frame_allocator::init_frame_allocator();
     KERNEL_SPACE.lock().activate();
+}
+#[inline(always)]
+pub fn tlb_invalidate() {
+    unsafe { 
+        asm!("sfence.vma"); 
+    }
 }
 
 #[macro_export]

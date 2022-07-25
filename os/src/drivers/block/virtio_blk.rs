@@ -77,9 +77,13 @@ pub extern "C" fn virtio_phys_to_virt(paddr: PhysAddr) -> VirtAddr {
     VirtAddr(paddr.0)
 }
 
+lazy_static! {
+    static ref KERNEL_TOKEN: usize = kernel_token();
+}
+
 #[no_mangle]
 pub extern "C" fn virtio_virt_to_phys(vaddr: VirtAddr) -> PhysAddr {
-    PageTable::from_token(kernel_token())
+    PageTable::from_token(*KERNEL_TOKEN)
         .translate_va(vaddr)
         .unwrap()
 }

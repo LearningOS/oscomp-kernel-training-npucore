@@ -28,8 +28,6 @@ impl<T: CacheManager> FileContent<T> {
     /// Get file size
     /// # Return Value
     /// The file size
-    /// # Warning
-    /// This function will lock self's `file_content`, may cause deadlock
     #[inline(always)]
     pub fn get_file_size(&self) -> u32 {
         self.size
@@ -119,6 +117,8 @@ impl<T: CacheManager, F: CacheManager> Drop for Inode<T, F> {
             // Modify size
             let lock = self.lock();
             short_dir_ent.file_size = lock.size;
+            // Modify fst cluster
+            short_dir_ent.set_fst_clus(self.get_first_clus_lock(&lock).unwrap_or(0));
             // Modify time
             // todo!
             log::debug!("[Inode drop]: new_ent: {:?}", short_dir_ent);
@@ -319,7 +319,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// A pointer to Inode
     pub fn root_inode(efs: &Arc<EasyFileSystem<F>>) -> Arc<Self> {
         let rt_clus = efs.root_clus;
-        Inode::new(
+        Self::new(
             rt_clus,
             DiskInodeType::Directory,
             None,
@@ -383,8 +383,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         lock: &mut MutexGuard<FileContent<T>>, 
         diff: isize
     ) {
-        let mut dir_ent = FATDirEnt::empty();
-
         // This operation is ignored if the result size is negative
         if diff.saturating_add(lock.size as isize) <= 0 {
             return;
@@ -397,20 +395,11 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
 
         if diff > 0 {
             self.alloc_clus(lock, new_clus_num - old_clus_num);
-            lock.size = new_size;
-            // If old size is 0, set first cluster bits in directory entry
-            if old_size == 0 {
-                dir_ent.set_fst_clus(lock.clus_list[0]);
-            }
         } else {
-            lock.size = new_size;
             self.dealloc_clus(lock, old_clus_num - new_clus_num);
-            // If new size is 0, clear first cluster bits in directory entry
-            if new_size == 0 {
-                dir_ent.set_fst_clus(0);
-            }
         }
-        dir_ent.set_size(new_size);
+
+        lock.size = new_size;
         lock.file_cache_mgr.notify_new_size(new_size as usize);
     }
 
@@ -460,7 +449,6 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
             end_current_block = end_current_block.min(end);
             // read and update read size
             let block_read_size = end_current_block - start;
-            let dst = &mut buf[read_size..read_size + block_read_size];
             let block_id = self.get_block_id(lock, start_cache as u32).unwrap() as usize;
             lock.file_cache_mgr
                 .get_block_cache(
@@ -472,6 +460,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
                 .lock()
                 // I know hardcoding 4096 in is bad, but I can't get around Rust's syntax checking...
                 .read(0, |data_block: &[u8; 4096]| {
+                    let dst = &mut buf[read_size..read_size + block_read_size];
                     let src =
                         &data_block[start % T::CACHE_SZ..start % T::CACHE_SZ + block_read_size];
                     dst.copy_from_slice(src);

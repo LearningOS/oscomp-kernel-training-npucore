@@ -100,8 +100,8 @@ impl VirtIOBlk<'_> {
         let mut resp = BlkResp::default();
         let mut input_buf = Vec::<&[u8]>::new();
         let mut output_buf = Vec::<&mut [u8]>::new();
-        input_buf.append(&mut VirtIOBlk::<'_>::get_bufs_ref(req.as_buf()));
-        output_buf.append(&mut VirtIOBlk::<'_>::get_bufs_mut(buf));
+        input_buf.append(&mut Self::get_bufs_ref(req.as_buf()));
+        output_buf.append(&mut Self::get_bufs_mut(buf));
         output_buf.push(resp.as_buf_mut());
         self.queue.add(input_buf.as_slice(), output_buf.as_slice())?;
         self.header.notify(0);
@@ -170,8 +170,8 @@ impl VirtIOBlk<'_> {
         let mut resp = BlkResp::default();
         let mut input_buf = Vec::<&[u8]>::new();
         let mut output_buf = Vec::<&mut [u8]>::new();
-        input_buf.append(&mut VirtIOBlk::<'_>::get_bufs_ref(req.as_buf()));
-        input_buf.append(&mut VirtIOBlk::<'_>::get_bufs_ref(buf));
+        input_buf.append(&mut Self::get_bufs_ref(req.as_buf()));
+        input_buf.append(&mut Self::get_bufs_ref(buf));
         output_buf.push(resp.as_buf_mut());
         self.queue.add(input_buf.as_slice(), output_buf.as_slice())?;
         self.header.notify(0);
