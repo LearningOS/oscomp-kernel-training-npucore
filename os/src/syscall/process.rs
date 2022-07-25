@@ -1,7 +1,7 @@
 use crate::config::{PAGE_SIZE, USER_STACK_SIZE};
-use crate::fs::{FdTable, OpenFlags};
+use crate::fs::OpenFlags;
 use crate::mm::{
-    copy_from_user, copy_to_user, copy_to_user_string, get_from_user_checked,
+    copy_from_user, copy_to_user, copy_to_user_string, get_from_user, get_from_user_checked,
     translated_byte_buffer, translated_ref, translated_refmut, translated_str, MapFlags,
     MapPermission, UserBuffer,
 };
@@ -10,8 +10,9 @@ use crate::syscall::errno::*;
 use crate::task::threads::{do_futex_wait, FutexCmd};
 use crate::task::{
     add_task, block_current_and_run_next, current_task, current_user_token,
-    exit_current_and_run_next, find_task_by_pid, find_task_by_tgid, procs_count, signal::*,
-    suspend_current_and_run_next, threads, wake_interruptible, Rusage, TaskStatus, exit_group_and_run_next,
+    exit_current_and_run_next, exit_group_and_run_next, find_task_by_pid, find_task_by_tgid,
+    procs_count, signal::*, suspend_current_and_run_next, threads, wait_with_timeout,
+    wake_interruptible, Rusage, TaskStatus,
 };
 use crate::timer::{
     get_time, get_time_ms, get_time_sec, ITimerVal, TimeSpec, TimeVal, TimeZone, Times,
@@ -146,37 +147,35 @@ pub fn sys_tkill(tid: usize, sig: usize) -> isize {
 }
 
 pub fn sys_nanosleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
-    if req as usize == 0 {
+    if req.is_null() {
         return EINVAL;
     }
-    let token = current_user_token();
-    let start = TimeSpec::now();
-    let len = &mut TimeSpec::new();
-    copy_from_user(token, req, len);
-    let end = start + *len;
-    if rem as usize == 0 {
-        while !(end - TimeSpec::now()).is_zero() {
-            suspend_current_and_run_next();
+    let task = current_task().unwrap();
+    let token = task.get_user_token();
+    let req = get_from_user(token, req);
+
+    let end = TimeSpec::now() + req;
+    wait_with_timeout(Arc::downgrade(&task), end);
+    drop(task);
+
+    block_current_and_run_next();
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    let now = TimeSpec::now();
+    // this is a little different with manual (do not consider sigmask)
+    // but now we have to compromise
+    if inner.sigpending.is_empty() {
+        assert!(end <= now);
+        if !rem.is_null() {
+            copy_to_user(token, &TimeSpec::new(), rem);
         }
+        SUCCESS
     } else {
-        let mut remain = end - TimeSpec::now();
-        while !remain.is_zero() {
-            let task = current_task().unwrap();
-            let inner = task.acquire_inner_lock();
-            if inner.sigpending.difference(inner.sigmask).is_empty() {
-                drop(inner);
-                drop(task);
-                // guess what will happen if we don't do `drop(task)` before this function
-                suspend_current_and_run_next();
-            } else {
-                // this will ensure that *rem > 0
-                copy_to_user(token, &remain, rem);
-                return EINTR;
-            }
-            remain = end - TimeSpec::now();
+        if !rem.is_null() {
+            copy_to_user(token, &(end - now), rem);
         }
+        EINTR
     }
-    SUCCESS
 }
 
 pub fn sys_setitimer(
@@ -725,10 +724,7 @@ pub fn sys_prlimit(
 /// This feature is currently NOT supported and is implemented as a stub,
 /// since threads are not supported.
 pub fn sys_set_tid_address(tidptr: usize) -> isize {
-    current_task()
-        .unwrap()
-        .acquire_inner_lock()
-        .clear_child_tid = tidptr;
+    current_task().unwrap().acquire_inner_lock().clear_child_tid = tidptr;
     sys_gettid()
 }
 
@@ -787,20 +783,22 @@ pub fn sys_futex(
             // guess what will happen if we don't do `drop(task)` here?
             drop(task);
             do_futex_wait(futex_word, val, timeout)
-        },
+        }
         FutexCmd::Wake => {
             let futex_word_addr = futex_word as *const u32 as usize;
             task.futex.lock().wake(futex_word_addr, val)
-        },
+        }
         FutexCmd::Requeue => {
             if uaddr2.is_null() || uaddr2.align_offset(4) != 0 {
                 return EINVAL;
             }
             let futex_word_2 = translated_refmut(token, uaddr2);
-            task.futex.lock().requeue(futex_word, futex_word_2, val, timeout as u32)
+            task.futex
+                .lock()
+                .requeue(futex_word, futex_word_2, val, timeout as u32)
         }
         FutexCmd::Invalid => EINVAL,
-        _ => todo!()
+        _ => todo!(),
     }
 }
 
@@ -820,9 +818,7 @@ pub fn sys_get_robust_list(pid: u32, head_ptr: *mut usize, len_ptr: *mut usize) 
         current_task().unwrap()
     } else {
         match find_task_by_pid(pid as usize) {
-            Some(task) => {
-                task
-            },
+            Some(task) => task,
             None => return ESRCH,
         }
     };

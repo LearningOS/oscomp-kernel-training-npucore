@@ -1,6 +1,4 @@
-use core::task::Waker;
-
-use super::{__switch, Signals};
+use super::{__switch, do_wake_expired};
 use super::{fetch_task, TaskStatus};
 use super::{TaskContext, TaskControlBlock};
 use crate::trap::TrapContext;
@@ -53,7 +51,8 @@ pub fn run_tasks() {
                 __switch(idle_task_cx_ptr, next_task_cx_ptr);
             }
         } else {
-            println!("no tasks available in run_tasks");
+            // we have no ready tasks, try to wake some...
+            do_wake_expired();
         }
     }
 }
@@ -73,14 +72,6 @@ pub fn current_user_token() -> usize {
 pub fn current_trap_cx() -> &'static mut TrapContext {
     current_task().unwrap().acquire_inner_lock().get_trap_cx()
 }
-
-// pub fn current_trap_cx_user_va() -> usize {
-//     current_task()
-//         .unwrap()
-//         .acquire_inner_lock()
-//         .res
-//         .trap_cx_user_va()
-// }
 
 pub fn current_kstack_top() -> usize {
     current_task().unwrap().kstack.get_top()

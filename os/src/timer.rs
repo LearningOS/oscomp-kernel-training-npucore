@@ -1,4 +1,5 @@
 #![allow(unused)]
+use core::cmp::Ordering;
 use core::ops::{Add, AddAssign, Sub};
 
 use crate::config::CLOCK_FREQ;
@@ -50,7 +51,7 @@ pub fn set_next_trigger() {
     set_timer(get_time() + CLOCK_FREQ / TICKS_PER_SEC);
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Traditional UNIX timespec structures represent elapsed time, measured by the system clock
 /// # *CAUTION*
 /// tv_sec & tv_usec should be usize.
@@ -95,19 +96,19 @@ impl Sub for TimeSpec {
     }
 }
 
-impl PartialEq for TimeSpec {
-    fn eq(&self, other: &Self) -> bool {
-        self.tv_sec == other.tv_sec && self.tv_nsec == other.tv_nsec
+impl Ord for TimeSpec {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.tv_sec.cmp(&other.tv_sec) {
+            Ordering::Less => Ordering::Less,
+            Ordering::Equal => { self.tv_nsec.cmp(&other.tv_nsec) }
+            Ordering::Greater => Ordering::Greater,
+        }
     }
 }
 
 impl PartialOrd for TimeSpec {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.tv_sec.partial_cmp(&other.tv_sec) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        self.tv_nsec.partial_cmp(&other.tv_nsec)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -162,7 +163,7 @@ impl TimeSpec {
 /// Traditional UNIX timeval structures represent elapsed time, measured by the system clock
 /// # *CAUTION*
 /// tv_sec & tv_usec should be usize.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TimeVal {
     /// The `tv_sec` member represents the elapsed time, in whole seconds
     pub tv_sec: usize,
@@ -243,19 +244,20 @@ impl Sub for TimeVal {
         }
     }
 }
-impl PartialEq for TimeVal {
-    fn eq(&self, other: &Self) -> bool {
-        self.tv_sec == other.tv_sec && self.tv_usec == other.tv_usec
+
+impl Ord for TimeVal {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.tv_sec.cmp(&other.tv_sec) {
+            Ordering::Less => Ordering::Less,
+            Ordering::Equal => { self.tv_usec.cmp(&other.tv_usec) }
+            Ordering::Greater => Ordering::Greater,
+        }
     }
 }
 
 impl PartialOrd for TimeVal {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        match self.tv_sec.partial_cmp(&other.tv_sec) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
-        }
-        self.tv_usec.partial_cmp(&other.tv_usec)
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
