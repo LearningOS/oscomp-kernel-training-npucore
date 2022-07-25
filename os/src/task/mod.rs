@@ -9,7 +9,7 @@ mod task;
 pub mod threads;
 
 use crate::{fs::{OpenFlags, ROOT_FD}, mm::translated_refmut};
-use alloc::sync::Arc;
+use alloc::{sync::Arc, collections::VecDeque};
 pub use context::TaskContext;
 pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
 use lazy_static::*;
@@ -139,19 +139,39 @@ pub fn exit_group_and_run_next(exit_code: u32) -> ! {
     let task = take_current_task().unwrap();
     let tgid = task.tgid;
     do_exit(task, exit_code);
+
+    let mut exit_list = VecDeque::new();
+
     let mut manager = manager::TASK_MANAGER.lock();
-    for task in manager.ready_queue.iter().chain(manager.interruptible_queue.iter()).filter(|task_in_queue| {
-        task_in_queue.tgid == tgid
-    }) {
-        do_exit(task.clone(), exit_code);
+    let mut remain = manager.ready_queue.len();
+    while let Some(task) = manager.ready_queue.pop_front() {
+        if task.tgid == tgid {
+            exit_list.push_back(task);
+        } else {
+            manager.ready_queue.push_back(task);
+        }
+        remain -= 1;
+        if remain == 0 {
+            break;
+        }
     }
-    manager
-        .ready_queue
-        .retain(|task_in_queue| (*task_in_queue).tgid != tgid);
-    manager
-        .interruptible_queue
-        .retain(|task_in_queue| (*task_in_queue).tgid != tgid);
+    let mut remain = manager.interruptible_queue.len();
+    while let Some(task) = manager.interruptible_queue.pop_front() {
+        if task.tgid == tgid {
+            exit_list.push_back(task);
+        } else {
+            manager.interruptible_queue.push_back(task);
+        }
+        remain -= 1;
+        if remain == 0 {
+            break;
+        }
+    }
     drop(manager);
+
+    for task in exit_list.into_iter() {
+        do_exit(task, exit_code);
+    }
     // we do not have to save task context
     let mut _unused = TaskContext::zero_init();
     schedule(&mut _unused as *mut _);
