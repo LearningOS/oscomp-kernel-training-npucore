@@ -5,16 +5,16 @@ use crate::config::TRAMPOLINE;
 use crate::mm::VirtAddr;
 use crate::syscall::syscall;
 use crate::task::{
-    current_task, current_trap_cx, do_signal, suspend_current_and_run_next,
+    current_task, current_trap_cx, do_signal, do_wake_expired, suspend_current_and_run_next,
     Signals,
 };
 use crate::timer::set_next_trigger;
+pub use context::{MachineContext, TrapContext, UserContext};
 use riscv::register::{
     mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
     sie, stval, stvec,
 };
-pub use context::{TrapContext, MachineContext, UserContext};
 
 global_asm!(include_str!("trap.S"));
 
@@ -96,6 +96,7 @@ pub fn trap_handler() -> ! {
             inner.add_signal(Signals::SIGILL);
         }
         Trap::Interrupt(Interrupt::SupervisorTimer) => {
+            do_wake_expired();
             set_next_trigger();
             suspend_current_and_run_next();
         }

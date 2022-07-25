@@ -1,13 +1,12 @@
-use crate::{
-    syscall::errno::*,
-    task::{current_task, suspend_current_and_run_next},
-    timer::TimeSpec,
-};
-use alloc::{sync::Arc, collections::BTreeMap};
+use crate::{syscall::errno::*, task::current_task, timer::TimeSpec};
+use alloc::{collections::BTreeMap, sync::Arc};
 use log::*;
 use num_enum::FromPrimitive;
 
-use super::{block_current_and_run_next, manager::WaitQueue};
+use super::{
+    block_current_and_run_next,
+    manager::{wait_with_timeout, WaitQueue},
+};
 
 #[allow(unused)]
 #[derive(Debug, Eq, PartialEq, FromPrimitive)]
@@ -66,30 +65,30 @@ pub fn do_futex_wait(futex_word: &mut u32, val: u32, timeout: Option<TimeSpec>) 
         );
         return EAGAIN;
     } else {
-        // hard to handle, just suspend and suppose that we reach the timeout.
-        // don't really wait until timeout, or we will time out in some testcases...
-        if let Some(_) = timeout {
-            suspend_current_and_run_next();
+        let task = current_task().unwrap();
+        let mut futex = task.futex.lock();
+        let mut wait_queue = if let Some(wait_queue) = futex.inner.remove(&futex_word_addr) {
+            wait_queue
         } else {
-            let task = current_task().unwrap();
-            let mut futex = task.futex.lock();
-            let mut wait_queue = if let Some(wait_queue) = futex.inner.remove(&futex_word_addr) {
-                wait_queue
-            } else {
-                WaitQueue::new()
-            };
-            wait_queue.add_task(Arc::downgrade(&task));
-            futex.inner.insert(futex_word_addr, wait_queue);
-            drop(futex);
-            drop(task);
+            WaitQueue::new()
+        };
+        // push to wait queue
+        wait_queue.add_task(Arc::downgrade(&task));
+        futex.inner.insert(futex_word_addr, wait_queue);
+        // if has a timeout, also push to timeout waitqueue
+        if let Some(timeout) = timeout {
+            trace!("[do_futex_wait] sleep with timeout: {:?}", timeout);
+            wait_with_timeout(Arc::downgrade(&task), timeout);
+        }
+        drop(futex);
+        drop(task);
 
-            block_current_and_run_next();
-            let task = current_task().unwrap();
-            let inner = task.acquire_inner_lock();
-            // woke by signal
-            if !inner.sigpending.difference(inner.sigmask).is_empty() {
-                return EINTR;
-            }
+        block_current_and_run_next();
+        let task = current_task().unwrap();
+        let inner = task.acquire_inner_lock();
+        // woke by signal
+        if !inner.sigpending.difference(inner.sigmask).is_empty() {
+            return EINTR;
         }
         SUCCESS
     }
@@ -98,7 +97,7 @@ pub fn do_futex_wait(futex_word: &mut u32, val: u32, timeout: Option<TimeSpec>) 
 impl Futex {
     pub fn new() -> Self {
         Self {
-            inner: BTreeMap::new()
+            inner: BTreeMap::new(),
         }
     }
     pub fn wake(&mut self, futex_word_addr: usize, val: u32) -> isize {
@@ -146,5 +145,5 @@ impl Futex {
         } else {
             wake_cnt
         }
-    }  
+    }
 }

@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::fmt::{self, Debug, Formatter};
 use core::mem::{size_of, MaybeUninit};
 use log::{debug, error, info, trace, warn};
@@ -5,13 +6,14 @@ use riscv::register::scause::{Exception, Trap};
 use riscv::register::{scause, stval};
 
 use crate::config::*;
-use crate::mm::{copy_from_user, copy_to_user, translated_ref};
+use crate::mm::{copy_from_user, copy_to_user, get_from_user_checked, translated_ref};
 use crate::syscall::errno::*;
+use crate::task::manager::wait_with_timeout;
 use crate::task::{block_current_and_run_next, exit_current_and_run_next, exit_group_and_run_next};
 use crate::timer::TimeSpec;
 use crate::trap::{MachineContext, TrapContext, UserContext};
 
-use super::{current_task, suspend_current_and_run_next};
+use super::current_task;
 
 bitflags! {
     /// Signal
@@ -585,28 +587,36 @@ pub fn sigtimedwait(set: *const Signals, info: *mut SigInfo, timeout: *const Tim
     let task = current_task().unwrap();
     let token = task.get_user_token();
     let set = *translated_ref(token, set);
-    let mut timeout_ = TimeSpec::new();
-    copy_from_user(token, timeout, &mut timeout_);
-    debug!("[sigtimedwait] set: {:?}, timeout: {:?}", set, timeout_);
+    let timeout = match get_from_user_checked(token, timeout) {
+        Some(timeout) => timeout,
+        None => return EINVAL,
+    };
+    debug!("[sigtimedwait] set: {:?}, timeout: {:?}", set, timeout);
 
     let start = TimeSpec::now();
-    loop {
-        let inner = task.acquire_inner_lock();
-        if inner.sigpending.contains(set) {
-            let sig = (inner.sigpending & set).peek_front().unwrap();
-            let signum = sig.to_signum().unwrap();
-            if !info.is_null() {
-                copy_to_user(token, &SigInfo::new(signum, 0, 0), info);
+    wait_with_timeout(Arc::downgrade(&task), start + timeout);
+    drop(task);
+
+    block_current_and_run_next();
+    let task = current_task().unwrap();
+    let inner = task.acquire_inner_lock();
+    // interrupted by signal(s)
+    if !inner.sigpending.is_empty() {
+        match (inner.sigpending & set).peek_front() {
+            Some(signal) => {
+                let signum = signal.to_signum().unwrap();
+                if !info.is_null() {
+                    copy_to_user(token, &SigInfo::new(signum, 0, 0), info);
+                }
+                signum as isize
             }
-            return signum as isize;
-        } else {
-            let remain = timeout_ - (TimeSpec::now() - start);
-            if remain.is_zero() {
-                return EAGAIN;
-            } else {
-                drop(inner);
-                suspend_current_and_run_next();
-            }
+            // Interrupted by signal(s) that not present in `set`
+            // This syscall is never restarted after being interrupted by a signal handler
+            None => EINTR,
         }
+    // reach timeout
+    } else {
+        assert!(start + timeout <= TimeSpec::now());
+        EAGAIN
     }
 }
