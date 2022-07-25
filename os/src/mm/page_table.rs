@@ -1,6 +1,6 @@
 use super::{
     frame_alloc, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne, VirtAddr,
-    VirtPageNum,
+    VirtPageNum, tlb_invalidate,
 };
 use _core::mem::{MaybeUninit};
 use _core::ops::{Index, IndexMut};
@@ -186,6 +186,7 @@ impl PageTable {
     /// # Exceptions
     /// Panics if the `vpn` is NOT mapped (invalid).
     pub fn unmap(&mut self, vpn: VirtPageNum) {
+        tlb_invalidate();
         let pte = self.find_pte_refmut(vpn).unwrap(); // was `self.find_creat_pte(vpn).unwrap()`;
         assert!(pte.is_valid(), "vpn {:?} is invalid before unmapping", vpn);
         *pte = PageTableEntry::empty();
@@ -215,6 +216,7 @@ impl PageTable {
         8usize << 60 | self.root_ppn.0
     }
     pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result<(), ()> {
+        tlb_invalidate();
         if let Some(pte) = self.find_pte_refmut(vpn) {
             pte.set_permission(flags);
             Ok(())
@@ -223,6 +225,7 @@ impl PageTable {
         }
     }
     pub fn clear_access_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        tlb_invalidate();
         if let Some(pte) = self.find_pte_refmut(vpn) {
             pte.clear_access();
             Ok(())
@@ -231,6 +234,7 @@ impl PageTable {
         }
     }
     pub fn clear_dirty_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        tlb_invalidate();
         if let Some(pte) = self.find_pte_refmut(vpn) {
             pte.clear_dirty();
             Ok(())

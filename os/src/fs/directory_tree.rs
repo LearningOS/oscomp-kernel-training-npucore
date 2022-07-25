@@ -14,7 +14,7 @@ use super::{
     filesystem::FileSystem,
     layout::OpenFlags,
 };
-use crate::syscall::errno::*;
+use crate::{syscall::errno::*, mm::tlb_invalidate};
 use crate::{
     drivers::BLOCK_DEVICE,
     fs::{
@@ -265,7 +265,7 @@ impl DirectoryTreeNode {
                         key.clone(),
                         inode.filesystem.clone(),
                         new_file,
-                        Some(&self.get_arc()),
+                        Some(&inode.get_arc()),
                     );
                     let new_inode = value.clone();
                     lock.insert(key, value);
@@ -280,7 +280,7 @@ impl DirectoryTreeNode {
         };
 
         if flags.contains(OpenFlags::O_TRUNC) {
-            match self.file.truncate_size(0) {
+            match inode.file.truncate_size(0) {
                 Ok(_) => {}
                 Err(errno) => return Err(errno),
             }
@@ -340,7 +340,7 @@ impl DirectoryTreeNode {
                         key.clone(),
                         inode.filesystem.clone(),
                         new_file,
-                        Some(&self.get_arc()),
+                        Some(&inode.get_arc()),
                     );
                     let new_inode = value.clone();
                     lock.insert(key, value);
@@ -505,6 +505,7 @@ impl DirectoryTreeNode {
 }
 
 pub fn oom() {
+    tlb_invalidate();
     const MAX_FAIL_TIME: usize = 3;
     let mut fail_time = 0;
     fn dfs(u: &Arc<DirectoryTreeNode>) -> usize {
