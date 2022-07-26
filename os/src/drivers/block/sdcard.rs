@@ -2,6 +2,11 @@
 #![allow(non_camel_case_types)]
 #![allow(unused)]
 
+use crate::{
+    config::CLOCK_FREQ,
+    timer::{get_time, get_time_sec},
+};
+
 use super::BlockDevice;
 use core::convert::TryInto;
 use k210_hal::prelude::*;
@@ -745,6 +750,17 @@ impl SDCardWrapper {
     pub fn new() -> Self {
         Self(Mutex::new(init_sdcard()))
     }
+    fn wait_for_one_sec() {
+        let mut time = get_time();
+        time += CLOCK_FREQ;
+        log::error!("Waiting...");
+        loop {
+            if get_time() >= time {
+                break;
+            }
+        }
+        log::error!("Done.");
+    }
 }
 
 impl BlockDevice for SDCardWrapper {
@@ -753,18 +769,25 @@ impl BlockDevice for SDCardWrapper {
         let mut result = lock.read_sector(buf, block_id as u32);
         let mut cont_cnt = 0;
         while result.is_err() {
-            log::error!("[sdcard] read_sector(buf, {}) error. Retrying...", block_id);
             if cont_cnt >= 0 {
+                log::error!("[sdcard] read_sector(buf, {}) error. Retrying...", block_id);
                 result = lock.read_sector(buf, block_id as u32);
             }
             cont_cnt += 1;
-            if cont_cnt == 20 {
+            if cont_cnt >= 5 {
                 log::error!(
                     "[sdcard] read_sector(buf[{}], {}) error exceeded contineous retry count, waiting...",
                     buf.len(),
                     block_id
                 );
-                cont_cnt = -100;
+                Self::wait_for_one_sec();
+                if lock.read_sector(buf, block_id as u32).is_err() {
+                    lock.init();
+                    Self::wait_for_one_sec();
+                } else {
+                    break;
+                }
+                cont_cnt = 0;
             }
         }
     }
@@ -773,21 +796,28 @@ impl BlockDevice for SDCardWrapper {
         let mut result = lock.write_sector(buf, block_id as u32);
         let mut cont_cnt = 0;
         while result.is_err() {
-            log::error!(
-                "[sdcard] write_sector(buf, {}) error. Retrying...",
-                block_id
-            );
             if cont_cnt >= 0 {
+                log::error!(
+                    "[sdcard] write_sector(buf, {}) error. Retrying...",
+                    block_id
+                );
                 result = lock.write_sector(buf, block_id as u32);
             }
             cont_cnt += 1;
-            if cont_cnt == 20 {
+            if cont_cnt >= 5 {
                 log::error!(
                     "[sdcard] write_sector(buf[{}], {}) error exceeded contineous retry count, waiting...",
                     buf.len(),
                     block_id
                 );
-                cont_cnt = -100;
+                Self::wait_for_one_sec();
+                if lock.write_sector(buf, block_id as u32).is_err() {
+                    lock.init();
+                    Self::wait_for_one_sec();
+                } else {
+                    break;
+                }
+                cont_cnt = 0;
             }
         }
     }
