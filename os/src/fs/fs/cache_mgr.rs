@@ -163,17 +163,19 @@ impl CacheManager for BlockCacheManager {
     where
         FUNC: Fn() -> Vec<usize>,
     {
-        let try_get = self.try_get_block_cache(block_id, inner_cache_id);
-        if try_get.is_some() {
-            return try_get.unwrap();
+        match self.try_get_block_cache(block_id, inner_cache_id) {
+            Some(block_cache) => block_cache,
+            None => {
+                let buffer_cache = self.alloc_buffer_cache(block_device);
+                let mut locked = buffer_cache.lock();
+                locked.read_block(block_id, block_device);
+                if locked.priority < PRIORITY_UPPERBOUND {
+                    locked.priority += 1;
+                }
+                drop(locked);
+                buffer_cache
+            },
         }
-        let buffer_cache = self.alloc_buffer_cache(block_device);
-        let mut locked = buffer_cache.lock();
-        locked.read_block(block_id, block_device);
-        if locked.priority < PRIORITY_UPPERBOUND {
-            locked.priority += 1;
-        }
-        buffer_cache.clone()
     }
 }
 
@@ -353,8 +355,8 @@ impl CacheManager for PageCacheManager {
             return None;
         }
         let page_cache = lock[inner_cache_id].clone();
-        if page_cache.is_some() {
-            let mut locked = page_cache.as_ref().unwrap().lock();
+        if let Some(page_cache) = &page_cache {
+            let mut locked = page_cache.lock();
             if locked.priority < PRIORITY_UPPERBOUND {
                 locked.priority += 1;
             }
@@ -398,37 +400,37 @@ impl CacheManager for PageCacheManager {
     where
         FUNC: Fn(usize) -> Vec<usize>,
     {
-        let lock = self.cache_pool.try_lock();
-        if lock.is_none() {
-            return 0;
-        }
-        let mut lock = lock.unwrap();
-        let mut dropped = 0;
-        let mut new_allocated_cache = Vec::<usize>::new();
+        match self.cache_pool.try_lock() {
+            Some(mut lock) => {
+                let mut dropped = 0;
+                let mut new_allocated_cache = Vec::<usize>::new();
 
-        for inner_cache_id in &*self.allocated_cache.lock() {
-            let inner_cache_id = *inner_cache_id;
-            let inner = lock[inner_cache_id].as_ref().unwrap();
-            if Arc::strong_count(inner) > 1 {
-                new_allocated_cache.push(inner_cache_id);
-                continue;
-            }
-            let mut inner_lock = inner.lock();
-            if Arc::strong_count(&inner_lock.tracker) > 1 {
-                new_allocated_cache.push(inner_cache_id);
-            } else if inner_lock.priority > 0 {
-                inner_lock.priority -= 1;
-                new_allocated_cache.push(inner_cache_id);
-            } else {
-                let block_ids = neighbor(inner_cache_id);
-                inner_lock.sync(block_ids, block_device);
-                dropped += 1;
-                drop(inner_lock);
-                lock[inner_cache_id] = None;
-            }
+                for inner_cache_id in self.allocated_cache.lock().iter() {
+                    let inner_cache_id = *inner_cache_id;
+                    let inner = lock[inner_cache_id].as_ref().unwrap();
+                    if Arc::strong_count(inner) > 1 {
+                        new_allocated_cache.push(inner_cache_id);
+                        continue;
+                    }
+                    let mut inner_lock = inner.lock();
+                    if Arc::strong_count(&inner_lock.tracker) > 1 {
+                        new_allocated_cache.push(inner_cache_id);
+                    } else if inner_lock.priority > 0 {
+                        inner_lock.priority -= 1;
+                        new_allocated_cache.push(inner_cache_id);
+                    } else {
+                        let block_ids = neighbor(inner_cache_id);
+                        inner_lock.sync(block_ids, block_device);
+                        dropped += 1;
+                        drop(inner_lock);
+                        lock[inner_cache_id] = None;
+                    }
+                }
+                *self.allocated_cache.lock() = new_allocated_cache;
+                dropped
+            },
+            None => 0,
         }
-        *self.allocated_cache.lock() = new_allocated_cache;
-        dropped
     }
 
     fn notify_new_size(&self, new_size: usize) {
@@ -443,12 +445,8 @@ impl CacheManager for PageCacheManager {
         }
         lock.shrink_to_fit();
 
-        let mut new_allocated_cache = Vec::<usize>::new();
-        for inner_cache_id in &*self.allocated_cache.lock() {
-            if *inner_cache_id < new_pages {
-                new_allocated_cache.push(*inner_cache_id);
-            }
-        }
-        *self.allocated_cache.lock() = new_allocated_cache;
+        self.allocated_cache.lock().retain(|cache_id|{
+            *cache_id < new_pages
+        });
     }
 }

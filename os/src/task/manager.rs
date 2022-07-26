@@ -242,11 +242,7 @@ pub struct TimeoutWaiter {
 // BinaryHeap is max-heap, so we need to reverse the ord
 impl Ord for TimeoutWaiter {
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.timeout.cmp(&other.timeout) {
-            Ordering::Less => Ordering::Greater,
-            Ordering::Equal => Ordering::Equal,
-            Ordering::Greater => Ordering::Less,
-        }
+        Ordering::reverse(self.timeout.cmp(&other.timeout))
     }
 }
 

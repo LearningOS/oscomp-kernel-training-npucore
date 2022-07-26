@@ -510,15 +510,15 @@ pub fn oom() {
     let mut fail_time = 0;
     fn dfs(u: &Arc<DirectoryTreeNode>) -> usize {
         let mut dropped = u.file.oom();
-        let read_lock = u.children.try_read();
-        if read_lock.is_none() {
-            return dropped;
+        match u.children.try_read() {
+            Some(read_lock) => {
+                for (_, v) in read_lock.iter() {
+                    dropped += dfs(v);
+                }
+                dropped
+            },
+            None => dropped,
         }
-        let read_lock = read_lock.unwrap();
-        for (_, v) in read_lock.iter() {
-            dropped += dfs(v);
-        }
-        dropped
     }
     log::warn!("[oom] start oom");
     loop {
