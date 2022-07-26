@@ -632,12 +632,16 @@ impl MemorySet {
         flags: MapFlags,
         fd: usize,
         offset: usize,
-    ) -> usize {
+    ) -> isize {
         // not aligned on a page boundary
-        if start % PAGE_SIZE != 0 {
-            return EINVAL as usize;
+        if start & 0xfff != 0 {
+            return EINVAL;
         }
-        let len = if len == 0 { PAGE_SIZE } else { len };
+        let len = match len {
+            0 => PAGE_SIZE,
+            0x801_000.. => return ENOMEM,
+            _ => len,
+        };
         let task = current_task().unwrap();
         let idx = self.last_mmap_area_idx();
         let page_table = &mut self.page_table;
@@ -655,7 +659,7 @@ impl MemorySet {
                     let end_va: VirtAddr = area.data_frames.vpn_range.get_end().into();
                     area.expand_to(page_table, VirtAddr::from(end_va.0 + len))
                         .unwrap();
-                    return end_va.0;
+                    return end_va.0 as isize;
                 }
                 area.data_frames.vpn_range.get_end().into()
             } else {
@@ -674,18 +678,18 @@ impl MemorySet {
             let fd_table = task.files.lock();
             if fd >= fd_table.len() {
                 // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
-                return EBADF as usize;
+                return EBADF;
             }
             if let Some(fd) = &fd_table[fd] {
                 let file = fd.file.deep_clone();
                 if !file.readable() {
-                    return EACCES as usize;
+                    return EACCES;
                 }
                 file.lseek(offset as isize, SeekWhence::SEEK_SET).unwrap();
                 new_area.map_file = Some(file);
             } else {
                 // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
-                return EBADF as usize;
+                return EBADF;
             }
         }
         // insert MapArea and keep the order
@@ -699,7 +703,7 @@ impl MemorySet {
             .find(|(_, area)| area.data_frames.vpn_range.get_start() >= start_va.into())
             .unwrap();
         self.areas.insert(idx, new_area);
-        start_va.0
+        start_va.0 as isize
     }
     pub fn munmap(&mut self, start: usize, len: usize) -> Result<(), isize> {
         let start_va = VirtAddr::from(start);

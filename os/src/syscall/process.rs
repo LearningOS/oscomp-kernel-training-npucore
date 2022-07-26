@@ -845,7 +845,7 @@ pub fn sys_mmap(
         "[mmap] start:{:X}; len:{:X}; prot:{:?}; flags:{:?}; fd:{}; offset:{:X}",
         start, len, prot, flags, fd as isize, offset
     );
-    memory_set.mmap(start, len, prot, flags, fd, offset) as isize
+    memory_set.mmap(start, len, prot, flags, fd, offset)
 }
 
 /// # Versions
