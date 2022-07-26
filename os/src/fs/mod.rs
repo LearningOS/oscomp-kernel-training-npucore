@@ -219,9 +219,7 @@ impl FileDescriptor {
         let frames = caches
             .iter()
             .map(|cache| {
-                let lock = cache.try_lock();
-                assert!(lock.is_some());
-                Some(lock.unwrap().get_tracker())
+                Some(cache.try_lock().unwrap().get_tracker())
             })
             .collect();
 

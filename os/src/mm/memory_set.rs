@@ -211,28 +211,44 @@ impl MemorySet {
                 && area.data_frames.vpn_range.get_start() <= vpn// ...and the addr is in the vpn range
                 && vpn < area.data_frames.vpn_range.get_end()
         }) {
-            let result = area.map_one(&mut self.page_table, vpn); // attempt to map
-            if result.is_ok() {
-                if let Some(file) = &area.map_file {
-                    // read to the virtual page which we just mapped
-                    // can be improved by mapping to fs cache
-                    let target = VirtAddr::from(vpn).0;
-                    let page = UserBuffer::new(translated_byte_buffer(
-                        self.page_table.token(),
-                        target as *const u8,
-                        PAGE_SIZE,
-                    ));
+            if !self.page_table.is_mapped(vpn) {
+                // lazy alloc file-backed page
+                if let Some(file) = area.map_file.clone() {
                     let old_offset = file.get_offset();
-                    // if offset of lseek exceed EOF, SIGBUS should be sent, but now we unwrap directly
-                    file.lseek(
-                        (target - VirtAddr::from(area.data_frames.vpn_range.get_start()).0)
-                            as isize,
-                        SeekWhence::SEEK_CUR,
-                    )
-                    .unwrap();
-                    file.read_user(None, page);
-                    file.lseek(old_offset as isize, SeekWhence::SEEK_SET)
-                        .unwrap();
+                    let page_start_va = VirtAddr::from(vpn).0;
+                    let area_start_va = VirtAddr::from(area.data_frames.vpn_range.get_start()).0;
+                    let offset_in_area = page_start_va - area_start_va;
+                    // alloc new page and do copy
+                    if area.map_perm.contains(MapPermission::W) {
+                        let allocated_ppn = area.map_one_unchecked(&mut self.page_table, vpn);
+                        // if offset of lseek exceed EOF, SIGBUS should be sent, but now we unwrap directly
+                        file.lseek(offset_in_area as isize, SeekWhence::SEEK_CUR)
+                            .unwrap();
+                        file.read(None, unsafe {
+                            core::slice::from_raw_parts_mut(
+                                PhysAddr::from(allocated_ppn).0 as *mut u8,
+                                PAGE_SIZE,
+                            )
+                        });
+                        file.lseek(old_offset as isize, SeekWhence::SEEK_SET)
+                            .unwrap();
+                    // map to phys page directly
+                    } else {
+                        let cache_phys_page = file
+                            .get_single_cache(old_offset + offset_in_area)
+                            .unwrap()
+                            .try_lock()
+                            .unwrap()
+                            .get_tracker();
+                        self.page_table.map(
+                            vpn,
+                            cache_phys_page.ppn,
+                            PTEFlags::from_bits(area.map_perm.bits).unwrap(),
+                        );
+                    }
+                // lazy alloc anonymous page
+                } else {
+                    area.map_one_unchecked(&mut self.page_table, vpn);
                 }
                 // if mapped successfully,
                 // in other words, not previously mapped before last statement(let result = ...)
@@ -362,7 +378,6 @@ impl MemorySet {
             _ => return Err(ENOEXEC),
         };
 
-        let mut load_segment_count: usize = 0;
         let mut program_break: Option<usize> = None;
         let mut interp_entry: Option<usize> = None;
         let mut interp_base: Option<usize> = None;
@@ -427,7 +442,6 @@ impl MemorySet {
                         };
                     }
                     program_break = Some(VirtAddr::from(end_va.ceil()).0);
-                    load_segment_count += 1;
                     trace!(
                         "[map_elf] start_va = 0x{:X}; end_va = 0x{:X}, offset = 0x{:X}",
                         start_va.0,
@@ -540,12 +554,15 @@ impl MemorySet {
     pub fn translate(&self, vpn: VirtPageNum) -> Option<PageTableEntry> {
         self.page_table.translate(vpn)
     }
+    #[allow(unused)]
     pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result<(), ()> {
         self.page_table.set_pte_flags(vpn, flags)
     }
+    #[allow(unused)]
     pub fn clear_access_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
         self.page_table.clear_access_bit(vpn)
     }
+    #[allow(unused)]
     pub fn clear_dirty_bit(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
         self.page_table.clear_dirty_bit(vpn)
     }
@@ -553,6 +570,8 @@ impl MemorySet {
         //*self = Self::new_bare();
         self.areas.clear();
     }
+    #[allow(unused)]
+    // debug use only
     pub fn show_areas(&self) {
         self.areas.iter().for_each(|area| {
             let start_vpn = area.data_frames.vpn_range.get_start();
@@ -583,24 +602,7 @@ impl MemorySet {
                     1usize.wrapping_neg(),
                     0,
                 );
-                // // first time to expand heap area, insert heap area
-                // if old_pt == heap_bottom {
-                //     let area = MapArea::new(
-                //         old_pt.into(),
-                //         new_pt.into(),
-                //         MapType::Framed,
-                //         MapPermission::R | MapPermission::W | MapPermission::U,
-                //         None,
-                //     );
-                //     self.areas.insert(idx, area);
-                //     debug!("[sbrk] heap area allocated");
-                // // the process already have a heap area, adjust it
-                // } else {
-                //     self.areas[idx]
-                //         .expand_to(&mut self.page_table, VirtAddr::from(new_pt))
-                //         .unwrap();
                 trace!("[sbrk] heap area expanded to {:X}", new_pt);
-                // }
             }
         } else if increment < 0 {
             // shrink to `heap_bottom` would cause duplicated insertion of heap area in future
@@ -615,12 +617,7 @@ impl MemorySet {
             // we only do shrinking when it does have a heap area
             } else {
                 self.munmap(old_pt, increment as usize).unwrap();
-                // if let Some(idx) = self.heap_area_idx {
-                //     self.areas[idx]
-                //         .shrink_to(&mut self.page_table, VirtAddr::from(new_pt))
-                //         .unwrap();
                 trace!("[sbrk] heap area shrinked to {:X}", new_pt);
-                // }
             }
             // we need to adjust `heap_pt` if it's not out of bound
             // in spite of whether the process has a heap area
@@ -976,16 +973,16 @@ impl MemorySet {
         assert_eq!(phys_start & !0xfff, phys_user_sp & !0xfff);
 
         // print user stack
-        let mut phys_addr = phys_user_sp & !0xf;
-        while phys_start >= phys_addr {
-            info!(
-                "0x{:0>16X}:    {:0>16X}  {:0>16X}",
-                phys_addr + virt_phys_offset,
-                unsafe { *(phys_addr as *mut usize) },
-                unsafe { *((phys_addr + core::mem::size_of::<usize>()) as *mut usize) }
-            );
-            phys_addr += 2 * core::mem::size_of::<usize>();
-        }
+        // let mut phys_addr = phys_user_sp & !0xf;
+        // while phys_start >= phys_addr {
+        //     trace!(
+        //         "0x{:0>16X}:    {:0>16X}  {:0>16X}",
+        //         phys_addr + virt_phys_offset,
+        //         unsafe { *(phys_addr as *mut usize) },
+        //         unsafe { *((phys_addr + core::mem::size_of::<usize>()) as *mut usize) }
+        //     );
+        //     phys_addr += 2 * core::mem::size_of::<usize>();
+        // }
         user_sp
     }
     pub fn alloc_user_res(&mut self, tid: usize, alloc_stack: bool) {
@@ -1236,27 +1233,34 @@ impl MapArea {
         &mut self,
         page_table: &mut PageTable,
         vpn: VirtPageNum,
-    ) -> Result<(), MemoryError> {
+    ) -> Result<PhysPageNum, MemoryError> {
         if !page_table.is_mapped(vpn) {
             //if not mapped
-            let ppn: PhysPageNum;
-            match self.map_type {
-                MapType::Identical => {
-                    ppn = PhysPageNum(vpn.0);
-                }
-                MapType::Framed => {
-                    let frame = frame_alloc().unwrap();
-                    ppn = frame.ppn;
-                    self.data_frames.insert(vpn, frame);
-                }
-            }
-            let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
-            page_table.map(vpn, ppn, pte_flags);
-            Ok(())
+            Ok(self.map_one_unchecked(page_table, vpn))
         } else {
             //mapped
             Err(MemoryError::AlreadyMapped)
         }
+    }
+    pub fn map_one_unchecked(
+        &mut self,
+        page_table: &mut PageTable,
+        vpn: VirtPageNum,
+    ) -> PhysPageNum {
+        let ppn: PhysPageNum;
+        match self.map_type {
+            MapType::Identical => {
+                ppn = PhysPageNum(vpn.0);
+            }
+            MapType::Framed => {
+                let frame = frame_alloc().unwrap();
+                ppn = frame.ppn;
+                self.data_frames.insert(vpn, frame);
+            }
+        }
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        page_table.map(vpn, ppn, pte_flags);
+        ppn
     }
     /// Unmap a page in current area.
     /// If it is framed, then the physical pages will be removed from the `data_frames` Btree.
