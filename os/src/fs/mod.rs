@@ -107,6 +107,9 @@ impl FileDescriptor {
         Box::new(self.file.get_stat())
     }
     pub fn open(&self, path: &str, flags: OpenFlags, special_use: bool) -> Result<Self, isize> {
+        if path == "" {
+            return Ok(self.clone());
+        }
         if self.file.is_file() && is_relative(path) {
             return Err(ENOTDIR);
         }

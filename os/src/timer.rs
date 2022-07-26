@@ -6,7 +6,7 @@ use crate::config::CLOCK_FREQ;
 use crate::sbi::set_timer;
 use riscv::register::time;
 
-pub const TICKS_PER_SEC: usize = 100;
+pub const TICKS_PER_SEC: usize = 25;
 
 pub const MSEC_PER_SEC: usize = 1000;
 
