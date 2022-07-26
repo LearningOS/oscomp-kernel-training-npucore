@@ -408,13 +408,13 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// # Return Value
     /// The number of freed pages
     pub fn oom(&self) -> usize{
-        let lock = self.file_content.try_lock();
-        if lock.is_none() {
-            return 0;
+        match self.file_content.try_lock() {
+            Some(lock) => {
+                let neighbor = |inner_cache_id|{self.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
+                lock.file_cache_mgr.oom(neighbor, &self.fs.block_device)
+            },
+            None => 0,
         }
-        let lock = lock.unwrap();
-        let neighbor = |inner_cache_id|{self.get_neighboring_sec(&lock.clus_list, inner_cache_id)};
-        lock.file_cache_mgr.oom(neighbor, &self.fs.block_device)
     }
 }
 
