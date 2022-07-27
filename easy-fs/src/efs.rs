@@ -4,7 +4,7 @@ use crate::{
     layout::{BPB},
     BLOCK_SZ,
 };
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 
 pub struct EasyFileSystem<F: CacheManager> {
     /// Partition/Device the FAT32 is hosted on.
@@ -100,5 +100,19 @@ impl<F: CacheManager> EasyFileSystem<F> {
                 };
                 Arc::new(efs)
             })
+    }
+    pub fn alloc_blocks(&self, blocks: usize) -> Vec<usize> {
+        let sec_per_clus = self.sec_per_clus as usize;
+        let alloc_num = blocks.div_ceil(sec_per_clus);
+        let clus = self.fat.alloc(&self.block_device, alloc_num, None);
+        assert_eq!(clus.len(), alloc_num);
+        let mut block_ids = Vec::<usize>::new();
+        for clus_id in clus {
+            let first_sec = self.first_sector_of_cluster(clus_id) as usize;
+            for offset in 0..sec_per_clus {
+                block_ids.push(first_sec + offset);
+            }
+        }
+        block_ids
     }
 }
