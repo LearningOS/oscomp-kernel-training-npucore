@@ -5,6 +5,7 @@ mod filesystem;
 mod fs;
 mod layout;
 pub mod poll;
+pub mod swap;
 
 use core::{
     ops::{Index, IndexMut},

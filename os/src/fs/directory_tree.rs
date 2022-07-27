@@ -12,7 +12,7 @@ use super::{
     dev::{null::Null, tty::Teletype, zero::Zero},
     file_trait::File,
     filesystem::FileSystem,
-    layout::OpenFlags,
+    layout::OpenFlags, swap::SWAP_DEVICE,
 };
 use crate::{syscall::errno::*, mm::tlb_invalidate};
 use crate::{
@@ -537,6 +537,7 @@ pub fn oom() {
 pub fn init_fs() {
     init_device_directory();
     init_tmp_directory();
+    init_swap_device()
 }
 #[allow(unused)]
 fn init_device_directory() {
@@ -577,4 +578,7 @@ fn init_tmp_directory() {
     match ROOT.mkdir("/tmp") {
         _ => {}
     }
+}
+fn init_swap_device() {
+    SWAP_DEVICE.lock();
 }
