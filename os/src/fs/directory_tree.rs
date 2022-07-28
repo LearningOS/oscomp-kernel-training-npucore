@@ -41,7 +41,7 @@ lazy_static! {
 
 pub struct DirectoryTreeNode {
     /// If this is a directory
-    /// 1. pwd
+    /// 1. cwd
     /// 2. mount point
     /// 3. root node
     /// If this is a file
@@ -167,19 +167,19 @@ impl DirectoryTreeNode {
                 continue;
             }
             let lock = current_inode.children.upgradeable_read();
-            if let Some(son) = lock.get(*component) {
-                let son_inode = son.clone();
-                drop(son);
+            if let Some(child) = lock.get(*component) {
+                let child_inode = child.clone();
+                drop(child);
                 drop(lock);
-                current_inode = son_inode;
+                current_inode = child_inode;
             } else {
                 let mut lock = lock.upgrade();
-                let son_inode = match current_inode.try_to_open_subfile(component, &mut lock) {
+                let child_inode = match current_inode.try_to_open_subfile(component, &mut lock) {
                     Ok(inode) => inode,
                     Err(errno) => return Err(errno),
                 };
                 drop(lock);
-                current_inode = son_inode;
+                current_inode = child_inode;
             }
         }
         Ok(current_inode)
@@ -392,7 +392,7 @@ impl DirectoryTreeNode {
                 let mut lock = par_inode.children.write();
                 match inode.file.unlink(true) {
                     Ok(_) => {
-                        let key = (*last_comp).to_string();
+                        let key = last_comp.to_string();
                         lock.remove(&key);
                     }
                     Err(errno) => return Err(errno),
@@ -493,7 +493,7 @@ impl DirectoryTreeNode {
             FS::Fat32 => {
                 let old_file = old_inode.file.downcast_ref::<OSInode>().unwrap();
                 let new_par_file = new_par_inode.file.downcast_ref::<OSInode>().unwrap();
-                new_par_file.link_son(old_last_comp, old_file)?;
+                new_par_file.link_child(old_last_comp, old_file)?;
             }
             FS::Null => return Err(EACCES),
         }
@@ -510,15 +510,10 @@ pub fn oom() {
     let mut fail_time = 0;
     fn dfs(u: &Arc<DirectoryTreeNode>) -> usize {
         let mut dropped = u.file.oom();
-        match u.children.try_read() {
-            Some(read_lock) => {
-                for (_, v) in read_lock.iter() {
-                    dropped += dfs(v);
-                }
-                dropped
-            },
-            None => dropped,
+        for (_, v) in u.children.read().iter() {
+            dropped += dfs(v);
         }
+        dropped
     }
     log::warn!("[oom] start oom");
     loop {

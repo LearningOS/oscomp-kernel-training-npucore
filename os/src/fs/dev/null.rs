@@ -69,7 +69,7 @@ impl File for Null {
         todo!()
     }
 
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    fn link_child(&self, name: &str, child: &Self) -> Result<(), isize>
     where
         Self: Sized,
     {

@@ -41,7 +41,7 @@ pub trait File: DowncastSync {
     fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize>;
     /// create
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize>;
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    fn link_child(&self, name: &str, child: &Self) -> Result<(), isize>
     where
         Self: Sized;
     /// delete(unlink)

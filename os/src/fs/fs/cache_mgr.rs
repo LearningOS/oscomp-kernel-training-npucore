@@ -374,13 +374,13 @@ impl CacheManager for PageCacheManager {
     where
         FUNC: Fn() -> Vec<usize>,
     {
+        let mut new_page_cache = PageCache::new();
         let mut lock = self.cache_pool.lock();
         while inner_cache_id >= lock.len() {
             lock.push(None);
         }
         let mut page_cache = lock[inner_cache_id].clone();
         if page_cache.is_none() {
-            let mut new_page_cache = PageCache::new();
             new_page_cache.read_in(neighbor(), &block_device);
             let new_page_cache = Arc::new(Mutex::new(new_page_cache));
             page_cache = Some(new_page_cache.clone());
@@ -400,37 +400,33 @@ impl CacheManager for PageCacheManager {
     where
         FUNC: Fn(usize) -> Vec<usize>,
     {
-        match self.cache_pool.try_lock() {
-            Some(mut lock) => {
-                let mut dropped = 0;
-                let mut new_allocated_cache = Vec::<usize>::new();
+        let mut lock = self.cache_pool.lock();
+        let mut dropped = 0;
+        let mut new_allocated_cache = Vec::<usize>::new();
 
-                for inner_cache_id in self.allocated_cache.lock().iter() {
-                    let inner_cache_id = *inner_cache_id;
-                    let inner = lock[inner_cache_id].as_ref().unwrap();
-                    if Arc::strong_count(inner) > 1 {
-                        new_allocated_cache.push(inner_cache_id);
-                        continue;
-                    }
-                    let mut inner_lock = inner.lock();
-                    if Arc::strong_count(&inner_lock.tracker) > 1 {
-                        new_allocated_cache.push(inner_cache_id);
-                    } else if inner_lock.priority > 0 {
-                        inner_lock.priority -= 1;
-                        new_allocated_cache.push(inner_cache_id);
-                    } else {
-                        let block_ids = neighbor(inner_cache_id);
-                        inner_lock.sync(block_ids, block_device);
-                        dropped += 1;
-                        drop(inner_lock);
-                        lock[inner_cache_id] = None;
-                    }
-                }
-                *self.allocated_cache.lock() = new_allocated_cache;
-                dropped
-            },
-            None => 0,
+        for inner_cache_id in self.allocated_cache.lock().iter() {
+            let inner_cache_id = *inner_cache_id;
+            let inner = lock[inner_cache_id].as_ref().unwrap();
+            if Arc::strong_count(inner) > 1 {
+                new_allocated_cache.push(inner_cache_id);
+                continue;
+            }
+            let mut inner_lock = inner.lock();
+            if Arc::strong_count(&inner_lock.tracker) > 1 {
+                new_allocated_cache.push(inner_cache_id);
+            } else if inner_lock.priority > 0 {
+                inner_lock.priority -= 1;
+                new_allocated_cache.push(inner_cache_id);
+            } else {
+                let block_ids = neighbor(inner_cache_id);
+                inner_lock.sync(block_ids, block_device);
+                dropped += 1;
+                drop(inner_lock);
+                lock[inner_cache_id] = None;
+            }
         }
+        *self.allocated_cache.lock() = new_allocated_cache;
+        dropped
     }
 
     fn notify_new_size(&self, new_size: usize) {

@@ -87,13 +87,11 @@ impl File for OSInode {
     /// # Warning
     /// Buffer must be in kernel space
     fn read(&self, offset: Option<&mut usize>, buffer: &mut [u8]) -> usize {
-        let mut file_cont_lock = self.inner.lock();
         match offset {
             Some(offset) => {
                 let len = self
                     .inner
-                    .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
-                drop(file_cont_lock);
+                    .read_at_block_cache(*offset, buffer);
                 *offset += len;
                 len
             }
@@ -101,8 +99,7 @@ impl File for OSInode {
                 let mut offset = self.offset.lock();
                 let len = self
                     .inner
-                    .read_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
-                drop(file_cont_lock);
+                    .read_at_block_cache(*offset, buffer);
                 *offset += len;
                 len
             }
@@ -116,25 +113,23 @@ impl File for OSInode {
     /// # Warning
     /// Buffer must be in kernel space
     fn write(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
-        let mut file_cont_lock = self.inner.lock();
         match offset {
             Some(offset) => {
-                let len =
-                    self.inner
-                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
-                drop(file_cont_lock);
+                let len = self
+                    .inner
+                    .write_at_block_cache(*offset, buffer);
                 *offset += len;
                 len
             }
             None => {
                 let mut offset = self.offset.lock();
+                let inode_lock = self.inner.write();
                 if self.append {
-                    *offset = file_cont_lock.get_file_size() as usize;
+                    *offset = self.inner.get_file_size_wlock(&inode_lock) as usize;
                 }
-                let len =
-                    self.inner
-                        .write_at_block_cache_lock(&mut file_cont_lock, *offset, buffer);
-                drop(file_cont_lock);
+                let len = self
+                    .inner
+                    .write_at_block_cache_lock(&inode_lock, *offset, buffer);
                 *offset += len;
                 len
             }
@@ -149,14 +144,14 @@ impl File for OSInode {
     fn read_user(&self, offset: Option<usize>, mut buf: UserBuffer) -> usize {
         let mut total_read_size = 0usize;
 
-        let mut file_cont_lock = self.inner.lock();
+        let inode_lock = self.inner.read();
         match offset {
             Some(mut offset) => {
                 let mut offset = &mut offset;
                 for slice in buf.buffers.iter_mut() {
                     let read_size =
                         self.inner
-                            .read_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                            .read_at_block_cache_rlock(&inode_lock, *offset, *slice);
                     if read_size == 0 {
                         break;
                     }
@@ -169,7 +164,7 @@ impl File for OSInode {
                 for slice in buf.buffers.iter_mut() {
                     let read_size =
                         self.inner
-                            .read_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                            .read_at_block_cache_rlock(&inode_lock, *offset, *slice);
                     if read_size == 0 {
                         break;
                     }
@@ -183,14 +178,14 @@ impl File for OSInode {
     fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         let mut total_write_size = 0usize;
 
-        let mut file_cont_lock = self.inner.lock();
+        let inode_lock = self.inner.write();
         match offset {
             Some(mut offset) => {
                 let mut offset = &mut offset;
                 for slice in buf.buffers.iter() {
                     let write_size =
                         self.inner
-                            .write_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                            .write_at_block_cache_lock(&inode_lock, *offset, *slice);
                     assert_eq!(write_size, slice.len());
                     *offset += write_size;
                     total_write_size += write_size;
@@ -199,12 +194,12 @@ impl File for OSInode {
             None => {
                 let mut offset = self.offset.lock();
                 if self.append {
-                    *offset = file_cont_lock.get_file_size() as usize;
+                    *offset = self.inner.get_file_size_wlock(&inode_lock) as usize;
                 }
                 for slice in buf.buffers.iter() {
                     let write_size =
                         self.inner
-                            .write_at_block_cache_lock(&mut file_cont_lock, *offset, *slice);
+                            .write_at_block_cache_lock(&inode_lock, *offset, *slice);
                     assert_eq!(write_size, slice.len());
                     *offset += write_size;
                     total_write_size += write_size;
@@ -214,7 +209,7 @@ impl File for OSInode {
         total_write_size
     }
     fn get_stat(&self) -> Stat {
-        let (size, atime, mtime, ctime, ino) = self.inner.stat_lock(&mut self.inner.lock());
+        let (size, atime, mtime, ctime, ino) = self.inner.stat_lock(&self.inner.read());
         let st_mod: u32 = {
             if self.inner.is_dir() {
                 (StatMode::S_IFDIR | StatMode::S_IRWXU | StatMode::S_IRWXG | StatMode::S_IRWXO)
@@ -250,9 +245,9 @@ impl File for OSInode {
         })
     }
     fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
-        let mut lock = self.inner.lock();
+        let inode_lock = self.inner.write();
         if let Ok(Some((_, short_ent, offset))) =
-            self.inner.find_local_lock(&mut lock, name.to_string())
+            self.inner.find_local_lock(&inode_lock, name.to_string())
         {
             Ok(Arc::new(Self {
                 readable: true,
@@ -268,8 +263,8 @@ impl File for OSInode {
         }
     }
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
-        let mut lock = self.inner.lock();
-        let new_file = Inode::create_lock(&self.inner, &mut lock, name.to_string(), file_type);
+        let inode_lock = self.inner.write();
+        let new_file = Inode::create_lock(&self.inner, &inode_lock, name.to_string(), file_type);
         if let Ok(inner) = new_file {
             Ok(Arc::new(Self {
                 readable: true,
@@ -284,15 +279,15 @@ impl File for OSInode {
             panic!()
         }
     }
-    fn link_son(&self, name: &str, son: &Self) -> Result<(), isize>
+    fn link_child(&self, name: &str, child: &Self) -> Result<(), isize>
     where
         Self: Sized,
     {
-        let mut par_lock = self.inner.lock();
-        let mut son_lock = son.inner.lock();
-        if son
+        let par_inode_lock = self.inner.write();
+        let child_inode_lock = child.inner.write();
+        if child
             .inner
-            .link_par_lock(&mut son_lock, &self.inner, &mut par_lock, name.to_string())
+            .link_par_lock(&child_inode_lock, &self.inner, &par_inode_lock, name.to_string())
             .is_err()
         {
             panic!();
@@ -300,11 +295,11 @@ impl File for OSInode {
         Ok(())
     }
     fn unlink(&self, delete: bool) -> Result<(), isize> {
-        let mut lock = self.inner.lock();
-        if self.inner.is_dir() && !self.inner.is_empty_dir_lock(&mut lock) {
+        let inode_lock = self.inner.write();
+        if self.inner.is_dir() && !self.inner.is_empty_dir_lock(&inode_lock) {
             return Err(ENOTEMPTY);
         }
-        match self.inner.unlink_lock(&mut lock, delete) {
+        match self.inner.unlink_lock(&inode_lock, delete) {
             Ok(_) => Ok(()),
             Err(errno) => Err(errno),
         }
@@ -316,10 +311,10 @@ impl File for OSInode {
 
         assert!(self.inner.is_dir());
         let mut offset = self.offset.lock();
-        let mut lock = self.inner.lock();
+        let inode_lock = self.inner.write();
         log::debug!(
             "[get_dirent] tot size: {}, offset: {}, count: {}",
-            lock.get_file_size(),
+            self.inner.get_file_size_wlock(&inode_lock),
             offset,
             count
         );
@@ -327,7 +322,7 @@ impl File for OSInode {
         let vec = self
             .inner
             .dirent_info_lock(
-                &mut lock,
+                &inode_lock,
                 *offset as u32,
                 count / core::mem::size_of::<Dirent>(),
             )
@@ -352,11 +347,11 @@ impl File for OSInode {
             .collect()
     }
     fn lseek(&self, offset: isize, whence: SeekWhence) -> Result<usize, isize> {
-        let lock = self.inner.lock();
+        let inode_lock = self.inner.write();
         let new_offset = match whence {
             SeekWhence::SEEK_SET => offset,
             SeekWhence::SEEK_CUR => *self.offset.lock() as isize + offset,
-            SeekWhence::SEEK_END => lock.get_file_size() as isize + offset,
+            SeekWhence::SEEK_END => self.inner.get_file_size_wlock(&inode_lock) as isize + offset,
             // whence is duplicated
             _ => return Err(EINVAL),
         };
@@ -368,15 +363,15 @@ impl File for OSInode {
         Ok(new_offset)
     }
     fn modify_size(&self, diff: isize) -> Result<(), isize> {
-        let mut lock = self.inner.lock();
-        self.inner.modify_size_lock(&mut lock, diff);
+        let inode_lock = self.inner.write();
+        self.inner.modify_size_lock(&inode_lock, diff);
         Ok(())
     }
     fn truncate_size(&self, new_size: usize) -> Result<(), isize> {
-        let mut lock = self.inner.lock();
-        let old_size = lock.get_file_size();
+        let inode_lock = self.inner.write();
+        let old_size = self.inner.get_file_size_wlock(&inode_lock);
         self.inner
-            .modify_size_lock(&mut lock, new_size as isize - old_size as isize);
+            .modify_size_lock(&inode_lock, new_size as isize - old_size as isize);
         Ok(())
     }
     fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) {
@@ -395,9 +390,9 @@ impl File for OSInode {
         if offset & 0xfff != 0 {
             return Err(());
         }
-        let mut lock = self.inner.lock();
+        let inode_lock = self.inner.read();
         let inner_cache_id = offset >> 12;
-        Ok(self.inner.get_single_cache_lock(&mut lock, inner_cache_id))
+        Ok(self.inner.get_single_cache_lock(&inode_lock, inner_cache_id))
     }
     fn get_all_caches(&self) -> Result<Vec<Arc<Mutex<PageCache>>>, ()> {
         Ok(self.inner.get_all_cache())
