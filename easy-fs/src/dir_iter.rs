@@ -1,8 +1,8 @@
 use crate::layout::{FATDirEnt, FATShortDirEnt};
-use crate::vfs::FileContent;
+use crate::vfs::{InodeLock};
 use crate::{CacheManager, Inode};
 use alloc::string::{String};
-use spin::MutexGuard;
+use spin::*;
 
 /// `DirIterMode` describe `DirIter`'s iterate mode
 /// + `Long`: Iterate to the next long directory entry
@@ -31,7 +31,7 @@ const STEP_SIZE: u32 = core::mem::size_of::<FATDirEnt>() as u32;
 /// Otherwise, if the offset is at the boundary (the next iteration will be invalid), its value will not change after the next iteration.
 pub struct DirIter<'a,'b, T: CacheManager, F: CacheManager> {
     /// The lock of directory file's `file content`
-    pub lock: &'a mut MutexGuard<'b, FileContent<T>>,
+    pub inode_lock: &'a RwLockWriteGuard<'b, InodeLock>,
     /// The current offset in file
     offset: Option<u32>,
     mode: DirIterMode,
@@ -51,14 +51,14 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
     /// # Return Value
     /// An `DirIter`
     pub fn new(
-        lock: &'a mut MutexGuard<'b, FileContent<T>>,
+        inode_lock: &'a RwLockWriteGuard<'b, InodeLock>,
         offset: Option<u32>,
         mode: DirIterMode,
         direction: bool,
         inode: &'a Inode<T, F>,
     ) -> Self {
         Self{
-            lock,
+            inode_lock,
             offset,
             mode,
             direction,
@@ -95,9 +95,9 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
     pub fn current_clone(&mut self) -> Option<FATDirEnt> {
         let mut dir_ent = FATDirEnt::empty();
         if self.offset.is_some()
-            && self.offset.unwrap() < self.lock.get_file_size()
-            && self.inode.read_at_block_cache_lock(
-                &mut self.lock,
+            && self.offset.unwrap() < self.inode.get_file_size_wlock(self.inode_lock)
+            && self.inode.read_at_block_cache_wlock(
+                &self.inode_lock,
                 self.offset.unwrap() as usize,
                 dir_ent.as_bytes_mut(),
             ) != 0 {
@@ -113,7 +113,7 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
     /// If write failed, it will panic
     pub fn write_to_current_ent(&mut self, ent: &FATDirEnt) {
         if self.inode.write_at_block_cache_lock(
-            &mut self.lock,
+            &mut self.inode_lock,
             self.offset.unwrap() as usize,
             ent.as_bytes(),
         ) != ent.as_bytes().len()
@@ -133,11 +133,11 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
             // offset = None    => 0
             // otherwise        => offset + STEP_SIZE
             let offset = self.offset.map(|offset| offset + STEP_SIZE).unwrap_or(0);
-            if offset >= self.lock.get_file_size() {
+            if offset >= self.inode.get_file_size_wlock(self.inode_lock) {
                 return None;
             }
             self.inode
-                .read_at_block_cache_lock(&mut self.lock, offset as usize, dir_ent.as_bytes_mut());
+                .read_at_block_cache_wlock(&self.inode_lock, offset as usize, dir_ent.as_bytes_mut());
             match self.mode {
                 DirIterMode::Enum => (),
                 _ => {
@@ -157,8 +157,8 @@ impl<'a, 'b, T: CacheManager, F: CacheManager> DirIter<'a,'b, T, F> {
                 return None;
             }
             self.offset = self.offset.map(|offset| offset - STEP_SIZE);
-            self.inode.read_at_block_cache_lock(
-                &mut self.lock,
+            self.inode.read_at_block_cache_wlock(
+                &self.inode_lock,
                 self.offset.unwrap() as usize,
                 dir_ent.as_bytes_mut(),
             );
