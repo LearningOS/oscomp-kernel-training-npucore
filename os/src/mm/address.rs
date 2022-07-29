@@ -169,6 +169,10 @@ impl PhysPageNum {
         let pa: PhysAddr = self.clone().into();
         unsafe { core::slice::from_raw_parts_mut(pa.0 as *mut u8, 4096) }
     }
+    pub fn get_dwords_array(&self) -> &'static mut [u64] {
+        let pa: PhysAddr = self.clone().into();
+        unsafe { core::slice::from_raw_parts_mut(pa.0 as *mut u64, 512) }
+    }
     pub fn get_mut<T>(&self) -> &'static mut T {
         let pa: PhysAddr = self.clone().into();
         pa.get_mut()

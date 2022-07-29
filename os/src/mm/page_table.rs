@@ -1,8 +1,8 @@
 use super::{
-    frame_alloc, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne, VirtAddr,
-    VirtPageNum, tlb_invalidate,
+    frame_alloc, tlb_invalidate, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne,
+    VirtAddr, VirtPageNum,
 };
-use _core::mem::{MaybeUninit};
+use _core::mem::MaybeUninit;
 use _core::ops::{Index, IndexMut};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -36,6 +36,7 @@ pub struct PageTableEntry {
 }
 
 impl PageTableEntry {
+    const PPN_MASK: usize = ((1usize << 44) - 1) << 10;
     pub fn new(ppn: PhysPageNum, flags: PTEFlags) -> Self {
         PageTableEntry {
             bits: ppn.0 << 10 | flags.bits as usize,
@@ -45,7 +46,7 @@ impl PageTableEntry {
         PageTableEntry { bits: 0 }
     }
     pub fn ppn(&self) -> PhysPageNum {
-        (self.bits >> 10 & ((1usize << 44) - 1)).into()
+        ((self.bits & Self::PPN_MASK) >> 10).into()
     }
     pub fn flags(&self) -> PTEFlags {
         PTEFlags::from_bits(self.bits as u8).unwrap()
@@ -66,13 +67,25 @@ impl PageTableEntry {
         (self.flags() & PTEFlags::X) != PTEFlags::empty()
     }
     pub fn clear_access(&mut self) {
-        self.bits &= ! (PTEFlags::A.bits() as usize);
+        self.bits &= !(PTEFlags::A.bits() as usize);
     }
     pub fn clear_dirty(&mut self) {
-        self.bits &= ! (PTEFlags::D.bits() as usize);
+        self.bits &= !(PTEFlags::D.bits() as usize);
+    }
+    pub fn revoke_read(&mut self) {
+        self.bits &= !(PTEFlags::R.bits() as usize);
+    }
+    pub fn revoke_write(&mut self) {
+        self.bits &= !(PTEFlags::W.bits() as usize);
+    }
+    pub fn revoke_execute(&mut self) {
+        self.bits &= !(PTEFlags::X.bits() as usize);
     }
     pub fn set_permission(&mut self, flags: MapPermission) {
         self.bits = (self.bits & 0xffff_ffff_ffff_ffe1) | (flags.bits() as usize)
+    }
+    pub fn set_ppn(&mut self, ppn: PhysPageNum) {
+        self.bits = (self.bits & !Self::PPN_MASK) | ((ppn.0 << 10) & Self::PPN_MASK)
     }
 }
 
@@ -215,6 +228,38 @@ impl PageTable {
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
+    pub fn revoke_read(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        if let Some(pte) = self.find_pte_refmut(vpn) {
+            pte.revoke_read();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    pub fn revoke_write(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        if let Some(pte) = self.find_pte_refmut(vpn) {
+            pte.revoke_write();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    pub fn revoke_execute(&mut self, vpn: VirtPageNum) -> Result<(), ()> {
+        if let Some(pte) = self.find_pte_refmut(vpn) {
+            pte.revoke_execute();
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+    pub fn set_ppn(&mut self, vpn: VirtPageNum, ppn: PhysPageNum) -> Result<(), ()> {
+        if let Some(pte) = self.find_pte_refmut(vpn) {
+            pte.set_ppn(ppn);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
     pub fn set_pte_flags(&mut self, vpn: VirtPageNum, flags: MapPermission) -> Result<(), ()> {
         //tlb_invalidate();
         if let Some(pte) = self.find_pte_refmut(vpn) {
@@ -282,7 +327,7 @@ pub fn translated_str(token: usize, ptr: *const u8) -> String {
         log::warn!("[translated_str] ptr is null!");
         return String::new();
     }
-    
+
     let page_table = PageTable::from_token(token);
     let mut string = String::new();
     let mut va = ptr as usize;
@@ -555,10 +600,7 @@ pub fn get_from_user<T: 'static + Copy>(token: usize, src: *const T) -> T {
 }
 
 #[inline(always)]
-pub fn get_from_user_checked<T: 'static +  Copy>(
-    token: usize,
-    src: *const T,
-) -> Option<T> {
+pub fn get_from_user_checked<T: 'static + Copy>(token: usize, src: *const T) -> Option<T> {
     if !src.is_null() {
         Some(get_from_user(token, src))
     } else {
@@ -594,8 +636,8 @@ pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
     let size = src.len();
     let page_table = PageTable::from_token(token);
     let dst_pa = page_table
-            .translate_va(VirtAddr::from(dst as usize))
-            .unwrap();
+        .translate_va(VirtAddr::from(dst as usize))
+        .unwrap();
     let dst_ptr = dst_pa.0 as *mut u8;
     // if all data of `*dst` is in the same page, write directly
     if VirtAddr::from(dst as usize).floor() == VirtAddr::from(dst as usize + size).floor() {
