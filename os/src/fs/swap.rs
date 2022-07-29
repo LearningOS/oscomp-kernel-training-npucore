@@ -24,9 +24,7 @@ impl Swap {
         let bit = size * 256;
         let vec_len = bit / 64;
         let mut bitmap = Vec::<u64>::with_capacity(vec_len);
-        unsafe {
-            bitmap.set_len(bitmap.capacity());
-        }
+        bitmap.resize(bitmap.capacity(), 0);
         let blocks = size * 2048;
         Self {
             bitmap,
@@ -59,7 +57,7 @@ impl Swap {
         None
     }
     fn get_block_ids(&self, swap_id: usize) -> &[usize] {
-        &self.block_ids[swap_id * 8 + 0..swap_id * 8 + 7]
+        &self.block_ids[swap_id * 8 + 0..swap_id * 8 + 8]
     }
     pub fn read(&mut self, swap_id: usize, buf: &mut [u8]) {
         Self::read_page(self.get_block_ids(swap_id), buf);

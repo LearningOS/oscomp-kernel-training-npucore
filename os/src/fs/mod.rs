@@ -17,7 +17,7 @@ pub use self::layout::*;
 
 use self::{directory_tree::DirectoryTreeNode, file_trait::File, fs::cache_mgr::PageCache};
 use crate::{
-    mm::UserBuffer,
+    mm::{UserBuffer, Frame},
     syscall::{errno::*, fs::SeekWhence},
 };
 use alloc::{
@@ -220,7 +220,7 @@ impl FileDescriptor {
         let frames = caches
             .iter()
             .map(|cache| {
-                Some(cache.try_lock().unwrap().get_tracker())
+                Frame::InMemory(cache.try_lock().unwrap().get_tracker())
             })
             .collect();
 

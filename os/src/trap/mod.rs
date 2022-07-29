@@ -2,7 +2,7 @@ mod context;
 use core::arch::{asm, global_asm};
 
 use crate::config::TRAMPOLINE;
-use crate::mm::VirtAddr;
+use crate::mm::{VirtAddr, frame_reserve};
 use crate::syscall::syscall;
 use crate::task::{
     current_task, current_trap_cx, do_signal, do_wake_expired, suspend_current_and_run_next,
@@ -85,6 +85,7 @@ pub fn trap_handler() -> ! {
                 scause.cause()
             );
             // This is where we handle the page fault.
+            frame_reserve(3);
             if task.vm.lock().do_page_fault(addr).is_err() {
                 inner.add_signal(Signals::SIGSEGV);
                 log::debug!("{:?}", inner.sigpending);
