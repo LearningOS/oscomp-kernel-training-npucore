@@ -32,14 +32,12 @@ impl Swap {
         }
     }
     fn read_page(block_ids: &[usize], buf: &mut [u8]) {
-        for (i, buf) in buf.chunks_mut(BLOCK_SZ).enumerate() {
-            BLOCK_DEVICE.read_block(block_ids[i], buf);
-        }
+        assert!(block_ids[0] + 7 == block_ids[7]);
+        BLOCK_DEVICE.read_block(block_ids[0], buf);
     }
     fn write_page(block_ids: &[usize], buf: &[u8]) {
-        for (i, buf) in buf.chunks(BLOCK_SZ).enumerate() {
-            BLOCK_DEVICE.write_block(block_ids[i], buf);
-        }
+        assert!(block_ids[0] + 7 == block_ids[7]);
+        BLOCK_DEVICE.write_block(block_ids[0], buf);
     }
     fn set_bit(&mut self, pos: usize) {
         self.bitmap[pos / 64] |= 1 << (pos % 64);
