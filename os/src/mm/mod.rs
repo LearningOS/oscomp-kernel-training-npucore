@@ -8,15 +8,18 @@ use core::arch::asm;
 
 use address::VPNRange;
 pub use address::{PhysAddr, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
-pub use frame_allocator::{frame_alloc, frame_dealloc, unallocated_frames, FrameTracker};
-pub use memory_set::remap_test;
-pub use memory_set::{kernel_token, MapFlags, MapPermission, MemorySet, KERNEL_SPACE};
+pub use frame_allocator::{
+    frame_alloc, frame_dealloc, frame_reserve, unallocated_frames, FrameTracker,
+};
+pub use memory_set::{
+    kernel_token, remap_test, Frame, MapFlags, MapPermission, MemorySet, KERNEL_SPACE,
+};
 use page_table::PTEFlags;
 pub use page_table::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string,
-    get_from_user, get_from_user_checked, translated_byte_buffer, translated_byte_buffer_append_to_existing_vec,
-    translated_ref, translated_refmut, translated_str, PageTable, PageTableEntry, UserBuffer,
-    UserBufferIterator,
+    get_from_user, get_from_user_checked, translated_byte_buffer,
+    translated_byte_buffer_append_to_existing_vec, translated_ref, translated_refmut,
+    translated_str, PageTable, PageTableEntry, UserBuffer, UserBufferIterator,
 };
 
 pub fn init() {
@@ -26,8 +29,8 @@ pub fn init() {
 }
 #[inline(always)]
 pub fn tlb_invalidate() {
-    unsafe { 
-        asm!("sfence.vma"); 
+    unsafe {
+        asm!("sfence.vma");
     }
 }
 

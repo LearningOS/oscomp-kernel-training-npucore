@@ -1,10 +1,10 @@
 use super::{frame_alloc, FrameTracker};
-use super::{translated_byte_buffer, UserBuffer};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::*;
 use crate::fs::file_trait::File;
+use crate::fs::swap::SWAP_DEVICE;
 use crate::syscall::errno::*;
 use crate::syscall::fs::SeekWhence;
 use crate::task::{
@@ -45,10 +45,15 @@ pub fn kernel_token() -> usize {
 
 #[derive(Debug)]
 pub enum MemoryError {
-    InvalidAddr,
+    BadAddress,
     AreaNotFound,
     AlreadyMapped,
     NotMapped,
+    NoPermmission,
+    NotInMemory,
+    NotSwappedOut,
+    AlreadyAllocated,
+    SharedPage,
 }
 
 /// The memory "space" as in user space or kernel space
@@ -100,7 +105,7 @@ impl MemorySet {
         &mut self,
         start_va: VirtAddr,
         permission: MapPermission,
-        frames: Vec<Option<Arc<FrameTracker>>>,
+        frames: Vec<Frame>,
     ) -> Result<(), ()> {
         let map_area = MapArea::from_existing_frame(start_va, MapType::Framed, permission, frames);
         self.push_no_alloc(map_area)?;
@@ -114,7 +119,7 @@ impl MemorySet {
             .areas
             .iter_mut()
             .enumerate()
-            .find(|(_, area)| area.data_frames.vpn_range.get_start() == start_vpn)
+            .find(|(_, area)| area.inner.vpn_range.get_start() == start_vpn)
         {
             let result = area.unmap(&mut self.page_table);
             self.areas.remove(idx);
@@ -151,8 +156,8 @@ impl MemorySet {
     }
     /// Push the map area into the memory set without copying or allocation.
     pub fn push_no_alloc(&mut self, map_area: MapArea) -> Result<(), ()> {
-        for vpn in map_area.data_frames.vpn_range {
-            let frame = map_area.data_frames.get(&vpn).unwrap();
+        for vpn in map_area.inner.vpn_range {
+            let frame = map_area.inner.get(&vpn).unwrap();
             if !self.page_table.is_mapped(vpn) {
                 //if not mapped
                 let pte_flags = PTEFlags::from_bits(map_area.map_perm.bits).unwrap();
@@ -166,7 +171,7 @@ impl MemorySet {
     }
     pub fn last_mmap_area_idx(&self) -> Option<usize> {
         for (idx, area) in self.areas.iter().enumerate().rev().skip(2) {
-            let start_vpn = area.data_frames.vpn_range.get_start();
+            let start_vpn = area.inner.vpn_range.get_start();
             if start_vpn >= VirtAddr::from(MMAP_END).into() {
                 continue;
             } else if start_vpn >= VirtAddr::from(MMAP_BASE).into()
@@ -180,13 +185,7 @@ impl MemorySet {
         unreachable!();
     }
     pub fn highest_addr(&self) -> VirtAddr {
-        self.areas
-            .last()
-            .unwrap()
-            .data_frames
-            .vpn_range
-            .get_end()
-            .into()
+        self.areas.last().unwrap().inner.vpn_range.get_end().into()
     }
     pub fn contains_valid_buffer(&self, buf: usize, size: usize, perm: MapPermission) -> bool {
         let start_vpn = VirtAddr::from(buf).floor();
@@ -196,27 +195,27 @@ impl MemorySet {
             .find(|area| {
                 // If there is such a page in user space, and the addr is in the vpn range
                 area.map_perm.contains(perm | MapPermission::U)
-                    && area.data_frames.vpn_range.get_start() <= start_vpn
-                    && end_vpn <= area.data_frames.vpn_range.get_end()
+                    && area.inner.vpn_range.get_start() <= start_vpn
+                    && end_vpn <= area.inner.vpn_range.get_end()
             })
             .is_some()
     }
     /// The REAL handler to page fault.
     /// Handles all types of page fault:(In regex:) "(Store|Load|Instruction)(Page)?Fault"
     /// Checks the permission to decide whether to copy.
-    pub fn do_page_fault(&mut self, addr: VirtAddr) -> Result<(), ()> {
+    pub fn do_page_fault(&mut self, addr: VirtAddr) -> Result<(), MemoryError> {
         let vpn = addr.floor();
         if let Some(area) = self.areas.iter_mut().find(|area| {
             area.map_perm.contains(MapPermission::R | MapPermission::U)// If there is such a page in user space
-                && area.data_frames.vpn_range.get_start() <= vpn// ...and the addr is in the vpn range
-                && vpn < area.data_frames.vpn_range.get_end()
+                && area.inner.vpn_range.get_start() <= vpn// ...and the addr is in the vpn range
+                && vpn < area.inner.vpn_range.get_end()
         }) {
             if !self.page_table.is_mapped(vpn) {
                 // lazy alloc file-backed page
                 if let Some(file) = area.map_file.clone() {
                     let old_offset = file.get_offset();
                     let page_start_va = VirtAddr::from(vpn).0;
-                    let area_start_va = VirtAddr::from(area.data_frames.vpn_range.get_start()).0;
+                    let area_start_va = VirtAddr::from(area.inner.vpn_range.get_start()).0;
                     let offset_in_area = page_start_va - area_start_va;
                     // alloc new page and do copy
                     if area.map_perm.contains(MapPermission::W) {
@@ -245,31 +244,50 @@ impl MemorySet {
                             cache_phys_page.ppn,
                             PTEFlags::from_bits(area.map_perm.bits).unwrap(),
                         );
+                        area.inner.alloc(vpn, cache_phys_page);
                     }
-                // lazy alloc anonymous page
                 } else {
-                    area.map_one_unchecked(&mut self.page_table, vpn);
+                    // try to do swap in
+                    let swap_in = area.inner.try_swap_in(&vpn);
+                    if let Ok(ppn) = swap_in {
+                        self.page_table.map(
+                            vpn,
+                            ppn,
+                            PTEFlags::from_bits(area.map_perm.bits).unwrap(),
+                        );
+                        info!("[do_page_fault] addr: {:?}, solution: swap in", addr);
+                    } else {
+                        // lazy alloc anonymous page
+                        area.map_one_unchecked(&mut self.page_table, vpn);
+                        info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
+                    }
                 }
-                // if mapped successfully,
-                // in other words, not previously mapped before last statement(let result = ...)
-                info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
                 Ok(())
             } else {
-                //mapped before the assignment
+                // mapped before the assignment
                 if area.map_perm.contains(MapPermission::W) {
                     info!("[do_page_fault] addr: {:?}, solution: copy on write", addr);
                     // Whoever triggers this fault shall cause the area to be copied into a new area.
                     area.copy_on_write(&mut self.page_table, vpn)
                 } else {
-                    // Is it a memory exhaustion?
-                    Err(())
+                    // Write without permission
+                    Err(MemoryError::NoPermmission)
                 }
             }
         } else {
             // In all segments, nothing matches the requirements. Throws.
             error!("[do_page_fault] addr: {:?}, result: bad addr", addr);
-            Err(())
+            Err(MemoryError::BadAddress)
         }
+    }
+    pub fn do_swap_out(&mut self) {
+        let area = self
+            .areas
+            .iter_mut()
+            .filter(|area| area.map_file.is_none())
+            .max_by_key(|area| area.inner.frames.len())
+            .unwrap();
+        area.inner.try_swap_out(&mut self.page_table);
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -418,15 +436,15 @@ impl MemorySet {
                         // Size in virtual addr is equal to size in physical addr
                         assert_eq!(
                             VirtAddr::from(ph.file_size() as usize).ceil().0,
-                            map_area.data_frames.vpn_range.get_end().0
-                                - map_area.data_frames.vpn_range.get_start().0
+                            map_area.inner.vpn_range.get_end().0
+                                - map_area.inner.vpn_range.get_start().0
                         );
 
                         let kernel_start_vpn =
                             (VirtAddr::from(elf.input.as_ptr() as usize + (ph.offset() as usize)))
                                 .floor();
                         map_area
-                            .map_from_kernel_elf_area(&mut self.page_table, kernel_start_vpn)
+                            .map_from_kernel_area(&mut self.page_table, kernel_start_vpn)
                             .unwrap();
                         self.areas.push(map_area);
                     } else {
@@ -522,14 +540,14 @@ impl MemorySet {
             memory_set.areas.push(new_area);
             debug!(
                 "[fork] map shared area: {:?}",
-                user_space.areas[i].data_frames.vpn_range
+                user_space.areas[i].inner.vpn_range
             );
         }
         // copy trap context area
         let trap_cx_area = user_space.areas.last().unwrap();
         let area = MapArea::from_another(trap_cx_area);
         memory_set.push(area, None).unwrap();
-        for vpn in trap_cx_area.data_frames.vpn_range {
+        for vpn in trap_cx_area.inner.vpn_range {
             let src_ppn = user_space.translate(vpn).unwrap().ppn();
             let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
             dst_ppn
@@ -538,7 +556,7 @@ impl MemorySet {
         }
         debug!(
             "[fork] copy trap_cx area: {:?}",
-            trap_cx_area.data_frames.vpn_range
+            trap_cx_area.inner.vpn_range
         );
         memory_set
     }
@@ -574,8 +592,8 @@ impl MemorySet {
     // debug use only
     pub fn show_areas(&self) {
         self.areas.iter().for_each(|area| {
-            let start_vpn = area.data_frames.vpn_range.get_start();
-            let end_vpn = area.data_frames.vpn_range.get_end();
+            let start_vpn = area.inner.vpn_range.get_start();
+            let end_vpn = area.inner.vpn_range.get_end();
             error!(
                 "[show_areas] start_vpn: {:?}, end_vpn: {:?}, map_perm: {:?}",
                 start_vpn, end_vpn, area.map_perm
@@ -637,14 +655,9 @@ impl MemorySet {
         if start & 0xfff != 0 {
             return EINVAL;
         }
-        let len = match len {
-            0 => PAGE_SIZE,
-            0x801_000.. => return ENOMEM,
-            _ => len,
-        };
+        let len = if len == 0 { PAGE_SIZE } else { len };
         let task = current_task().unwrap();
         let idx = self.last_mmap_area_idx();
-        let page_table = &mut self.page_table;
         let start_va: VirtAddr = if flags.contains(MapFlags::MAP_FIXED) {
             // unmap if exists
             self.munmap(start, len);
@@ -654,14 +667,14 @@ impl MemorySet {
                 let area = &mut self.areas[idx];
                 if flags.contains(MapFlags::MAP_PRIVATE | MapFlags::MAP_ANONYMOUS)
                     && prot == area.map_perm
+                    && area.map_file.is_none()
                 {
                     debug!("[mmap] merge with previous area, call expand_to");
-                    let end_va: VirtAddr = area.data_frames.vpn_range.get_end().into();
-                    area.expand_to(page_table, VirtAddr::from(end_va.0 + len))
-                        .unwrap();
+                    let end_va: VirtAddr = area.inner.vpn_range.get_end().into();
+                    area.expand_to(VirtAddr::from(end_va.0 + len)).unwrap();
                     return end_va.0 as isize;
                 }
-                area.data_frames.vpn_range.get_end().into()
+                area.inner.vpn_range.get_end().into()
             } else {
                 MMAP_BASE.into()
             }
@@ -698,9 +711,9 @@ impl MemorySet {
             .iter()
             .enumerate()
             .skip_while(|(_, area)| {
-                area.data_frames.vpn_range.get_start() >= VirtAddr::from(MMAP_END).into()
+                area.inner.vpn_range.get_start() >= VirtAddr::from(MMAP_END).into()
             })
-            .find(|(_, area)| area.data_frames.vpn_range.get_start() >= start_va.into())
+            .find(|(_, area)| area.inner.vpn_range.get_start() >= start_va.into())
             .unwrap();
         self.areas.insert(idx, new_area);
         start_va.0 as isize
@@ -721,8 +734,8 @@ impl MemorySet {
         self.areas.iter_mut().enumerate().for_each(|(idx, area)| {
             if let Some((overlap_start, overlap_end)) = area.check_overlapping(start_vpn, end_vpn) {
                 found_area = true;
-                let area_start_vpn = area.data_frames.vpn_range.get_start();
-                let area_end_vpn = area.data_frames.vpn_range.get_end();
+                let area_start_vpn = area.inner.vpn_range.get_start();
+                let area_end_vpn = area.inner.vpn_range.get_end();
                 if overlap_start == area_start_vpn && overlap_end == area_end_vpn {
                     trace!("[munmap] unmap whole area, idx: {}", idx);
                     if let Err(_) = area.unmap(page_table) {
@@ -789,13 +802,13 @@ impl MemorySet {
         let start_vpn = start_va.floor();
         let end_vpn = end_va.ceil();
         let result = self.areas.iter().enumerate().find(|(_, area)| {
-            area.data_frames.vpn_range.get_start() <= start_vpn
-                && start_vpn < area.data_frames.vpn_range.get_end()
+            area.inner.vpn_range.get_start() <= start_vpn
+                && start_vpn < area.inner.vpn_range.get_end()
         });
         match result {
             Some((mut idx, _)) => {
-                let area_start_vpn = self.areas[idx].data_frames.vpn_range.get_start();
-                let area_end_vpn = self.areas[idx].data_frames.vpn_range.get_end();
+                let area_start_vpn = self.areas[idx].inner.vpn_range.get_start();
+                let area_end_vpn = self.areas[idx].inner.vpn_range.get_end();
                 // Addresses in the range [addr, addr+len-1] are invalid for the address space of the process,
                 // or specify one or more pages that are not mapped.
                 if end_vpn > area_end_vpn {
@@ -830,7 +843,7 @@ impl MemorySet {
                 };
                 let page_table = &mut self.page_table;
                 let mut has_unmapped_page = false;
-                for vpn in area.data_frames.vpn_range {
+                for vpn in area.inner.vpn_range {
                     // Clear W prot, or CoW pages may be written unexpectedly.
                     // And those pages will gain W prot by CoW.
                     if let Err(_) = page_table.set_pte_flags(vpn, prot - MapPermission::W) {
@@ -1042,40 +1055,126 @@ impl MemorySet {
     }
 }
 
-#[derive(Clone)]
-pub struct MapRangeDict {
-    vpn_range: VPNRange,
-    data_frames: Vec<Option<Arc<FrameTracker>>>,
+#[derive(Clone, Debug)]
+pub enum Frame {
+    InMemory(Arc<FrameTracker>),
+    SwappedOut(usize),
+    Unallocated,
 }
 
-impl MapRangeDict {
+impl Frame {
+    pub fn insert_frame(&mut self, frame_tracker: Arc<FrameTracker>) -> Result<(), MemoryError> {
+        match self {
+            Frame::Unallocated => {
+                *self = Frame::InMemory(frame_tracker);
+                Ok(())
+            }
+            _ => Err(MemoryError::AlreadyAllocated),
+        }
+    }
+    pub fn take(&mut self) -> Option<Arc<FrameTracker>> {
+        match self {
+            Frame::InMemory(frame_ref) => {
+                // avoid implement trait 'Copy'
+                let frame = unsafe { core::ptr::read(frame_ref) };
+                // avoid drop
+                unsafe { core::ptr::write(self, Frame::Unallocated) };
+                Some(frame)
+            }
+            _ => None,
+        }
+    }
+    pub fn swap_out(&mut self) -> Result<usize, MemoryError> {
+        match self {
+            Frame::InMemory(frame_ref) => {
+                if Arc::strong_count(frame_ref) == 1 {
+                    let swap_id = SWAP_DEVICE.lock().write(frame_ref.ppn.get_bytes_array());
+                    // frame_tracker should be dropped
+                    *self = Frame::SwappedOut(swap_id);
+                    Ok(swap_id)
+                } else {
+                    Err(MemoryError::SharedPage)
+                }
+            }
+            _ => Err(MemoryError::NotInMemory),
+        }
+    }
+    pub fn swap_in(&mut self) -> Result<PhysPageNum, MemoryError> {
+        match self {
+            Frame::SwappedOut(swap_id) => {
+                let frame = frame_alloc().unwrap();
+                let ppn = frame.ppn;
+                SWAP_DEVICE.lock().read(*swap_id, ppn.get_bytes_array());
+                *self = Frame::InMemory(frame);
+                Ok(ppn)
+            }
+            _ => Err(MemoryError::NotSwappedOut),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LinearMap {
+    vpn_range: VPNRange,
+    frames: Vec<Frame>,
+}
+
+impl LinearMap {
     pub fn new(vpn_range: VPNRange) -> Self {
         let len = vpn_range.get_end().0 - vpn_range.get_start().0;
         let mut new_dict = Self {
             vpn_range,
-            data_frames: Vec::with_capacity(len),
+            frames: Vec::with_capacity(len),
         };
-        new_dict.data_frames.resize(len, None);
+        new_dict.frames.resize(len, Frame::Unallocated);
         new_dict
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
     pub fn get(&self, key: &VirtPageNum) -> Option<&Arc<FrameTracker>> {
-        self.data_frames[key.0 - self.vpn_range.get_start().0].as_ref()
+        match &self.frames[key.0 - self.vpn_range.get_start().0] {
+            Frame::InMemory(tracker) => Some(tracker),
+            _ => None,
+        }
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
-    pub fn insert(
-        &mut self,
-        key: VirtPageNum,
-        value: Arc<FrameTracker>,
-    ) -> Option<Arc<FrameTracker>> {
-        self.data_frames[key.0 - self.vpn_range.get_start().0].replace(value)
+    pub fn alloc(&mut self, key: VirtPageNum, value: Arc<FrameTracker>) {
+        self.frames[key.0 - self.vpn_range.get_start().0]
+            .insert_frame(value)
+            .unwrap()
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
     pub fn remove(&mut self, key: &VirtPageNum) -> Option<Arc<FrameTracker>> {
-        self.data_frames[key.0 - self.vpn_range.get_start().0].take()
+        self.frames[key.0 - self.vpn_range.get_start().0].take()
+    }
+    /// # Warning
+    /// a key which exceeds the end of `vpn_range` would cause panic
+    pub fn try_swap_out(&mut self, page_table: &mut PageTable) {
+        let mut start_vpn = self.vpn_range.get_end();
+        for vpn in self.vpn_range {
+            match self.frames[vpn.0 - self.vpn_range.get_start().0] {
+                Frame::InMemory(_) => {
+                    start_vpn = vpn;
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        for vpn in VPNRange::new(start_vpn, self.vpn_range.get_end()) {
+            let frame = &mut self.frames[vpn.0 - self.vpn_range.get_start().0];
+            match frame.swap_out() {
+                Ok(swap_id) => {
+                    page_table.unmap(vpn);
+                    trace!("[try_swap_out] frame: {:?}, swap_id: {}", frame, swap_id)
+                }
+                Err(_) => break,
+            }
+        }
+    }
+    pub fn try_swap_in(&mut self, key: &VirtPageNum) -> Result<PhysPageNum, MemoryError> {
+        self.frames[key.0 - self.vpn_range.get_start().0].swap_in()
     }
     pub fn set_start(&mut self, new_vpn_start: VirtPageNum) -> Result<(), ()> {
         let vpn_start = self.vpn_range.get_start();
@@ -1085,11 +1184,12 @@ impl MapRangeDict {
         }
         self.vpn_range = VPNRange::new(new_vpn_start, vpn_end);
         if new_vpn_start < vpn_start {
-            self.data_frames.rotate_left(vpn_start.0 - new_vpn_start.0);
+            self.frames.rotate_left(vpn_start.0 - new_vpn_start.0);
         } else {
-            self.data_frames.rotate_left(new_vpn_start.0 - vpn_start.0);
+            self.frames.rotate_left(new_vpn_start.0 - vpn_start.0);
         }
-        self.data_frames.resize(vpn_end.0 - new_vpn_start.0, None);
+        self.frames
+            .resize(vpn_end.0 - new_vpn_start.0, Frame::Unallocated);
         Ok(())
     }
     pub fn set_end(&mut self, new_vpn_end: VirtPageNum) -> Result<(), ()> {
@@ -1098,7 +1198,8 @@ impl MapRangeDict {
         if vpn_start > new_vpn_end {
             return Err(());
         }
-        self.data_frames.resize(new_vpn_end.0 - vpn_start.0, None);
+        self.frames
+            .resize(new_vpn_end.0 - vpn_start.0, Frame::Unallocated);
         Ok(())
     }
     pub fn into_two(self, cut: VirtPageNum) -> Result<(Self, Self), ()> {
@@ -1107,13 +1208,13 @@ impl MapRangeDict {
         if cut <= vpn_start || cut >= vpn_end {
             return Err(());
         }
-        let first = MapRangeDict {
+        let first = LinearMap {
             vpn_range: VPNRange::new(vpn_start, cut),
-            data_frames: self.data_frames[0..cut.0 - vpn_start.0].to_vec(),
+            frames: self.frames[0..cut.0 - vpn_start.0].to_vec(),
         };
-        let second = MapRangeDict {
+        let second = LinearMap {
             vpn_range: VPNRange::new(cut, vpn_end),
-            data_frames: self.data_frames[cut.0 - vpn_start.0..vpn_end.0 - vpn_start.0].to_vec(),
+            frames: self.frames[cut.0 - vpn_start.0..vpn_end.0 - vpn_start.0].to_vec(),
         };
         Ok((first, second))
     }
@@ -1127,19 +1228,17 @@ impl MapRangeDict {
         if first_cut <= vpn_start || second_cut >= vpn_end || first_cut > second_cut {
             return Err(());
         }
-        let first = MapRangeDict {
+        let first = LinearMap {
             vpn_range: VPNRange::new(vpn_start, first_cut),
-            data_frames: self.data_frames[0..first_cut.0 - vpn_start.0].to_vec(),
+            frames: self.frames[0..first_cut.0 - vpn_start.0].to_vec(),
         };
-        let second = MapRangeDict {
+        let second = LinearMap {
             vpn_range: VPNRange::new(first_cut, second_cut),
-            data_frames: self.data_frames[first_cut.0 - vpn_start.0..second_cut.0 - vpn_start.0]
-                .to_vec(),
+            frames: self.frames[first_cut.0 - vpn_start.0..second_cut.0 - vpn_start.0].to_vec(),
         };
-        let third = MapRangeDict {
+        let third = LinearMap {
             vpn_range: VPNRange::new(second_cut, vpn_end),
-            data_frames: self.data_frames[second_cut.0 - vpn_start.0..vpn_end.0 - vpn_start.0]
-                .to_vec(),
+            frames: self.frames[second_cut.0 - vpn_start.0..vpn_end.0 - vpn_start.0].to_vec(),
         };
         Ok((first, second, third))
     }
@@ -1150,10 +1249,8 @@ impl MapRangeDict {
 pub struct MapArea {
     /// Range of the mapped virtual page numbers.
     /// Page aligned.
-    // vpn_range: VPNRange,
-    // /// Map physical page frame tracker to virtual pages for RAII & lookup.
-    // data_frames: BTreeMap<VirtPageNum, Arc<FrameTracker>>,
-    data_frames: MapRangeDict,
+    /// Map physical page frame tracker to virtual pages for RAII & lookup.
+    inner: LinearMap,
     /// Direct or framed(virtual) mapping?
     map_type: MapType,
     /// Permissions which are the or of RWXU, where U stands for user.
@@ -1179,7 +1276,7 @@ impl MapArea {
             map_perm
         );
         Self {
-            data_frames: MapRangeDict::new(VPNRange::new(start_vpn, end_vpn)),
+            inner: LinearMap::new(VPNRange::new(start_vpn, end_vpn)),
             map_type,
             map_perm,
             map_file,
@@ -1195,9 +1292,9 @@ impl MapArea {
     /// thus leaving `data_frames` empty.
     pub fn from_another(another: &MapArea) -> Self {
         Self {
-            data_frames: MapRangeDict::new(VPNRange::new(
-                another.data_frames.vpn_range.get_start(),
-                another.data_frames.vpn_range.get_end(),
+            inner: LinearMap::new(VPNRange::new(
+                another.inner.vpn_range.get_start(),
+                another.inner.vpn_range.get_end(),
             )),
             map_type: another.map_type,
             map_perm: another.map_perm,
@@ -1213,14 +1310,14 @@ impl MapArea {
         start_va: VirtAddr,
         map_type: MapType,
         map_perm: MapPermission,
-        frames: Vec<Option<Arc<FrameTracker>>>,
+        frames: Vec<Frame>,
     ) -> Self {
         let start_vpn = start_va.floor();
         let end_vpn = VirtPageNum::from(start_vpn.0 + frames.len());
         Self {
-            data_frames: MapRangeDict {
+            inner: LinearMap {
                 vpn_range: VPNRange::new(start_vpn, end_vpn),
-                data_frames: frames,
+                frames,
             },
             map_type,
             map_perm,
@@ -1259,7 +1356,7 @@ impl MapArea {
             MapType::Framed => {
                 let frame = frame_alloc().unwrap();
                 ppn = frame.ppn;
-                self.data_frames.insert(vpn, frame);
+                self.inner.alloc(vpn, frame);
             }
         }
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
@@ -1281,7 +1378,7 @@ impl MapArea {
         }
         match self.map_type {
             MapType::Framed => {
-                self.data_frames.remove(&vpn);
+                self.inner.remove(&vpn);
             }
             _ => {}
         }
@@ -1290,7 +1387,7 @@ impl MapArea {
     }
     /// Map & allocate all virtual pages in current area to physical pages in the page table.
     pub fn map(&mut self, page_table: &mut PageTable) -> Result<(), MemoryError> {
-        for vpn in self.data_frames.vpn_range {
+        for vpn in self.inner.vpn_range {
             self.map_one(page_table, vpn)?;
         }
         Ok(())
@@ -1309,7 +1406,7 @@ impl MapArea {
     ) -> Result<(), ()> {
         let map_perm = self.map_perm.difference(MapPermission::W);
         let pte_flags = PTEFlags::from_bits(map_perm.bits).unwrap();
-        for vpn in self.data_frames.vpn_range {
+        for vpn in self.inner.vpn_range {
             if let Some(pte) = src_page_table.translate_refmut(vpn) {
                 let ppn = pte.ppn();
                 if !dst_page_table.is_mapped(vpn) {
@@ -1323,44 +1420,39 @@ impl MapArea {
         Ok(())
     }
 
-    /// Map vpns in `self` to the same ppns in `kernel_elf_area` from `start_vpn_in_kernel_elf_area`,
+    /// Map vpns in `self` to the same ppns in `kernel_area` from `start_vpn_in_kernel_area`,
     /// range is depend on `self.vpn_range`.
-    /// # ATTENTION
-    /// Suppose that the kernel_space.areas.last() is elf_area.
-    /// `page_table` and `self` should belong to the same memory_set.
-    /// vpn_range in `kernel_elf_area` should be broader than (or at least equal to) `self`.
-    /// # WARNING
-    /// Author did not consider to reuse this function at the time he wrote it.
-    /// So be careful to use it in some other places besides `from_elf`.
-    pub fn map_from_kernel_elf_area(
+    /// `page_table` and `self` should belong to the same `memory_set`.
+    /// `vpn_range` in `kernel_area` should be broader than (or at least equal to) `self`.
+    pub fn map_from_kernel_area(
         &mut self,
         page_table: &mut PageTable,
-        start_vpn_in_kernel_elf_area: VirtPageNum,
+        start_vpn_in_kernel_area: VirtPageNum,
     ) -> Result<(), ()> {
         let kernel_space = KERNEL_SPACE.lock();
-        let kernel_elf_area = kernel_space
+        let kernel_area = kernel_space
             .areas
             .iter()
             .rev()
             .find(|area| {
-                area.data_frames.vpn_range.get_start() <= start_vpn_in_kernel_elf_area
-                    && start_vpn_in_kernel_elf_area < area.data_frames.vpn_range.get_end()
+                area.inner.vpn_range.get_start() <= start_vpn_in_kernel_area
+                    && start_vpn_in_kernel_area < area.inner.vpn_range.get_end()
             })
             .unwrap();
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
-        let mut src_vpn = start_vpn_in_kernel_elf_area;
-        for vpn in self.data_frames.vpn_range {
-            if let Some(frame) = kernel_elf_area.data_frames.get(&src_vpn) {
+        let mut src_vpn = start_vpn_in_kernel_area;
+        for vpn in self.inner.vpn_range {
+            if let Some(frame) = kernel_area.inner.get(&src_vpn) {
                 let ppn = frame.ppn;
                 if !page_table.is_mapped(vpn) {
-                    self.data_frames.insert(vpn, frame.clone());
+                    self.inner.alloc(vpn, frame.clone());
                     page_table.map(vpn, ppn, pte_flags);
                 } else {
-                    error!("[map_from_kernel_elf_area] user vpn already mapped!");
+                    error!("[map_from_kernel_area] user vpn already mapped!");
                     return Err(());
                 }
             } else {
-                error!("[map_from_kernel_elf_area] kernel vpn invalid!");
+                error!("[map_from_kernel_area] kernel vpn invalid!");
                 return Err(());
             }
             src_vpn = (src_vpn.0 + 1).into();
@@ -1370,7 +1462,7 @@ impl MapArea {
     /// Unmap all pages in `self` from `page_table` using unmap_one()
     pub fn unmap(&mut self, page_table: &mut PageTable) -> Result<(), MemoryError> {
         let mut has_unmapped_page = false;
-        for vpn in self.data_frames.vpn_range {
+        for vpn in self.inner.vpn_range {
             // it's normal to get an `Error` because we are using lazy alloc strategy
             // we still need to unmap remaining pages of `self`, just throw this `Error` to caller
             if let Err(MemoryError::NotMapped) = self.unmap_one(page_table, vpn) {
@@ -1389,7 +1481,7 @@ impl MapArea {
         assert_eq!(self.map_type, MapType::Framed);
         let mut start: usize = 0;
         let mut page_offset: usize = offset;
-        let mut current_vpn = self.data_frames.vpn_range.get_start();
+        let mut current_vpn = self.inner.vpn_range.get_start();
         let len = data.len();
         loop {
             let src = &data[start..len.min(start + PAGE_SIZE - page_offset)];
@@ -1413,12 +1505,12 @@ impl MapArea {
         &mut self,
         page_table: &mut PageTable,
         vpn: VirtPageNum,
-    ) -> Result<(), ()> {
-        let old_frame = self.data_frames.remove(&vpn).unwrap();
+    ) -> Result<(), MemoryError> {
+        let old_frame = self.inner.remove(&vpn).unwrap();
         if Arc::strong_count(&old_frame) == 1 {
             // don't need to copy
             // push back old frame and set pte flags to allow write
-            self.data_frames.insert(vpn, old_frame);
+            self.inner.alloc(vpn, old_frame);
             page_table.set_pte_flags(vpn, self.map_perm).unwrap();
             // Starting from this, the write (page) fault will not be triggered in this space,
             // for the pte permission now contains Write.
@@ -1430,7 +1522,7 @@ impl MapArea {
             // alloc new frame
             let new_frame = frame_alloc().unwrap();
             let new_ppn = new_frame.ppn;
-            self.data_frames.insert(vpn, new_frame);
+            self.inner.alloc(vpn, new_frame);
             let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
             page_table.map(vpn, new_ppn, pte_flags);
             // copy data
@@ -1442,9 +1534,9 @@ impl MapArea {
         Ok(())
     }
     /// If `new_end` is equal to the current end of area, do nothing and return `Ok(())`.
-    pub fn expand_to(&mut self, page_table: &mut PageTable, new_end: VirtAddr) -> Result<(), ()> {
+    pub fn expand_to(&mut self, new_end: VirtAddr) -> Result<(), ()> {
         let new_end_vpn: VirtPageNum = new_end.ceil();
-        let old_end_vpn = self.data_frames.vpn_range.get_end();
+        let old_end_vpn = self.inner.vpn_range.get_end();
         if new_end_vpn < old_end_vpn {
             warn!(
                 "[expand_to] new_end_vpn: {:?} is lower than old_end_vpn: {:?}",
@@ -1455,18 +1547,13 @@ impl MapArea {
         // `set_end` must be done before calling `map_one`
         // because `map_one` will insert frames into `data_frames`
         // if we don't `set_end` in advance, this insertion is out of bound
-        self.data_frames.set_end(new_end_vpn)?;
-        for vpn in VPNRange::new(old_end_vpn, new_end_vpn) {
-            if let Err(_) = self.map_one(page_table, vpn) {
-                return Err(());
-            }
-        }
+        self.inner.set_end(new_end_vpn)?;
         Ok(())
     }
     /// If `new_end` is equal to the current end of area, do nothing and return `Ok(())`.
     pub fn shrink_to(&mut self, page_table: &mut PageTable, new_end: VirtAddr) -> Result<(), ()> {
         let new_end_vpn: VirtPageNum = new_end.ceil();
-        let old_end_vpn = self.data_frames.vpn_range.get_end();
+        let old_end_vpn = self.inner.vpn_range.get_end();
         if new_end_vpn > old_end_vpn {
             warn!(
                 "[expand_to] new_end_vpn: {:?} is higher than old_end_vpn: {:?}",
@@ -1482,7 +1569,7 @@ impl MapArea {
         }
         // `set_end` must be done after calling `map_one`
         // for the similar reason with `expand_to`
-        self.data_frames.set_end(new_end_vpn)?;
+        self.inner.set_end(new_end_vpn)?;
         if has_unmapped_page {
             warn!("[shrink_to] Some pages are already unmapped, is it caused by lazy alloc?");
             Err(())
@@ -1497,7 +1584,7 @@ impl MapArea {
         new_start: VirtAddr,
     ) -> Result<(), ()> {
         let new_start_vpn: VirtPageNum = new_start.floor();
-        let old_start_vpn = self.data_frames.vpn_range.get_start();
+        let old_start_vpn = self.inner.vpn_range.get_start();
         if new_start_vpn < old_start_vpn {
             warn!(
                 "[rshrink_to] new_start_vpn: {:?} is lower than old_start_vpn: {:?}",
@@ -1513,7 +1600,7 @@ impl MapArea {
         }
         // `set_start` must be done after calling `map_one`
         // for the similar reason with `expand_to`
-        self.data_frames.set_start(new_start_vpn)?;
+        self.inner.set_start(new_start_vpn)?;
         if has_unmapped_page {
             warn!("[rshrink_to] Some pages are already unmapped, is it caused by lazy alloc?");
             Err(())
@@ -1526,8 +1613,8 @@ impl MapArea {
         start_vpn: VirtPageNum,
         end_vpn: VirtPageNum,
     ) -> Option<(VirtPageNum, VirtPageNum)> {
-        let area_start_vpn = self.data_frames.vpn_range.get_start();
-        let area_end_vpn = self.data_frames.vpn_range.get_end();
+        let area_start_vpn = self.inner.vpn_range.get_start();
+        let area_end_vpn = self.inner.vpn_range.get_end();
         if end_vpn < area_start_vpn || start_vpn >= area_end_vpn {
             return None;
         } else {
@@ -1550,7 +1637,7 @@ impl MapArea {
             new_file
                 .lseek(
                     (file.get_offset() + VirtAddr::from(cut).0
-                        - VirtAddr::from(self.data_frames.vpn_range.get_start()).0)
+                        - VirtAddr::from(self.inner.vpn_range.get_start()).0)
                         as isize,
                     SeekWhence::SEEK_SET,
                 )
@@ -1559,16 +1646,16 @@ impl MapArea {
         } else {
             None
         };
-        let (first_frames, second_frames) = self.data_frames.into_two(cut)?;
+        let (first_frames, second_frames) = self.inner.into_two(cut)?;
         Ok((
             MapArea {
-                data_frames: first_frames,
+                inner: first_frames,
                 map_type: self.map_type,
                 map_perm: self.map_perm,
                 map_file: self.map_file,
             },
             MapArea {
-                data_frames: second_frames,
+                inner: second_frames,
                 map_type: self.map_type,
                 map_perm: self.map_perm,
                 map_file: second_file,
@@ -1585,22 +1672,22 @@ impl MapArea {
             return Err(());
         }
         let (first_frames, second_frames, third_frames) =
-            self.data_frames.into_three(first_cut, second_cut)?;
+            self.inner.into_three(first_cut, second_cut)?;
         Ok((
             MapArea {
-                data_frames: first_frames,
+                inner: first_frames,
                 map_type: self.map_type,
                 map_perm: self.map_perm,
                 map_file: None,
             },
             MapArea {
-                data_frames: second_frames,
+                inner: second_frames,
                 map_type: self.map_type,
                 map_perm: self.map_perm,
                 map_file: None,
             },
             MapArea {
-                data_frames: third_frames,
+                inner: third_frames,
                 map_type: self.map_type,
                 map_perm: self.map_perm,
                 map_file: None,

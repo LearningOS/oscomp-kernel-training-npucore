@@ -2,7 +2,7 @@ use alloc::boxed::Box;
 
 use crate::{
     fs::{OpenFlags, ROOT_FD},
-    mm::KERNEL_SPACE,
+    mm::{KERNEL_SPACE, Frame},
     syscall::errno::*,
 };
 
@@ -99,9 +99,7 @@ pub fn load_elf_interp(path: &str) -> Result<&'static [u8], isize> {
                     let frames = caches
                         .iter()
                         .map(|cache| {
-                            let lock = cache.try_lock();
-                            assert!(lock.is_some());
-                            Some(lock.unwrap().get_tracker())
+                            Frame::InMemory(cache.try_lock().unwrap().get_tracker())
                         })
                         .collect();
 

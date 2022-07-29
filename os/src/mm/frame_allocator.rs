@@ -1,6 +1,7 @@
 use super::super::fs;
 use super::{PhysAddr, PhysPageNum};
 use crate::config::{MEMORY_END, PAGE_SIZE};
+use crate::task::current_task;
 // KISS
 use alloc::{sync::Arc, vec::Vec};
 use core::fmt::{self, Debug, Formatter};
@@ -113,6 +114,25 @@ pub fn init_frame_allocator() {
     );
 }
 
+pub fn oom_handler() {
+    if let Err(_) = fs::directory_tree::oom() {
+        let task = current_task().unwrap();
+        match task.vm.try_lock() {
+            Some(mut memory_set) => {
+                memory_set.do_swap_out();
+            }
+            None => log::warn!("[swap] try lock vm failed."),
+        };
+    };
+}
+
+pub fn frame_reserve(num: usize) {
+    let remain = FRAME_ALLOCATOR.read().unallocated_frames();
+    if remain < num {
+        oom_handler()
+    }
+}
+
 pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     let ret = FRAME_ALLOCATOR
         .write()
@@ -123,7 +143,7 @@ pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     } else {
         crate::show_frame_consumption! {
             "GC";
-            fs::directory_tree::oom();
+            oom_handler();
         };
         FRAME_ALLOCATOR
             .write()
