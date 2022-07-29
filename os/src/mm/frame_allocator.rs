@@ -15,10 +15,15 @@ pub struct FrameTracker {
 impl FrameTracker {
     pub fn new(ppn: PhysPageNum) -> Self {
         // page cleaning
-        let bytes_array = ppn.get_bytes_array();
-        for i in bytes_array {
+        let dwords_array = ppn.get_dwords_array();
+        for i in dwords_array {
             *i = 0;
         }
+        Self { ppn }
+    }
+    pub fn new_initialized(ppn: PhysPageNum, f: impl FnOnce(&'static mut [u64])) -> Self {
+        let dwords_array = ppn.get_dwords_array();
+        f(dwords_array);
         Self { ppn }
     }
 }
@@ -119,7 +124,7 @@ pub fn oom_handler() {
         let task = current_task().unwrap();
         match task.vm.try_lock() {
             Some(mut memory_set) => {
-                memory_set.do_swap_out();
+                memory_set.do_oom();
             }
             None => log::warn!("[swap] try lock vm failed."),
         };

@@ -67,4 +67,8 @@ impl Swap {
         self.set_bit(swap_id);
         swap_id
     }
+    #[inline(always)]
+    pub fn discard(&mut self, swap_id: usize) {
+        self.clear_bit(swap_id);
+    }
 }

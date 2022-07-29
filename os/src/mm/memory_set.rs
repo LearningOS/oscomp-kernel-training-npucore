@@ -1,3 +1,4 @@
+use super::zram::ZRAM_DEVICE;
 use super::{frame_alloc, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
@@ -43,6 +44,7 @@ pub fn kernel_token() -> usize {
     KERNEL_SPACE.lock().token()
 }
 
+#[allow(unused)]
 #[derive(Debug)]
 pub enum MemoryError {
     BadAddress,
@@ -51,9 +53,12 @@ pub enum MemoryError {
     NotMapped,
     NoPermmission,
     NotInMemory,
+    NotCompressed,
     NotSwappedOut,
     AlreadyAllocated,
     SharedPage,
+    ZramIsFull,
+    SwapIsFull,
 }
 
 /// The memory "space" as in user space or kernel space
@@ -157,7 +162,7 @@ impl MemorySet {
     /// Push the map area into the memory set without copying or allocation.
     pub fn push_no_alloc(&mut self, map_area: MapArea) -> Result<(), ()> {
         for vpn in map_area.inner.vpn_range {
-            let frame = map_area.inner.get(&vpn).unwrap();
+            let frame = map_area.inner.get_in_memory(&vpn).unwrap();
             if !self.page_table.is_mapped(vpn) {
                 //if not mapped
                 let pte_flags = PTEFlags::from_bits(map_area.map_perm.bits).unwrap();
@@ -244,23 +249,38 @@ impl MemorySet {
                             cache_phys_page.ppn,
                             PTEFlags::from_bits(area.map_perm.bits).unwrap(),
                         );
-                        area.inner.alloc(vpn, cache_phys_page);
+                        area.inner.alloc_in_memory(vpn, cache_phys_page);
                     }
                 } else {
-                    // try to do swap in
-                    let swap_in = area.inner.try_swap_in(&vpn);
-                    if let Ok(ppn) = swap_in {
-                        self.page_table.map(
-                            vpn,
-                            ppn,
-                            PTEFlags::from_bits(area.map_perm.bits).unwrap(),
-                        );
-                        info!("[do_page_fault] addr: {:?}, solution: swap in", addr);
-                    } else {
-                        // lazy alloc anonymous page
-                        area.map_one_unchecked(&mut self.page_table, vpn);
-                        info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
-                    }
+                    let frame = area.inner.get_mut(&vpn);
+                    match frame {
+                        // Page table is not mapped, but frame is in memory.
+                        Frame::InMemory(_) => unreachable!(),
+                        Frame::Compressed(_) => {
+                            let ppn = frame.unzip().unwrap();
+                            self.page_table.map(
+                                vpn,
+                                ppn,
+                                PTEFlags::from_bits(area.map_perm.bits).unwrap(),
+                            );
+                            area.inner.compressed -= 1;
+                            info!("[do_page_fault] addr: {:?}, solution: decompress", addr);
+                        }
+                        Frame::SwappedOut(_) => {
+                            let ppn = frame.swap_in().unwrap();
+                            self.page_table.map(
+                                vpn,
+                                ppn,
+                                PTEFlags::from_bits(area.map_perm.bits).unwrap(),
+                            );
+                            area.inner.swapped -= 1;
+                            info!("[do_page_fault] addr: {:?}, solution: swap in", addr);
+                        }
+                        Frame::Unallocated => {
+                            area.map_one_unchecked(&mut self.page_table, vpn);
+                            info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
+                        }
+                    };
                 }
                 Ok(())
             } else {
@@ -280,14 +300,52 @@ impl MemorySet {
             Err(MemoryError::BadAddress)
         }
     }
-    pub fn do_swap_out(&mut self) {
+    pub fn do_oom(&mut self) {
         let area = self
             .areas
             .iter_mut()
             .filter(|area| area.map_file.is_none())
             .max_by_key(|area| area.inner.frames.len())
             .unwrap();
-        area.inner.try_swap_out(&mut self.page_table);
+        let mut start_vpn = area.inner.vpn_range.get_end();
+        // find first frame which is in memory...
+        for vpn in area.inner.vpn_range {
+            match area.inner.frames[vpn.0 - area.inner.vpn_range.get_start().0] {
+                Frame::InMemory(_) => {
+                    start_vpn = vpn;
+                    break;
+                }
+                _ => continue,
+            }
+        }
+        for vpn in VPNRange::new(start_vpn, area.inner.vpn_range.get_end()) {
+            let frame = &mut area.inner.frames[vpn.0 - area.inner.vpn_range.get_start().0];
+            // first, try to compress
+            match frame.zip() {
+                Ok(zram_id) => {
+                    self.page_table.unmap(vpn);
+                    area.inner.compressed += 1;
+                    trace!("[do_oom] compress frame: {:?}, zram_id: {}", frame, zram_id);
+                    continue;
+                }
+                Err(MemoryError::SharedPage) => continue,
+                Err(MemoryError::ZramIsFull) => {}
+                Err(MemoryError::NotInMemory) => break,
+                _ => unreachable!(),
+            }
+            // zram is full, try to swap out
+            match frame.swap_out() {
+                Ok(swap_id) => {
+                    self.page_table.unmap(vpn);
+                    area.inner.swapped += 1;
+                    trace!("[do_oom] swap out frame: {:?}, swap_id: {}", frame, swap_id);
+                    continue;
+                }
+                Err(MemoryError::SharedPage) => continue,
+                Err(MemoryError::NotInMemory) => break,
+                _ => unreachable!(),
+            }
+        }
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -1058,12 +1116,16 @@ impl MemorySet {
 #[derive(Clone, Debug)]
 pub enum Frame {
     InMemory(Arc<FrameTracker>),
+    Compressed(usize),
     SwappedOut(usize),
     Unallocated,
 }
 
 impl Frame {
-    pub fn insert_frame(&mut self, frame_tracker: Arc<FrameTracker>) -> Result<(), MemoryError> {
+    pub fn insert_in_memory(
+        &mut self,
+        frame_tracker: Arc<FrameTracker>,
+    ) -> Result<(), MemoryError> {
         match self {
             Frame::Unallocated => {
                 *self = Frame::InMemory(frame_tracker);
@@ -1072,7 +1134,7 @@ impl Frame {
             _ => Err(MemoryError::AlreadyAllocated),
         }
     }
-    pub fn take(&mut self) -> Option<Arc<FrameTracker>> {
+    pub fn take_in_memory(&mut self) -> Option<Arc<FrameTracker>> {
         match self {
             Frame::InMemory(frame_ref) => {
                 // avoid implement trait 'Copy'
@@ -1111,12 +1173,47 @@ impl Frame {
             _ => Err(MemoryError::NotSwappedOut),
         }
     }
+    pub fn zip(&mut self) -> Result<usize, MemoryError> {
+        match self {
+            Frame::InMemory(frame_ref) => {
+                if Arc::strong_count(frame_ref) == 1 {
+                    if let Ok(zram_id) = ZRAM_DEVICE.lock().write(frame_ref.ppn.get_bytes_array()) {
+                        // frame_tracker should be dropped
+                        *self = Frame::Compressed(zram_id);
+                        Ok(zram_id)
+                    } else {
+                        Err(MemoryError::ZramIsFull)
+                    }
+                } else {
+                    Err(MemoryError::SharedPage)
+                }
+            }
+            _ => Err(MemoryError::NotInMemory),
+        }
+    }
+    pub fn unzip(&mut self) -> Result<PhysPageNum, MemoryError> {
+        match self {
+            Frame::Compressed(zram_id) => {
+                let frame = frame_alloc().unwrap();
+                let ppn = frame.ppn;
+                ZRAM_DEVICE
+                    .lock()
+                    .read(*zram_id, ppn.get_bytes_array())
+                    .unwrap();
+                *self = Frame::InMemory(frame);
+                Ok(ppn)
+            }
+            _ => Err(MemoryError::NotCompressed),
+        }
+    }
 }
 
 #[derive(Clone)]
 pub struct LinearMap {
     vpn_range: VPNRange,
     frames: Vec<Frame>,
+    compressed: usize,
+    swapped: usize,
 }
 
 impl LinearMap {
@@ -1125,13 +1222,18 @@ impl LinearMap {
         let mut new_dict = Self {
             vpn_range,
             frames: Vec::with_capacity(len),
+            compressed: 0,
+            swapped: 0,
         };
         new_dict.frames.resize(len, Frame::Unallocated);
         new_dict
     }
+    pub fn get_mut(&mut self, key: &VirtPageNum) -> &mut Frame {
+        &mut self.frames[key.0 - self.vpn_range.get_start().0]
+    }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
-    pub fn get(&self, key: &VirtPageNum) -> Option<&Arc<FrameTracker>> {
+    pub fn get_in_memory(&self, key: &VirtPageNum) -> Option<&Arc<FrameTracker>> {
         match &self.frames[key.0 - self.vpn_range.get_start().0] {
             Frame::InMemory(tracker) => Some(tracker),
             _ => None,
@@ -1139,43 +1241,18 @@ impl LinearMap {
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
-    pub fn alloc(&mut self, key: VirtPageNum, value: Arc<FrameTracker>) {
+    pub fn alloc_in_memory(&mut self, key: VirtPageNum, value: Arc<FrameTracker>) {
         self.frames[key.0 - self.vpn_range.get_start().0]
-            .insert_frame(value)
+            .insert_in_memory(value)
             .unwrap()
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
-    pub fn remove(&mut self, key: &VirtPageNum) -> Option<Arc<FrameTracker>> {
-        self.frames[key.0 - self.vpn_range.get_start().0].take()
+    pub fn remove_in_memory(&mut self, key: &VirtPageNum) -> Option<Arc<FrameTracker>> {
+        self.frames[key.0 - self.vpn_range.get_start().0].take_in_memory()
     }
-    /// # Warning
-    /// a key which exceeds the end of `vpn_range` would cause panic
-    pub fn try_swap_out(&mut self, page_table: &mut PageTable) {
-        let mut start_vpn = self.vpn_range.get_end();
-        for vpn in self.vpn_range {
-            match self.frames[vpn.0 - self.vpn_range.get_start().0] {
-                Frame::InMemory(_) => {
-                    start_vpn = vpn;
-                    break;
-                }
-                _ => continue,
-            }
-        }
-        for vpn in VPNRange::new(start_vpn, self.vpn_range.get_end()) {
-            let frame = &mut self.frames[vpn.0 - self.vpn_range.get_start().0];
-            match frame.swap_out() {
-                Ok(swap_id) => {
-                    page_table.unmap(vpn);
-                    trace!("[try_swap_out] frame: {:?}, swap_id: {}", frame, swap_id)
-                }
-                Err(_) => break,
-            }
-        }
-    }
-    pub fn try_swap_in(&mut self, key: &VirtPageNum) -> Result<PhysPageNum, MemoryError> {
-        self.frames[key.0 - self.vpn_range.get_start().0].swap_in()
-    }
+    // /// # Warning
+    // /// a key which exceeds the end of `vpn_range` would cause panic
     pub fn set_start(&mut self, new_vpn_start: VirtPageNum) -> Result<(), ()> {
         let vpn_start = self.vpn_range.get_start();
         let vpn_end = self.vpn_range.get_end();
@@ -1202,19 +1279,45 @@ impl LinearMap {
             .resize(new_vpn_end.0 - vpn_start.0, Frame::Unallocated);
         Ok(())
     }
+    fn count_compressed_and_swapped(&self, start: usize, end: usize) -> (usize, usize) {
+        if self.compressed == 0 && self.swapped == 0 {
+            (0, 0)
+        } else {
+            self.frames[start..end].iter().fold(
+                (0, 0),
+                |(compressed, swapped), frame| match frame {
+                    Frame::Compressed(_) => (compressed + 1, swapped),
+                    Frame::SwappedOut(_) => (compressed, swapped + 1),
+                    _ => (compressed, swapped),
+                },
+            )
+        }
+    }
     pub fn into_two(self, cut: VirtPageNum) -> Result<(Self, Self), ()> {
         let vpn_start = self.vpn_range.get_start();
         let vpn_end = self.vpn_range.get_end();
         if cut <= vpn_start || cut >= vpn_end {
             return Err(());
         }
+        let (first_start, first_end) = (0, cut.0 - vpn_start.0);
+        let first_frames = self.frames[first_start..first_end].to_vec();
+        let (first_compressed, first_swapped) =
+            self.count_compressed_and_swapped(first_start, first_end);
         let first = LinearMap {
             vpn_range: VPNRange::new(vpn_start, cut),
-            frames: self.frames[0..cut.0 - vpn_start.0].to_vec(),
+            frames: first_frames,
+            compressed: first_compressed,
+            swapped: first_swapped,
         };
+        let (second_start, second_end) = (cut.0 - vpn_start.0, vpn_end.0 - vpn_start.0);
+        let second_frames = self.frames[second_start..second_end].to_vec();
+        let (second_compressed, second_swapped) =
+            self.count_compressed_and_swapped(second_start, second_end);
         let second = LinearMap {
             vpn_range: VPNRange::new(cut, vpn_end),
-            frames: self.frames[cut.0 - vpn_start.0..vpn_end.0 - vpn_start.0].to_vec(),
+            frames: second_frames,
+            compressed: second_compressed,
+            swapped: second_swapped,
         };
         Ok((first, second))
     }
@@ -1228,19 +1331,58 @@ impl LinearMap {
         if first_cut <= vpn_start || second_cut >= vpn_end || first_cut > second_cut {
             return Err(());
         }
+        let (first_start, first_end) = (0, first_cut.0 - vpn_start.0);
+        let first_frames = self.frames[first_start..first_end].to_vec();
+        let (first_compressed, first_swapped) =
+            self.count_compressed_and_swapped(first_start, first_end);
         let first = LinearMap {
             vpn_range: VPNRange::new(vpn_start, first_cut),
-            frames: self.frames[0..first_cut.0 - vpn_start.0].to_vec(),
+            frames: first_frames,
+            compressed: first_compressed,
+            swapped: first_swapped,
         };
+        let (second_start, second_end) = (first_cut.0 - vpn_start.0, second_cut.0 - vpn_start.0);
+        let second_frames = self.frames[second_start..second_end].to_vec();
+        let (second_compressed, second_swapped) =
+            self.count_compressed_and_swapped(second_start, second_end);
         let second = LinearMap {
             vpn_range: VPNRange::new(first_cut, second_cut),
-            frames: self.frames[first_cut.0 - vpn_start.0..second_cut.0 - vpn_start.0].to_vec(),
+            frames: second_frames,
+            compressed: second_compressed,
+            swapped: second_swapped,
         };
+        let (third_start, third_end) = (second_cut.0 - vpn_start.0, vpn_end.0 - vpn_start.0);
+        let third_frames = self.frames[third_start..third_end].to_vec();
+        let (third_compressed, third_swapped) =
+            self.count_compressed_and_swapped(third_start, third_end);
         let third = LinearMap {
             vpn_range: VPNRange::new(second_cut, vpn_end),
-            frames: self.frames[second_cut.0 - vpn_start.0..vpn_end.0 - vpn_start.0].to_vec(),
+            frames: third_frames,
+            compressed: third_compressed,
+            swapped: third_swapped,
         };
         Ok((first, second, third))
+    }
+}
+
+impl Drop for LinearMap {
+    fn drop(&mut self) {
+        if self.compressed != 0 {
+            let mut zram = ZRAM_DEVICE.lock();
+            self.frames.iter().for_each(|frame| {
+                if let Frame::Compressed(zram_id) = frame {
+                    zram.discard(*zram_id).unwrap();
+                }
+            })
+        }
+        if self.swapped != 0 {
+            let mut swap = SWAP_DEVICE.lock();
+            self.frames.iter().for_each(|frame| {
+                if let Frame::SwappedOut(swap_id) = frame {
+                    swap.discard(*swap_id);
+                }
+            })
+        }
     }
 }
 
@@ -1318,6 +1460,8 @@ impl MapArea {
             inner: LinearMap {
                 vpn_range: VPNRange::new(start_vpn, end_vpn),
                 frames,
+                compressed: 0,
+                swapped: 0,
             },
             map_type,
             map_perm,
@@ -1356,7 +1500,7 @@ impl MapArea {
             MapType::Framed => {
                 let frame = frame_alloc().unwrap();
                 ppn = frame.ppn;
-                self.inner.alloc(vpn, frame);
+                self.inner.alloc_in_memory(vpn, frame);
             }
         }
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
@@ -1378,7 +1522,7 @@ impl MapArea {
         }
         match self.map_type {
             MapType::Framed => {
-                self.inner.remove(&vpn);
+                self.inner.remove_in_memory(&vpn);
             }
             _ => {}
         }
@@ -1442,10 +1586,10 @@ impl MapArea {
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         let mut src_vpn = start_vpn_in_kernel_area;
         for vpn in self.inner.vpn_range {
-            if let Some(frame) = kernel_area.inner.get(&src_vpn) {
+            if let Some(frame) = kernel_area.inner.get_in_memory(&src_vpn) {
                 let ppn = frame.ppn;
                 if !page_table.is_mapped(vpn) {
-                    self.inner.alloc(vpn, frame.clone());
+                    self.inner.alloc_in_memory(vpn, frame.clone());
                     page_table.map(vpn, ppn, pte_flags);
                 } else {
                     error!("[map_from_kernel_area] user vpn already mapped!");
@@ -1506,11 +1650,11 @@ impl MapArea {
         page_table: &mut PageTable,
         vpn: VirtPageNum,
     ) -> Result<(), MemoryError> {
-        let old_frame = self.inner.remove(&vpn).unwrap();
+        let old_frame = self.inner.remove_in_memory(&vpn).unwrap();
         if Arc::strong_count(&old_frame) == 1 {
             // don't need to copy
             // push back old frame and set pte flags to allow write
-            self.inner.alloc(vpn, old_frame);
+            self.inner.alloc_in_memory(vpn, old_frame);
             page_table.set_pte_flags(vpn, self.map_perm).unwrap();
             // Starting from this, the write (page) fault will not be triggered in this space,
             // for the pte permission now contains Write.
@@ -1522,7 +1666,7 @@ impl MapArea {
             // alloc new frame
             let new_frame = frame_alloc().unwrap();
             let new_ppn = new_frame.ppn;
-            self.inner.alloc(vpn, new_frame);
+            self.inner.alloc_in_memory(vpn, new_frame);
             let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
             page_table.map(vpn, new_ppn, pte_flags);
             // copy data
