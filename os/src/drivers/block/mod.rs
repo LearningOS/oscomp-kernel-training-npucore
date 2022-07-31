@@ -1,8 +1,10 @@
 mod sdcard;
 mod virtio_blk;
+mod mem_blk;
 
 pub use sdcard::SDCardWrapper;
 pub use virtio_blk::VirtIOBlock;
+pub use mem_blk::MemBlockWrapper;
 
 use crate::board::BlockDeviceImpl;
 use alloc::sync::Arc;

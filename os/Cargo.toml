@@ -28,6 +28,7 @@ lz4_flex = { version="0.9", default-features = false }
 [features]
 board_qemu = []
 board_k210 = []
+board_fu740 = []
 log_off = ["log/max_level_off"]
 
 [profile.dev]

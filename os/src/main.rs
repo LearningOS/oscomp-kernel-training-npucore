@@ -13,7 +13,10 @@ extern crate bitflags;
 #[cfg(feature = "board_k210")]
 #[path = "boards/k210.rs"]
 mod board;
-#[cfg(not(any(feature = "board_k210")))]
+#[cfg(feature = "board_fu740")]
+#[path = "boards/fu740.rs"]
+mod board;
+#[cfg(all(not(feature = "board_k210"), not(feature = "board_fu740")))]
 #[path = "boards/qemu.rs"]
 mod board;
 
