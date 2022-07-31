@@ -13,7 +13,7 @@ pub use context::{MachineContext, TrapContext, UserContext};
 use riscv::register::{
     mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
-    sie, stval, stvec,
+    sie, stval, stvec, sepc
 };
 
 global_asm!(include_str!("trap.S"));
@@ -144,6 +144,13 @@ pub fn trap_from_kernel() -> ! {
         "a trap {:?} from kernel! bad addr = {:#x}, bad instruction = {:#x}",
         scause::read().cause(),
         stval::read(),
-        current_trap_cx().gp.pc
+        match current_task() {
+            Some(task) => {
+                task.acquire_inner_lock().get_trap_cx().gp.pc
+            },
+            None => {
+                sepc::read()
+            },
+        }
     );
 }
