@@ -1,9 +1,10 @@
 use crate::config::PAGE_SIZE;
 use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::layout::Stat;
+use crate::fs::StatMode;
 use crate::syscall::errno::*;
 use crate::syscall::fs::Fcntl_Command;
-use crate::task::{suspend_current_and_run_next, current_task};
+use crate::task::{current_task, suspend_current_and_run_next};
 use crate::{fs::file_trait::File, mm::UserBuffer};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -135,7 +136,7 @@ impl File for Pipe {
     fn read_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         if offset.is_some() {
             return ESPIPE as usize;
-        }        
+        }
         let mut read_size = 0usize;
         if buf.len() == 0 {
             return read_size;
@@ -240,7 +241,17 @@ impl File for Pipe {
     }
 
     fn get_stat(&self) -> Stat {
-        Stat::new(5, 1, 0o010777, 1, 0x0000000400000040, 0, 0, 0, 0)
+        Stat::new(
+            crate::makedev!(8, 0),
+            1,
+            StatMode::S_IFIFO.bits() | 0o666,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
     }
 
     fn get_file_type(&self) -> DiskInodeType {

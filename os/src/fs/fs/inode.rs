@@ -219,7 +219,7 @@ impl File for OSInode {
                     .bits()
             }
         };
-        Stat::new(0, ino, st_mod, 1, 0, size, atime, mtime, ctime)
+        Stat::new(crate::makedev!(8, 0), ino, st_mod, 1, 0, size, atime, mtime, ctime)
     }
     fn get_file_type(&self) -> DiskInodeType {
         self.inner.get_file_type()

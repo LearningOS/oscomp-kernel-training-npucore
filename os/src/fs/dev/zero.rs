@@ -2,7 +2,7 @@ use alloc::sync::Arc;
 use easy_fs::DiskInodeType;
 
 use crate::{
-    fs::{directory_tree::DirectoryTreeNode, file_trait::File, layout::Stat},
+    fs::{directory_tree::DirectoryTreeNode, file_trait::File, layout::Stat, StatMode},
     mm::UserBuffer,
     syscall::errno::{ENOTDIR, ESPIPE},
 };
@@ -36,7 +36,17 @@ impl File for Zero {
         true
     }
     fn get_stat(&self) -> Stat {
-        Stat::new(5, 1, 0o020777, 1, 0x0000000400000040, 0, 0, 0, 0)
+        Stat::new(
+            crate::makedev!(0, 5),
+            1,
+            StatMode::S_IFCHR.bits() | 0o666,
+            1,
+            crate::makedev!(1, 5),
+            0,
+            0,
+            0,
+            0,
+        )
     }
     fn read_user(&self, offset: Option<usize>, mut buf: UserBuffer) -> usize {
         buf.clear();
