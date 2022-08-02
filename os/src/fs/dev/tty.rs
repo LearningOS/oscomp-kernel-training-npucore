@@ -1,6 +1,7 @@
 use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::file_trait::File;
 use crate::fs::layout::Stat;
+use crate::fs::StatMode;
 use crate::mm::{copy_from_user, copy_to_user};
 use crate::mm::{translated_ref, translated_refmut, UserBuffer};
 use crate::sbi::console_getchar;
@@ -194,7 +195,17 @@ impl File for Teletype {
     }
 
     fn get_stat(&self) -> Stat {
-        Stat::new(5, 1, 0o020777, 1, 0x0000000400000040, 0, 0, 0, 0)
+        Stat::new(
+            crate::makedev!(0, 5),
+            1,
+            StatMode::S_IFCHR.bits() | 0o666,
+            1,
+            crate::makedev!(0x88, 0),
+            0,
+            0,
+            0,
+            0,
+        )
     }
 
     fn get_file_type(&self) -> DiskInodeType {
