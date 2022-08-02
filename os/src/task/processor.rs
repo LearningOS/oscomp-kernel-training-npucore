@@ -51,6 +51,7 @@ pub fn run_tasks() {
                 __switch(idle_task_cx_ptr, next_task_cx_ptr);
             }
         } else {
+            drop(processor);
             // we have no ready tasks, try to wake some...
             do_wake_expired();
         }
