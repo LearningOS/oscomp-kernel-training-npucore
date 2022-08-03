@@ -37,6 +37,10 @@ else ifeq ($(BOARD), k210)
 endif
 K210_BOOTLOADER_SIZE := 131072
 
+ifndef LOG
+	LOG_OPTION := "log_off"
+endif
+
 # KERNEL ENTRY
 ifeq ($(BOARD), qemu)
 	KERNEL_ENTRY_PA := 0x80200000
@@ -107,9 +111,9 @@ kernel:
 	@echo Platform: $(BOARD)
 	@cp src/linker-$(BOARD).ld src/linker.ld
     ifeq ($(MODE), debug)
-		@cargo build --features "board_$(BOARD)"
+		@cargo build --features "board_$(BOARD) $(LOG_OPTION)"
     else
-		@cargo build --release --features "board_$(BOARD)"
+		@cargo build --release --features "board_$(BOARD) $(LOG_OPTION)"
     endif
 	@rm src/linker.ld
 
