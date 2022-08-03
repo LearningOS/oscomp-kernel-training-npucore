@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use user_lib::{exit, exec, fork, wait, yield_};
+use user_lib::{exec, exit, fork, wait, waitpid, yield_};
 
 #[no_mangle]
 #[link_section = ".text.entry"]
@@ -10,7 +10,7 @@ pub extern "C" fn _start() -> ! {
 
 #[no_mangle]
 fn main() -> i32 {
-    let path = "/bin/bash\0";
+    let bash_path = "/bin/bash\0";
     let environ = [
         "SHELL=/bash\0".as_ptr(),
         "PWD=/\0".as_ptr(),
@@ -27,23 +27,55 @@ fn main() -> i32 {
         "LD_LIBRARY_PATH=/\0".as_ptr(),
         core::ptr::null(),
     ];
-    if fork() == 0 {
-        exec(path, &[path.as_ptr() as *const u8, "run-all.sh\0".as_ptr(), core::ptr::null()], &environ);
-    } else {
-        loop {
-            let mut exit_code: i32 = 0;
-            let pid = wait(&mut exit_code);
-            // ECHLD is -10
-            if pid == -10 {
-                yield_();
-                continue;
-            }
-            // user_lib::println!(
-            //     "[initproc] Released a zombie process, pid={}, exit_code={}",
-            //     pid,
-            //     exit_code,
-            // );
+    let schedule = [
+        [
+            bash_path.as_ptr(),
+            "run-all.sh\0".as_ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+        ],
+        [
+            bash_path.as_ptr(),
+            "-c\0".as_ptr(),
+            "echo aaa > lat_sig\0".as_ptr(),
+            core::ptr::null(),
+        ],
+        [
+            bash_path.as_ptr(),
+            "-c\0".as_ptr(),
+            "touch hello\0".as_ptr(),
+            core::ptr::null(),
+        ],
+        [
+            bash_path.as_ptr(),
+            "busybox_testcode.sh\0".as_ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+        ],
+        [
+            bash_path.as_ptr(),
+            "lua_testcode.sh\0".as_ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+        ],
+        [
+            bash_path.as_ptr(),
+            "lmbench_testcode.sh\0".as_ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+        ],
+    ];
+    let mut exit_code: i32 = 0;
+    for argv in schedule {
+        let pid = fork();
+        if pid == 0 {
+            exec(bash_path, &argv, &environ);
+        } else {
+            waitpid(pid as usize, &mut exit_code);
         }
+    }
+    loop {
+        wait(&mut exit_code);
     }
     0
 }
