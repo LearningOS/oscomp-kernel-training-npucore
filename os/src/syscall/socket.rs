@@ -22,6 +22,9 @@ pub fn sys_bind(_sockfd: usize, _addr: *const u8, _addrlen: u32) -> isize {
 pub fn sys_getsockname(_sockfd: usize, _addr: *const u8, _addrlen: u32) -> isize {
     SUCCESS
 }
+pub fn sys_getpeername(_sockfd: usize, _addr: *const u8, _addrlen: u32) -> isize {
+    ENOTSOCK
+}
 pub fn sys_setsockopt(_sockfd: usize, _level: u32, _optname: u32, _optcal: *const u8, _optlen: u32) -> isize {
     SUCCESS
 }
