@@ -1,5 +1,5 @@
 use core::convert::TryInto;
-use core::mem;
+use core::{mem, panic};
 use core::ops::Mul;
 use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;
@@ -104,9 +104,6 @@ impl<T: CacheManager, F: CacheManager> Drop for Inode<T, F> {
             // Clear size
             let old_size = self.get_file_size();
             self.modify_size_lock(&inode_lock, -(old_size as isize));
-            // Deallocate clusters
-            let clus_list = mem::take(&mut self.file_content.write().clus_list);
-            self.fs.fat.free(&self.fs.block_device, clus_list);
         } else {
             if self.parent_dir.lock().is_none() {
                 return;
@@ -385,7 +382,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         self.fs
             .fat
-            .free(&self.fs.block_device, dealloc_list);
+            .free(&self.fs.block_device, dealloc_list, clus_list.last().map(|x|{*x}));
     }
     /// Change the size of current file.
     /// This operation is ignored if the result size is negative
@@ -401,10 +398,9 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         diff: isize
     ) {
         let mut lock = self.file_content.write();
-        // This operation is ignored if the result size is negative
-        if diff.saturating_add(lock.size as isize) <= 0 {
-            return;
-        }
+
+        assert!(diff.saturating_add(lock.size as isize) >= 0);
+
         let old_size = lock.size;
         let new_size = (lock.size as isize + diff) as u32;
 
