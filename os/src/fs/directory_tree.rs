@@ -6,7 +6,7 @@ use alloc::{
 };
 use easy_fs::{CacheManager, DiskInodeType, EasyFileSystem};
 use lazy_static::*;
-use spin::{Mutex, RwLock, RwLockWriteGuard};
+use spin::{Mutex, RwLock, RwLockWriteGuard, MutexGuard};
 
 use super::{
     dev::{null::Null, tty::Teletype, zero::Zero},
@@ -37,6 +37,27 @@ lazy_static! {
         OSInode::new(InodeImpl::root_inode(&FILE_SYSTEM)),
         None
     );
+    static ref DIRECTORY_VEC: Mutex<(Vec<Weak<DirectoryTreeNode>>, usize)> = Mutex::new((Vec::new(), 0));
+}
+
+fn insert_directory_vec(inode: Weak<DirectoryTreeNode>) {
+    DIRECTORY_VEC.lock().0.push(inode);
+}
+fn delete_directory_vec() {
+    let mut lock = DIRECTORY_VEC.lock();
+    lock.1 += 1;
+    if lock.1 >= lock.0.len() / 2 {
+        update_directory_vec(&mut lock);
+    }
+}
+fn update_directory_vec(lock: &mut MutexGuard<(Vec<Weak<DirectoryTreeNode>>, usize)>) {
+    let mut new_vec: Vec<Weak<DirectoryTreeNode>> = Vec::new();
+    for inode in &lock.0 {
+        if inode.upgrade().is_some() {
+            new_vec.push(inode.clone());
+        }
+    }
+    **lock = (new_vec, 0);
 }
 
 pub struct DirectoryTreeNode {
@@ -54,6 +75,12 @@ pub struct DirectoryTreeNode {
     selfptr: Mutex<Weak<Self>>,
     father: Mutex<Weak<Self>>,
     children: RwLock<BTreeMap<String, Arc<Self>>>,
+}
+
+impl Drop for DirectoryTreeNode {
+    fn drop(&mut self) {
+        delete_directory_vec();
+    }
 }
 
 impl DirectoryTreeNode {
@@ -74,6 +101,7 @@ impl DirectoryTreeNode {
         });
         *node.selfptr.lock() = Arc::downgrade(&node);
         node.file.info_dirtree_node(Arc::downgrade(&node));
+        insert_directory_vec(Arc::downgrade(&node));
         node
     }
     pub fn add_special_use(&self) {
@@ -508,16 +536,15 @@ pub fn oom() -> Result<(), ()> {
     tlb_invalidate();
     const MAX_FAIL_TIME: usize = 3;
     let mut fail_time = 0;
-    fn dfs(u: &Arc<DirectoryTreeNode>) -> usize {
-        let mut dropped = u.file.oom();
-        for (_, v) in u.children.read().iter() {
-            dropped += dfs(v);
-        }
-        dropped
-    }
     log::warn!("[oom] start oom");
+    let mut lock = DIRECTORY_VEC.lock();
+    update_directory_vec(&mut lock);
     loop {
-        let dropped = dfs(&ROOT);
+        let mut dropped = 0;
+        for inode in &lock.0 {
+            let inode = inode.upgrade().unwrap();
+            dropped += inode.file.oom();
+        }
         if dropped > 0 {
             log::warn!("[oom] recycle pages: {}", dropped);
             return Ok(());

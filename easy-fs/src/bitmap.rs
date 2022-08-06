@@ -121,7 +121,7 @@ impl<T: CacheManager> Fat<T> {
     /// offset
     pub fn this_fat_ent_offset(&self, clus_num: u32) -> usize {
         let fat_offset = clus_num * 4;
-        (fat_offset % (T::CACHE_SZ as u32)) as usize
+        (fat_offset % (self.byts_per_sec as u32)) as usize
     }
     /// Assign the cluster entry to `current` to `next`
     /// If `current` is None, ignore this operation
@@ -263,7 +263,8 @@ impl<T: CacheManager> Fat<T> {
     pub fn free(
         &self, 
         block_device: &Arc<dyn BlockDevice>, 
-        cluster_list: Vec<u32>
+        cluster_list: Vec<u32>,
+        last: Option<u32>
     ) {
         // Before freeing, a lock 
         let mut lock = self.vacant_clus.lock();
@@ -273,5 +274,6 @@ impl<T: CacheManager> Fat<T> {
                 lock.push_back(cluster_id);
             }
         }
+        self.set_next_clus(block_device, last, EOC);
     }
 }
