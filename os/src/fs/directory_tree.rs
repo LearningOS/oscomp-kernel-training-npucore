@@ -12,7 +12,7 @@ use super::{
     dev::{null::Null, tty::Teletype, zero::Zero},
     file_trait::File,
     filesystem::FileSystem,
-    layout::OpenFlags, swap::SWAP_DEVICE,
+    layout::OpenFlags, swap::SWAP_DEVICE, Hwclock,
 };
 use crate::{syscall::errno::*, mm::tlb_invalidate};
 use crate::{
@@ -559,7 +559,8 @@ pub fn oom() -> Result<(), ()> {
 pub fn init_fs() {
     init_device_directory();
     init_tmp_directory();
-    init_swap_device()
+    init_proc_directory();
+    init_swap_device();
 }
 #[allow(unused)]
 fn init_device_directory() {
@@ -571,6 +572,7 @@ fn init_device_directory() {
     };
 
     dev_inode.mkdir("shm");
+    dev_inode.mkdir("misc");
 
     let null_dev = DirectoryTreeNode::new(
         "null".to_string(),
@@ -590,14 +592,39 @@ fn init_device_directory() {
         Arc::new(Teletype::new()),
         Some(&dev_inode.get_arc()),
     );
-
     let mut lock = dev_inode.children.write();
     lock.insert("null".to_string(), null_dev);
     lock.insert("zero".to_string(), zero_dev);
     lock.insert("tty".to_string(), tty_dev);
+    drop(lock);
+
+    let misc_inode = match dev_inode.cd_path("./misc") {
+        Ok(inode) => inode,
+        Err(_) => panic!("misc directory doesn't exist"),
+    };
+    let hwclock_dev = DirectoryTreeNode::new(
+        "rtc".to_string(),
+        Arc::new(FileSystem::new(FS::Null)),
+        Arc::new(Hwclock {}),
+        Some(&misc_inode.get_arc()),
+    );
+    let mut lock = misc_inode.children.write();
+    lock.insert("rtc".to_string(), hwclock_dev);
+    drop(lock);
 }
 fn init_tmp_directory() {
     match ROOT.mkdir("/tmp") {
+        _ => {}
+    }
+}
+fn init_proc_directory() {
+    match ROOT.mkdir("/proc") {
+        _ => {}
+    }
+    match ROOT.open("/proc/meminfo", OpenFlags::O_CREAT, false) {
+        _ => {}
+    }
+    match ROOT.open("/proc/mounts", OpenFlags::O_CREAT, false) {
         _ => {}
     }
 }

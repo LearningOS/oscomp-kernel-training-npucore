@@ -11,7 +11,7 @@ use core::{
     ops::{Index, IndexMut},
     slice::{Iter, IterMut},
 };
-pub use {self::dev::{null::*, pipe::*, socket::*, tty::*, zero::*}};
+pub use {self::dev::{null::*, pipe::*, socket::*, tty::*, zero::*, hwclock::*}};
 
 pub use self::layout::*;
 
