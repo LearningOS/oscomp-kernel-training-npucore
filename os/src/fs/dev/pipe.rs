@@ -119,10 +119,110 @@ impl File for Pipe {
         self.writable
     }
     fn read(&self, offset: Option<&mut usize>, buf: &mut [u8]) -> usize {
-        unreachable!()
+        if offset.is_some() {
+            return ESPIPE as usize;
+        }
+        let mut read_size = 0usize;
+        if buf.len() == 0 {
+            return read_size;
+        }
+        loop {
+            let task = current_task().unwrap();
+            let inner = task.acquire_inner_lock();
+            if !inner.sigpending.difference(inner.sigmask).is_empty() {
+                if read_size == 0 {
+                    return ERESTART as usize;
+                } else {
+                    // interrupted but has read something
+                    return read_size;
+                }
+            }
+            drop(inner);
+            drop(task);
+            let mut ring = self.buffer.lock();
+            if ring.status == RingBufferStatus::EMPTY {
+                if ring.all_write_ends_closed() {
+                    return read_size;
+                }
+                drop(ring);
+                suspend_current_and_run_next();
+                continue;
+            }
+            for byte_ref in buf.into_iter() {
+                let index = ring.head;
+                unsafe {
+                    *byte_ref = ring.arr[index];
+                }
+                ring.head += 1;
+                if ring.head == ring.arr.len() {
+                    ring.head = 0;
+                }
+                read_size += 1;
+                if ring.head == ring.tail {
+                    break;
+                }
+            }
+            // We guarantee that this operation will read at least one byte
+            if ring.head == ring.tail {
+                ring.status = RingBufferStatus::EMPTY;
+            } else {
+                ring.status = RingBufferStatus::NORMAL;
+            }
+            return read_size;
+        }
     }
     fn write(&self, offset: Option<&mut usize>, buf: &[u8]) -> usize {
-        unreachable!()
+        if offset.is_some() {
+            return ESPIPE as usize;
+        }
+        let mut write_size = 0usize;
+        if buf.len() == 0 {
+            return write_size;
+        }
+        loop {
+            let task = current_task().unwrap();
+            let inner = task.acquire_inner_lock();
+            if !inner.sigpending.difference(inner.sigmask).is_empty() {
+                if write_size == 0 {
+                    return ERESTART as usize;
+                } else {
+                    // interrupted but has written something
+                    return write_size;
+                }
+            }
+            drop(inner);
+            drop(task);
+            let mut ring = self.buffer.lock();
+            if ring.status == RingBufferStatus::FULL {
+                if ring.all_read_ends_closed() {
+                    return write_size;
+                }
+                drop(ring);
+                suspend_current_and_run_next();
+                continue;
+            }
+            for byte_ref in buf.into_iter() {
+                let index = ring.tail;
+                unsafe {
+                    ring.arr[index] = *byte_ref;
+                }
+                ring.tail += 1;
+                if ring.tail == ring.arr.len() {
+                    ring.tail = 0;
+                }
+                write_size += 1;
+                if ring.head == ring.tail {
+                    break;
+                }
+            }
+            // We guarantee that this operation will write at least one byte
+            if ring.head == ring.tail {
+                ring.status = RingBufferStatus::FULL;
+            } else {
+                ring.status = RingBufferStatus::NORMAL;
+            }
+            return write_size;
+        }
     }
     fn r_ready(&self) -> bool {
         let ring_buffer = self.buffer.lock();
