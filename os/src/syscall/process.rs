@@ -719,6 +719,10 @@ pub fn sys_prlimit(
                     task.files.lock().set_soft_limit(rlimit.rlim_cur);
                     task.files.lock().set_hard_limit(rlimit.rlim_max);
                 }
+                Resource::STACK => {
+                    warn!("[prlimit] Unsupported modification stack");
+                    assert!(rlimit.rlim_cur <= USER_STACK_SIZE);
+                }
                 Resource::ILLEAGAL => return EINVAL,
                 _ => todo!(),
             }

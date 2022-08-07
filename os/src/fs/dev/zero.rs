@@ -96,7 +96,7 @@ impl File for Zero {
         todo!()
     }
 
-    fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
+    fn lseek(&self, offset: isize, whence: crate::fs::SeekWhence) -> Result<usize, isize> {
         Err(ESPIPE)
     }
 

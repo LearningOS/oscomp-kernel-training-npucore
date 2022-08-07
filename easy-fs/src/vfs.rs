@@ -1,5 +1,5 @@
 use core::convert::TryInto;
-use core::{mem, panic};
+use core::{panic};
 use core::ops::Mul;
 use super::{DiskInodeType, EasyFileSystem};
 use alloc::string::String;

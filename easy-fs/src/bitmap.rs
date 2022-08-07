@@ -202,11 +202,8 @@ impl<T: CacheManager> Fat<T> {
         hlock: &mut MutexGuard<usize>
     ) -> Option<u32> {
         if last.is_some() {
-            // If next cluster is invalid, return None. 
             let next_cluster_of_current = self.get_next_clus_num(last.unwrap(), block_device);
-            if next_cluster_of_current < FAT_ENTRY_RESERVED_TO_END {
-                return None;
-            }            
+            assert!(next_cluster_of_current >= FAT_ENTRY_RESERVED_TO_END);
         }
         // Now we can allocate clusters freely
 

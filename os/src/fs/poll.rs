@@ -71,9 +71,6 @@ bitflags! {
     }
 }
 
-impl PollFd {
-    /* fn get_inode(&self) -> OSInode {} */
-}
 #[allow(unused)]
 /// `ppoll()` witout `sigmask`. See `ppoll` for more information.
 pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {

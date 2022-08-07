@@ -31,6 +31,14 @@ bitflags! {
 }
 
 bitflags! {
+    pub struct SeekWhence: u32 {
+        const SEEK_SET  =   0; /* set to offset bytes.  */
+        const SEEK_CUR  =   1; /* set to its current location plus offset bytes.  */
+        const SEEK_END  =   2; /* set to the size of the file plus offset bytes.  */
+    }
+}
+
+bitflags! {
     pub struct StatMode: u32 {
         ///bit mask for the file type bit field
         const S_IFMT    =   0o170000;

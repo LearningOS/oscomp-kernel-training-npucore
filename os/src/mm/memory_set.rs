@@ -4,10 +4,10 @@ use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::*;
+use crate::fs::SeekWhence;
 use crate::fs::file_trait::File;
 use crate::fs::swap::SWAP_DEVICE;
 use crate::syscall::errno::*;
-use crate::syscall::fs::SeekWhence;
 use crate::task::{
     current_task, trap_cx_bottom_from_tid, ustack_bottom_from_tid, AuxvEntry, AuxvType, ELFInfo,
 };

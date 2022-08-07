@@ -18,7 +18,7 @@ pub use self::layout::*;
 use self::{directory_tree::DirectoryTreeNode, file_trait::File, fs::cache_mgr::PageCache};
 use crate::{
     mm::{UserBuffer, Frame},
-    syscall::{errno::*, fs::SeekWhence},
+    syscall::{errno::*},
 };
 use alloc::{
     boxed::Box,
@@ -295,6 +295,15 @@ impl FdTable {
             );
         }
         self.hard_limit = limit;
+    }
+    pub fn get_fd(&self, fd: usize) -> Result<&FileDescriptor, isize> {
+        if fd >= self.inner.len() {
+            return Err(EBADF);
+        }
+        match &self.inner[fd] {
+            Some(file_descriptor) => Ok(file_descriptor),
+            None => Err(EBADF),
+        }
     }
     #[inline(always)]
     pub fn len(&self) -> usize {

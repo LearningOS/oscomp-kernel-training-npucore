@@ -2,6 +2,7 @@ use crate::{fs::file_trait::File, syscall::errno::SUCCESS};
 
 pub struct Hwclock;
 
+#[allow(unused)]
 impl File for Hwclock {
     fn deep_clone(&self) -> alloc::sync::Arc<dyn File> {
         todo!()
@@ -81,7 +82,7 @@ impl File for Hwclock {
         todo!()
     }
 
-    fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
+    fn lseek(&self, offset: isize, whence: crate::fs::SeekWhence) -> Result<usize, isize> {
         todo!()
     }
 
@@ -106,7 +107,7 @@ impl File for Hwclock {
     }
 
     fn oom(&self) -> usize {
-        todo!()
+        0
     }
 
     fn hang_up(&self) -> bool {
