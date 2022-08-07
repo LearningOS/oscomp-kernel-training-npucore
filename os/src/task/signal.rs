@@ -116,19 +116,17 @@ bitflags! {
     }
 }
 
-macro_rules! CAN_NOT_BE_MASKED {
-    () => {
-        Signals::SIGILL | Signals::SIGSEGV | Signals::SIGKILL | Signals::SIGSTOP
-    };
-}
-
 impl Signals {
-    /// if 0 < signum < 64, return `Ok(Signals)`, else return `Err()` (illeagal)
+    // SIGILL | SIGKILL | SIGSEGV | SIGSTOP
+    const CAN_NOT_BE_MASKED: Signals =
+        Signals::from_bits_truncate(1 << 3 | 1 << 8 | 1 << 10 | 1 << 18);
+    const EMPTY: Signals = Signals::empty();
+    /// if 0 <= signum < 64, return `Ok(Signals)`, else return `Err()` (illeagal)
     pub fn from_signum(signum: usize) -> Result<Signals, ()> {
-        if 0 < signum && signum <= 64 {
-            Ok(Signals::from_bits(1 << (signum - 1)).unwrap())
-        } else {
-            Err(())
+        match signum {
+            0 => Ok(Signals::EMPTY),
+            1..=64 => Ok(Signals::from_bits_truncate(1 << (signum - 1))),
+            _ => Err(()),
         }
     }
     pub fn to_signum(&self) -> Result<usize, ()> {
@@ -240,7 +238,7 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
     let task = current_task().unwrap();
     let result = Signals::from_signum(signum);
     match result {
-        Err(_) | Ok(Signals::SIGKILL) | Ok(Signals::SIGSTOP) => {
+        Err(_) | Ok(Signals::EMPTY) | Ok(Signals::SIGKILL) | Ok(Signals::SIGSTOP) => {
             warn!("[sigaction] bad signum: {}", signum);
             EINVAL
         }
@@ -259,7 +257,7 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
             if !act.is_null() {
                 let mut sigact = unsafe { MaybeUninit::uninit().assume_init() };
                 copy_from_user(token, act, &mut sigact);
-                sigact.mask.remove(CAN_NOT_BE_MASKED!());
+                sigact.mask.remove(Signals::CAN_NOT_BE_MASKED);
                 // push to PCB, ignore mask and flags now
                 if !(sigact.handler == SigHandler::SIG_DFL || sigact.handler == SigHandler::SIG_IGN)
                 {
@@ -409,9 +407,9 @@ pub fn do_signal() {
             );
             // mask some signals
             inner.sigmask |= if act.flags.contains(SigActionFlags::SA_NODEFER) {
-                act.mask - CAN_NOT_BE_MASKED!()
+                act.mask - Signals::CAN_NOT_BE_MASKED
             } else {
-                (signal | act.mask) - CAN_NOT_BE_MASKED!()
+                (signal | act.mask) - Signals::CAN_NOT_BE_MASKED
             };
             if act.flags.contains(SigActionFlags::SA_RESETHAND) {
                 sighand.remove(&signal);
@@ -513,7 +511,7 @@ pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize
         };
         // unblock SIGILL & SIGSEGV, otherwise infinite loop may occurred
         // unblock SIGKILL & SIGSTOP, they can't be masked according to standard
-        inner.sigmask = inner.sigmask.difference(CAN_NOT_BE_MASKED!());
+        inner.sigmask = inner.sigmask.difference(Signals::CAN_NOT_BE_MASKED);
     }
     SUCCESS
 }
