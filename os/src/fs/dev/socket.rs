@@ -88,7 +88,7 @@ impl File for Socket {
         todo!()
     }
 
-    fn lseek(&self, offset: isize, whence: crate::syscall::fs::SeekWhence) -> Result<usize, isize> {
+    fn lseek(&self, offset: isize, whence: crate::fs::SeekWhence) -> Result<usize, isize> {
         todo!()
     }
 

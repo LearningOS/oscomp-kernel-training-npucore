@@ -1,6 +1,6 @@
 use crate::{
     mm::UserBuffer,
-    syscall::{errno::ENOTTY, fs::SeekWhence},
+    syscall::{errno::ENOTTY},
 };
 use alloc::{
     sync::{Arc, Weak},
@@ -13,7 +13,7 @@ use spin::Mutex;
 use super::{
     directory_tree::DirectoryTreeNode,
     fs::cache_mgr::PageCache,
-    layout::{Dirent, OpenFlags, Stat},
+    layout::*,
 };
 
 pub trait File: DowncastSync {
