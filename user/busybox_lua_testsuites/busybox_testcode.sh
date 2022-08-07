@@ -10,7 +10,7 @@ echo "If the CMD runs incorrectly, return value will put in $RST" > $RST
 echo -e "Else nothing will put in $RST\n" >> $RST
 echo "TEST START" >> $RST
 
-cat ./busybox_cmd.txt | while read line
+./busybox cat ./busybox_cmd.txt | while read line
 do
 	eval "./busybox $line"
 	RTN=$?
