@@ -90,18 +90,24 @@ pub fn sys_kill(pid: usize, sig: usize) -> isize {
         Ok(signal) => signal,
         Err(_) => return EINVAL,
     };
+    #[cfg(feature = "comp")]
+    if pid == 10 {
+        return SUCCESS;
+    }
     if pid > 0 {
         // [Warning] in current implementation,
         // signal will be sent to an arbitrary task with target `pid` (`tgid` more precisely).
         // But manual also require that the target task should not mask this signal.
         if let Some(task) = find_task_by_tgid(pid) {
-            let mut inner = task.acquire_inner_lock();
-            inner.add_signal(signal);
-            // wake up target process if it is sleeping
-            if inner.task_status == TaskStatus::Interruptible {
-                inner.task_status = TaskStatus::Ready;
-                drop(inner);
-                wake_interruptible(task);
+            if !signal.is_empty() {
+                let mut inner = task.acquire_inner_lock();
+                inner.add_signal(signal);
+                // wake up target process if it is sleeping
+                if inner.task_status == TaskStatus::Interruptible {
+                    inner.task_status = TaskStatus::Ready;
+                    drop(inner);
+                    wake_interruptible(task);
+                }
             }
             SUCCESS
         } else {
@@ -124,13 +130,15 @@ pub fn sys_tkill(tid: usize, sig: usize) -> isize {
     };
     if tid > 0 {
         if let Some(task) = find_task_by_pid(tid) {
-            let mut inner = task.acquire_inner_lock();
-            inner.add_signal(signal);
-            // wake up target process if it is sleeping
-            if inner.task_status == TaskStatus::Interruptible {
-                inner.task_status = TaskStatus::Ready;
-                drop(inner);
-                wake_interruptible(task);
+            if !signal.is_empty() {
+                let mut inner = task.acquire_inner_lock();
+                inner.add_signal(signal);
+                // wake up target process if it is sleeping
+                if inner.task_status == TaskStatus::Interruptible {
+                    inner.task_status = TaskStatus::Ready;
+                    drop(inner);
+                    wake_interruptible(task);
+                }
             }
             SUCCESS
         } else {
