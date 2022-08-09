@@ -514,7 +514,7 @@ impl FATShortDirEnt {
         let ext_name_len = (0..3).find(|i| self.name[8 + *i] == ' ' as u8).unwrap_or(3);
         macro_rules! as_u8str {
             ($a:expr) => {
-                core::str::from_utf8(&$a).unwrap()
+                core::str::from_utf8(&$a).unwrap_or("")
             };
         }
         {
