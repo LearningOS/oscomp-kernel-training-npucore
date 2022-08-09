@@ -207,6 +207,9 @@ impl File for OSInode {
         }
         total_write_size
     }
+    fn get_size(&self) -> usize {
+        self.inner.get_file_size() as usize
+    }
     fn get_stat(&self) -> Stat {
         let (size, atime, mtime, ctime, ino) = self.inner.stat_lock(&self.inner.read());
         let st_mod: u32 = {

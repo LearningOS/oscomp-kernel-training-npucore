@@ -17,24 +17,35 @@ impl File for Zero {
     fn deep_clone(&self) -> Arc<dyn File> {
         Arc::new(Zero {})
     }
+
     fn readable(&self) -> bool {
         true
     }
+
     fn writable(&self) -> bool {
         true
     }
+
     fn read(&self, offset: Option<&mut usize>, buf: &mut [u8]) -> usize {
         unreachable!()
     }
+
     fn write(&self, offset: Option<&mut usize>, buf: &[u8]) -> usize {
         unreachable!()
     }
+
     fn r_ready(&self) -> bool {
         true
     }
+
     fn w_ready(&self) -> bool {
         true
     }
+
+    fn get_size(&self) -> usize {
+        todo!()
+    }
+
     fn get_stat(&self) -> Stat {
         Stat::new(
             crate::makedev!(0, 5),
@@ -48,13 +59,16 @@ impl File for Zero {
             0,
         )
     }
+
     fn read_user(&self, offset: Option<usize>, mut buf: UserBuffer) -> usize {
         buf.clear();
         buf.len()
     }
+
     fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         buf.len()
     }
+    
     fn get_file_type(&self) -> DiskInodeType {
         DiskInodeType::File
     }
