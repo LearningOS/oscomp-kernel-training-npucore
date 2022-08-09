@@ -188,7 +188,7 @@ impl FileDescriptor {
         self.file.lseek(offset, whence)
     }
     pub fn get_size(&self) -> usize {
-        self.get_stat().get_size()
+        self.file.get_size()
     }
     pub fn modify_size(&self, diff: isize) -> Result<(), isize> {
         self.file.modify_size(diff)

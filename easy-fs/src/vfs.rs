@@ -218,7 +218,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         self.get_file_size()
     }
     #[inline(always)]
-    fn get_file_size(&self) -> u32 {
+    pub fn get_file_size(&self) -> u32 {
         self.file_content.read().get_file_size()
     }
     /// Check if file type is directory

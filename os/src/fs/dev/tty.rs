@@ -194,6 +194,10 @@ impl File for Teletype {
         user_buffer.len()
     }
 
+    fn get_size(&self) -> usize {
+        todo!()
+    }
+
     fn get_stat(&self) -> Stat {
         Stat::new(
             crate::makedev!(0, 5),

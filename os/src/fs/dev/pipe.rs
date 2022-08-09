@@ -112,12 +112,15 @@ impl File for Pipe {
     fn deep_clone(&self) -> Arc<dyn File> {
         todo!()
     }
+
     fn readable(&self) -> bool {
         self.readable
     }
+
     fn writable(&self) -> bool {
         self.writable
     }
+
     fn read(&self, offset: Option<&mut usize>, buf: &mut [u8]) -> usize {
         if offset.is_some() {
             return ESPIPE as usize;
@@ -171,6 +174,7 @@ impl File for Pipe {
             return read_size;
         }
     }
+
     fn write(&self, offset: Option<&mut usize>, buf: &[u8]) -> usize {
         if offset.is_some() {
             return ESPIPE as usize;
@@ -224,6 +228,7 @@ impl File for Pipe {
             return write_size;
         }
     }
+
     fn r_ready(&self) -> bool {
         let ring_buffer = self.buffer.lock();
         ring_buffer.status != RingBufferStatus::EMPTY
@@ -233,6 +238,7 @@ impl File for Pipe {
         let ring_buffer = self.buffer.lock();
         ring_buffer.status != RingBufferStatus::FULL
     }
+
     fn read_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         if offset.is_some() {
             return ESPIPE as usize;
@@ -286,6 +292,7 @@ impl File for Pipe {
             return read_size;
         }
     }
+
     fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         if offset.is_some() {
             return ESPIPE as usize;
@@ -340,6 +347,10 @@ impl File for Pipe {
         }
     }
 
+    fn get_size(&self) -> usize {
+        todo!()
+    }
+    
     fn get_stat(&self) -> Stat {
         Stat::new(
             crate::makedev!(8, 0),

@@ -39,6 +39,10 @@ impl File for Hwclock {
     fn write_user(&self, offset: Option<usize>, buf: crate::mm::UserBuffer) -> usize {
         todo!()
     }
+    
+    fn get_size(&self) -> usize {
+        todo!()
+    }
 
     fn get_stat(&self) -> crate::fs::Stat {
         todo!()
