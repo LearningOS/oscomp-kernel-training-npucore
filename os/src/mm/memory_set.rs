@@ -4,9 +4,9 @@ use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::*;
-use crate::fs::SeekWhence;
 use crate::fs::file_trait::File;
 use crate::fs::swap::SWAP_DEVICE;
+use crate::fs::SeekWhence;
 use crate::syscall::errno::*;
 use crate::task::{
     current_task, trap_cx_bottom_from_tid, ustack_bottom_from_tid, AuxvEntry, AuxvType, ELFInfo,
@@ -51,7 +51,7 @@ pub enum MemoryError {
     AreaNotFound,
     AlreadyMapped,
     NotMapped,
-    NoPermmission,
+    NoPermission,
     NotInMemory,
     NotCompressed,
     NotSwappedOut,
@@ -59,6 +59,7 @@ pub enum MemoryError {
     SharedPage,
     ZramIsFull,
     SwapIsFull,
+    BeyondEOF,
 }
 
 /// The memory "space" as in user space or kernel space
@@ -222,10 +223,12 @@ impl MemorySet {
                     let page_start_va = VirtAddr::from(vpn).0;
                     let area_start_va = VirtAddr::from(area.inner.vpn_range.get_start()).0;
                     let offset_in_area = page_start_va - area_start_va;
-                    // alloc new page and do copy
+                    // if offset exceed EOF, SIGBUS should be sent
+                    if old_offset + offset_in_area > (file.get_size() + PAGE_SIZE - 1) & !0xfff {
+                        return Err(MemoryError::BeyondEOF);
+                    }
                     if area.map_perm.contains(MapPermission::W) {
                         let allocated_ppn = area.map_one_unchecked(&mut self.page_table, vpn);
-                        // if offset of lseek exceed EOF, SIGBUS should be sent, but now we unwrap directly
                         file.lseek(offset_in_area as isize, SeekWhence::SEEK_CUR)
                             .unwrap();
                         file.read(None, unsafe {
@@ -291,7 +294,11 @@ impl MemorySet {
                     area.copy_on_write(&mut self.page_table, vpn)
                 } else {
                     // Write without permission
-                    Err(MemoryError::NoPermmission)
+                    error!(
+                        "[do_page_fault] addr: {:?}, result: write no permission",
+                        addr
+                    );
+                    Err(MemoryError::NoPermission)
                 }
             }
         } else {
@@ -752,10 +759,10 @@ impl MemorySet {
                 return EBADF;
             }
             if let Some(fd) = &fd_table[fd] {
-                let file = fd.file.deep_clone();
-                if !file.readable() {
+                if !fd.readable() {
                     return EACCES;
                 }
+                let file = fd.file.deep_clone();
                 file.lseek(offset as isize, SeekWhence::SEEK_SET).unwrap();
                 new_area.map_file = Some(file);
             } else {

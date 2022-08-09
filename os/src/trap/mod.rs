@@ -2,7 +2,7 @@ mod context;
 use core::arch::{asm, global_asm};
 
 use crate::config::TRAMPOLINE;
-use crate::mm::{VirtAddr, frame_reserve};
+use crate::mm::{frame_reserve, MemoryError, VirtAddr};
 use crate::syscall::syscall;
 use crate::task::{
     current_task, current_trap_cx, do_signal, do_wake_expired, suspend_current_and_run_next,
@@ -13,7 +13,7 @@ pub use context::{MachineContext, TrapContext, UserContext};
 use riscv::register::{
     mtvec::TrapMode,
     scause::{self, Exception, Interrupt, Trap},
-    sie, stval, stvec, sepc
+    sepc, sie, stval, stvec,
 };
 
 global_asm!(include_str!("trap.S"));
@@ -86,10 +86,17 @@ pub fn trap_handler() -> ! {
             );
             // This is where we handle the page fault.
             frame_reserve(3);
-            if task.vm.lock().do_page_fault(addr).is_err() {
-                inner.add_signal(Signals::SIGSEGV);
-                log::debug!("{:?}", inner.sigpending);
-            }
+            if let Err(error) = task.vm.lock().do_page_fault(addr) {
+                match error {
+                    MemoryError::BeyondEOF => {
+                        inner.add_signal(Signals::SIGBUS);
+                    }
+                    MemoryError::NoPermission | MemoryError::BadAddress => {
+                        inner.add_signal(Signals::SIGSEGV);
+                    }
+                    _ => unreachable!()
+                }
+            };
         }
         Trap::Exception(Exception::IllegalInstruction) => {
             let task = current_task().unwrap();
@@ -147,10 +154,10 @@ pub fn trap_from_kernel() -> ! {
         match current_task() {
             Some(task) => {
                 task.acquire_inner_lock().get_trap_cx().gp.pc
-            },
+            }
             None => {
                 sepc::read()
-            },
+            }
         }
     );
 }

@@ -13,7 +13,7 @@ pub use frame_allocator::{
     frame_alloc, frame_dealloc, frame_reserve, unallocated_frames, FrameTracker,
 };
 pub use memory_set::{
-    kernel_token, remap_test, Frame, MapFlags, MapPermission, MemorySet, KERNEL_SPACE,
+    kernel_token, remap_test, Frame, MapFlags, MapPermission, MemoryError, MemorySet, KERNEL_SPACE,
 };
 use page_table::PTEFlags;
 pub use page_table::{
