@@ -21,7 +21,6 @@ use crate::{
     syscall::{errno::*},
 };
 use alloc::{
-    boxed::Box,
     string::{String, ToString},
     sync::Arc,
     vec::Vec,
@@ -104,8 +103,8 @@ impl FileDescriptor {
     pub fn write_user(&self, offset: Option<usize>, buf: UserBuffer) -> usize {
         self.file.write_user(offset, buf)
     }
-    pub fn get_stat(&self) -> Box<Stat> {
-        Box::new(self.file.get_stat())
+    pub fn get_stat(&self) -> Stat {
+        self.file.get_stat()
     }
     pub fn open(&self, path: &str, flags: OpenFlags, special_use: bool) -> Result<Self, isize> {
         if path == "" {
