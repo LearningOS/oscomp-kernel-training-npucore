@@ -214,7 +214,7 @@ use crate::{
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     let mut show_info = false;
-    if ![
+    if option_env!("LOG").is_some() && ![
         //black list
         SYSCALL_YIELD,
         // SYSCALL_READ,
@@ -447,7 +447,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
         }
     };
 
-    if show_info {
+    if option_env!("LOG").is_some() && show_info {
         match Errno::try_from(ret) {
             Ok(errno) => info!(
                 "[syscall] {}({}) -> {:?}",
