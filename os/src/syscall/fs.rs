@@ -561,7 +561,7 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
 
     match file_descriptor.open(&path, OpenFlags::O_RDONLY, false) {
         Ok(file_descriptor) => {
-            copy_to_user(token, file_descriptor.get_stat().as_ref(), buf as *mut Stat);
+            copy_to_user(token, &file_descriptor.get_stat(), buf as *mut Stat);
             SUCCESS
         }
         Err(errno) => errno,
@@ -585,7 +585,7 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
     };
     copy_to_user(
         token,
-        file_descriptor.get_stat().as_ref(),
+        &file_descriptor.get_stat(),
         statbuf as *mut Stat,
     );
     SUCCESS
