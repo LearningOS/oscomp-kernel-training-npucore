@@ -1,3 +1,4 @@
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use core::fmt::{self, Debug, Formatter};
 use core::mem::{size_of, MaybeUninit};
@@ -145,8 +146,6 @@ impl Signals {
     }
 }
 
-pub type SigSet = Signals;
-
 bitflags! {
     /// Bits in `sa_flags' used to denote the default signal action.
     pub struct SigActionFlags: usize{
@@ -236,18 +235,17 @@ impl Debug for SigAction {
 /// * `oldact`: old action
 pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -> isize {
     let task = current_task().unwrap();
-    let result = Signals::from_signum(signum);
-    match result {
-        Err(_) | Ok(Signals::EMPTY) | Ok(Signals::SIGKILL) | Ok(Signals::SIGSTOP) => {
+    match signum {
+        0 /* None */ | 9 /* SIGKILL */ | 19 /* SIGSTOP */ | 65.. /* Unsupported */ => {
             warn!("[sigaction] bad signum: {}", signum);
             EINVAL
         }
-        Ok(signal) => {
-            trace!("[sigaction] signal: {:?}", signal);
+        signum => {
+            trace!("[sigaction] signal: {:?}", Signals::from_signum(signum));
             let token = task.get_user_token();
             if !oldact.is_null() {
-                if let Some(sigact) = task.sighand.lock().remove(&signal) {
-                    copy_to_user(token, &sigact, oldact);
+                if let Some(sigact) = &task.sighand.lock()[signum] {
+                    copy_to_user(token, sigact.as_ref(), oldact);
                     trace!("[sigaction] *oldact: {:?}", sigact);
                 } else {
                     copy_to_user(token, &SigAction::new(), oldact);
@@ -258,11 +256,12 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
                 let mut sigact = unsafe { MaybeUninit::uninit().assume_init() };
                 copy_from_user(token, act, &mut sigact);
                 sigact.mask.remove(Signals::CAN_NOT_BE_MASKED);
-                // push to PCB, ignore mask and flags now
                 if !(sigact.handler == SigHandler::SIG_DFL || sigact.handler == SigHandler::SIG_IGN)
                 {
-                    task.sighand.lock().insert(signal, sigact);
-                };
+                    task.sighand.lock()[signum] = Some(Box::new(sigact));
+                } else {
+                    task.sighand.lock()[signum] = None;
+                }
                 trace!("[sigaction] *act: {:?}", sigact);
             }
             SUCCESS
@@ -308,9 +307,9 @@ pub fn do_signal() {
             inner.sigpending,
             inner.sigmask
         );
-        let result = sighand.get(&signal);
+        let signum = signal.to_signum().unwrap();
         // user-defined handler
-        if let Some(act) = result {
+        if let Some(act) = &sighand[signum] {
             let trap_cx = inner.get_trap_cx();
             // if this syscall wants to restart
             if scause::read().cause() == Trap::Exception(Exception::UserEnvCall)
@@ -336,7 +335,6 @@ pub fn do_signal() {
             let sig_size = sig_sp.checked_sub(task.ustack_base - USER_STACK_SIZE);
             if let Some(sig_size) = sig_size {
                 let token = task.get_user_token();
-                let signum = signal.to_signum().unwrap();
                 // In this case, signal hander have three parameters
                 if act.flags.contains(SigActionFlags::SA_SIGINFO) {
                     copy_to_user(
@@ -400,7 +398,7 @@ pub fn do_signal() {
             trace!(
                 "[do_signal] signal: {:?}, signum: {:?}, handler: {:?} (ra: 0x{:X}, sp: 0x{:X})",
                 signal,
-                signal.to_signum().unwrap(),
+                signum,
                 act.handler,
                 trap_cx.gp.ra,
                 trap_cx.gp.sp
@@ -412,7 +410,7 @@ pub fn do_signal() {
                 (signal | act.mask) - Signals::CAN_NOT_BE_MASKED
             };
             if act.flags.contains(SigActionFlags::SA_RESETHAND) {
-                sighand.remove(&signal);
+                sighand[signum] = None;
             }
             // go back to `trap_return`
             return;
