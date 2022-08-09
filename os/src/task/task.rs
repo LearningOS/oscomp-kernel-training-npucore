@@ -12,7 +12,7 @@ use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::syscall::CloneFlags;
 use crate::timer::{ITimerVal, TimeVal};
 use crate::trap::{trap_handler, TrapContext};
-use alloc::collections::BTreeMap;
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
@@ -42,7 +42,7 @@ pub struct TaskControlBlock {
     pub files: Arc<Mutex<FdTable>>,
     pub fs: Arc<Mutex<FsStatus>>,
     pub vm: Arc<Mutex<MemorySet>>,
-    pub sighand: Arc<Mutex<BTreeMap<Signals, SigAction>>>,
+    pub sighand: Arc<Mutex<Vec<Option<Box<SigAction>>>>>,
     pub futex: Arc<Mutex<Futex>>,
 }
 
@@ -274,7 +274,11 @@ impl TaskControlBlock {
                 ),
             })),
             vm: Arc::new(Mutex::new(memory_set)),
-            sighand: Arc::new(Mutex::new(BTreeMap::new())),
+            sighand: Arc::new(Mutex::new({
+                let mut vec =  Vec::with_capacity(64);
+                vec.resize(64, None);
+                vec
+            })),
             futex: Arc::new(Mutex::new(Futex::new())),
             inner: Mutex::new(TaskControlBlockInner {
                 sigmask: Signals::empty(),
@@ -367,7 +371,9 @@ impl TaskControlBlock {
         // substitute memory_set
         *self.vm.lock() = memory_set;
         // flush signal handler
-        *self.sighand.lock() = BTreeMap::new();
+        for sigact in self.sighand.lock().iter_mut() {
+            *sigact = None;
+        }
         // flush futex
         *self.futex.lock() = Futex::new();
         // destory all other threads
