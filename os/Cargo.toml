@@ -14,11 +14,11 @@ spin = "0.7"
 bitflags = "1.3"
 xmas-elf = "0.7.0"
 virtio-drivers = { path = "../dependency/virtio-drivers" }
-k210-pac = { path = "../dependency/k210-pac" }
-k210-hal = { path = "../dependency/k210-hal" }
-k210-soc = { path = "../dependency/k210-soc" }
-fu740-pac = { path = "../dependency/fu740-pac" }
-fu740-hal = { path = "../dependency/fu740-hal" }
+k210-pac = { path = "../dependency/k210-pac", optional = true }
+k210-hal = { path = "../dependency/k210-hal", optional = true }
+k210-soc = { path = "../dependency/k210-soc", optional = true }
+fu740-pac = { path = "../dependency/fu740-pac", optional = true }
+fu740-hal = { path = "../dependency/fu740-hal", optional = true }
 easy-fs = { path = "../easy-fs" }
 embedded-hal = "=1.0.0-alpha.7"
 nb = "1.0"
@@ -29,8 +29,8 @@ lz4_flex = { version="0.9", default-features = false }
 
 [features]
 board_qemu = []
-board_k210 = []
-board_fu740 = []
+board_k210 = ["k210-pac", "k210-hal", "k210-soc"]
+board_fu740 = ["fu740-pac", "fu740-hal"]
 log_off = ["log/max_level_off"]
 
 [profile.dev]
