@@ -1,4 +1,4 @@
-use super::manager::{TASK_MANAGER};
+use super::manager::TASK_MANAGER;
 use super::pid::{kstack_alloc, RecycleAllocator};
 use super::signal::*;
 use super::threads::Futex;
@@ -275,7 +275,7 @@ impl TaskControlBlock {
             })),
             vm: Arc::new(Mutex::new(memory_set)),
             sighand: Arc::new(Mutex::new({
-                let mut vec =  Vec::with_capacity(64);
+                let mut vec = Vec::with_capacity(64);
                 vec.resize(64, None);
                 vec
             })),
@@ -323,9 +323,9 @@ impl TaskControlBlock {
         log::trace!("[load_elf] ELF file mapped");
         // remove elf area
         crate::mm::KERNEL_SPACE
-        .lock()
-        .remove_area_with_start_vpn(VirtAddr::from(MMAP_BASE).floor())
-        .unwrap();
+            .lock()
+            .remove_area_with_start_vpn(VirtAddr::from(MMAP_BASE).floor())
+            .unwrap();
         memory_set.alloc_user_res(self.tid, true);
         let user_sp =
             memory_set.create_elf_tables(self.ustack_bottom_va(), argv_vec, envp_vec, &elf_info);
@@ -376,15 +376,16 @@ impl TaskControlBlock {
         }
         // flush futex
         *self.futex.lock() = Futex::new();
-        // destory all other threads
-        TASK_MANAGER
-            .lock()
-            .ready_queue
-            .retain(|task| (*task).tgid != (*self).tgid);
-        TASK_MANAGER
-            .lock()
-            .interruptible_queue
-            .retain(|task| (*task).tgid != (*self).tgid);
+        if self.tid_allocator.lock().get_allocated() > 1 {
+            let mut manager = TASK_MANAGER.lock();
+            // destory all other threads
+            manager
+                .ready_queue
+                .retain(|task| (*task).tgid != (*self).tgid);
+            manager
+                .interruptible_queue
+                .retain(|task| (*task).tgid != (*self).tgid);
+        };
         Ok(())
         // **** release current PCB lock
     }

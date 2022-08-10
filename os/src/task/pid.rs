@@ -35,6 +35,9 @@ impl RecycleAllocator {
         );
         self.recycled.push(id);
     }
+    pub fn get_allocated(&self) -> usize {
+        self.current - self.recycled.len()
+    }
 }
 
 lazy_static! {
