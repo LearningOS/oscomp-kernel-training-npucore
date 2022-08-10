@@ -54,7 +54,7 @@ pub struct PipeRingBuffer {
 }
 
 impl PipeRingBuffer {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let mut vec = Vec::<u8>::with_capacity(RING_DEFAULT_BUFFER_SIZE);
         unsafe {
             vec.set_len(RING_DEFAULT_BUFFER_SIZE);
@@ -68,7 +68,7 @@ impl PipeRingBuffer {
             read_end: None,
         }
     }
-    pub fn get_used_size(&self) -> usize {
+    fn get_used_size(&self) -> usize {
         if self.status == RingBufferStatus::FULL {
             self.arr.len()
         } else if self.status == RingBufferStatus::EMPTY {
@@ -82,16 +82,64 @@ impl PipeRingBuffer {
             }
         }
     }
-    pub fn set_write_end(&mut self, write_end: &Arc<Pipe>) {
+    fn buffer_read(&mut self, buf: &mut [u8]) -> usize {
+        // get range
+        let begin = self.head;
+        let mut end = if self.tail <= self.head {
+            self.arr.len()
+        } else {
+            self.tail
+        };
+        if end - begin > buf.len() {
+            end = begin + buf.len();
+        }
+        // copy
+        let read_bytes = end - begin;
+        let src_slice = &self.arr[begin..end];
+        let dst_slice = &mut buf[..read_bytes];
+        dst_slice.copy_from_slice(src_slice);
+        // update head
+        self.head = if end == self.arr.len() {
+            0
+        } else {
+            end
+        };
+        read_bytes
+    }
+    fn buffer_write(&mut self, buf: &[u8]) -> usize {
+        // get range
+        let begin = self.tail;
+        let mut end = if self.tail < self.head {
+            self.head
+        } else {
+            self.arr.len()
+        };
+        if end - begin > buf.len() {
+            end = begin + buf.len();
+        }
+        // write
+        let write_bytes = end - begin;
+        let src_slice = &buf[..write_bytes];
+        let dst_slice = &mut self.arr[begin..end];
+        dst_slice.copy_from_slice(src_slice);
+        // update tail
+        self.tail = if end == self.arr.len() {
+            0
+        } else {
+            end
+        };
+        write_bytes
+    }
+    fn set_write_end(&mut self, write_end: &Arc<Pipe>) {
         self.write_end = Some(Arc::downgrade(write_end));
     }
-    pub fn set_read_end(&mut self, read_end: &Arc<Pipe>) {
+    fn set_read_end(&mut self, read_end: &Arc<Pipe>) {
         self.read_end = Some(Arc::downgrade(read_end));
     }
-    pub fn all_write_ends_closed(&self) -> bool {
+    fn all_write_ends_closed(&self) -> bool {
         self.write_end.as_ref().unwrap().upgrade().is_none()
     }
-    pub fn all_read_ends_closed(&self) -> bool {
+    fn all_read_ends_closed(&self) -> bool {
         self.read_end.as_ref().unwrap().upgrade().is_none()
     }
 }
@@ -123,7 +171,7 @@ impl File for Pipe {
 
     fn read(&self, offset: Option<&mut usize>, buf: &mut [u8]) -> usize {
         if offset.is_some() {
-            return ESPIPE as usize;
+            todo!()
         }
         let mut read_size = 0usize;
         if buf.len() == 0 {
@@ -133,12 +181,7 @@ impl File for Pipe {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
             if !inner.sigpending.difference(inner.sigmask).is_empty() {
-                if read_size == 0 {
-                    return ERESTART as usize;
-                } else {
-                    // interrupted but has read something
-                    return read_size;
-                }
+                return ERESTART as usize;
             }
             drop(inner);
             drop(task);
@@ -151,25 +194,18 @@ impl File for Pipe {
                 suspend_current_and_run_next();
                 continue;
             }
-            for byte_ref in buf.into_iter() {
-                let index = ring.head;
-                unsafe {
-                    *byte_ref = ring.arr[index];
-                }
-                ring.head += 1;
-                if ring.head == ring.arr.len() {
-                    ring.head = 0;
-                }
-                read_size += 1;
-                if ring.head == ring.tail {
-                    break;
-                }
-            }
             // We guarantee that this operation will read at least one byte
-            if ring.head == ring.tail {
-                ring.status = RingBufferStatus::EMPTY;
-            } else {
-                ring.status = RingBufferStatus::NORMAL;
+            // So we modify status first
+            ring.status = RingBufferStatus::NORMAL;
+            let mut buf_start = 0;
+            while buf_start < buf.len() {
+                let read_bytes = ring.buffer_read(&mut buf[buf_start..]);
+                buf_start += read_bytes;
+                read_size += read_bytes;
+                if ring.head == ring.tail {
+                    ring.status = RingBufferStatus::EMPTY;
+                    return read_size;
+                }
             }
             return read_size;
         }
@@ -177,7 +213,7 @@ impl File for Pipe {
 
     fn write(&self, offset: Option<&mut usize>, buf: &[u8]) -> usize {
         if offset.is_some() {
-            return ESPIPE as usize;
+            todo!()
         }
         let mut write_size = 0usize;
         if buf.len() == 0 {
@@ -187,12 +223,7 @@ impl File for Pipe {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
             if !inner.sigpending.difference(inner.sigmask).is_empty() {
-                if write_size == 0 {
-                    return ERESTART as usize;
-                } else {
-                    // interrupted but has written something
-                    return write_size;
-                }
+                return ERESTART as usize;
             }
             drop(inner);
             drop(task);
@@ -205,25 +236,18 @@ impl File for Pipe {
                 suspend_current_and_run_next();
                 continue;
             }
-            for byte_ref in buf.into_iter() {
-                let index = ring.tail;
-                unsafe {
-                    ring.arr[index] = *byte_ref;
-                }
-                ring.tail += 1;
-                if ring.tail == ring.arr.len() {
-                    ring.tail = 0;
-                }
-                write_size += 1;
-                if ring.head == ring.tail {
-                    break;
-                }
-            }
             // We guarantee that this operation will write at least one byte
-            if ring.head == ring.tail {
-                ring.status = RingBufferStatus::FULL;
-            } else {
-                ring.status = RingBufferStatus::NORMAL;
+            // So we modify status first
+            ring.status = RingBufferStatus::NORMAL;
+            let mut buf_start = 0;
+            while buf_start < buf.len() {
+                let write_bytes = ring.buffer_write(&buf[buf_start..]);
+                buf_start += write_bytes;
+                write_size += write_bytes;
+                if ring.head == ring.tail {
+                    ring.status = RingBufferStatus::FULL;
+                    return write_size;
+                }
             }
             return write_size;
         }
@@ -251,12 +275,7 @@ impl File for Pipe {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
             if !inner.sigpending.difference(inner.sigmask).is_empty() {
-                if read_size == 0 {
-                    return ERESTART as usize;
-                } else {
-                    // interrupted but has read something
-                    return read_size;
-                }
+                return ERESTART as usize;
             }
             drop(inner);
             drop(task);
@@ -269,25 +288,20 @@ impl File for Pipe {
                 suspend_current_and_run_next();
                 continue;
             }
-            for byte_ref in buf.into_iter() {
-                let index = ring.head;
-                unsafe {
-                    *byte_ref = ring.arr[index];
-                }
-                ring.head += 1;
-                if ring.head == ring.arr.len() {
-                    ring.head = 0;
-                }
-                read_size += 1;
-                if ring.head == ring.tail {
-                    break;
-                }
-            }
             // We guarantee that this operation will read at least one byte
-            if ring.head == ring.tail {
-                ring.status = RingBufferStatus::EMPTY;
-            } else {
-                ring.status = RingBufferStatus::NORMAL;
+            // So we modify status first
+            ring.status = RingBufferStatus::NORMAL;
+            for buf in buf.buffers {
+                let mut buf_start = 0;
+                while buf_start < buf.len() {
+                    let read_bytes = ring.buffer_read(&mut buf[buf_start..]);
+                    buf_start += read_bytes;
+                    read_size += read_bytes;
+                    if ring.head == ring.tail {
+                        ring.status = RingBufferStatus::EMPTY;
+                        return read_size;
+                    }
+                }
             }
             return read_size;
         }
@@ -305,12 +319,7 @@ impl File for Pipe {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
             if !inner.sigpending.difference(inner.sigmask).is_empty() {
-                if write_size == 0 {
-                    return ERESTART as usize;
-                } else {
-                    // interrupted but has written something
-                    return write_size;
-                }
+                return ERESTART as usize;
             }
             drop(inner);
             drop(task);
@@ -323,25 +332,20 @@ impl File for Pipe {
                 suspend_current_and_run_next();
                 continue;
             }
-            for byte_ref in buf.into_iter() {
-                let index = ring.tail;
-                unsafe {
-                    ring.arr[index] = *byte_ref;
-                }
-                ring.tail += 1;
-                if ring.tail == ring.arr.len() {
-                    ring.tail = 0;
-                }
-                write_size += 1;
-                if ring.head == ring.tail {
-                    break;
-                }
-            }
             // We guarantee that this operation will write at least one byte
-            if ring.head == ring.tail {
-                ring.status = RingBufferStatus::FULL;
-            } else {
-                ring.status = RingBufferStatus::NORMAL;
+            // So we modify status first
+            ring.status = RingBufferStatus::NORMAL;
+            for buf in buf.buffers {
+                let mut buf_start = 0;
+                while buf_start < buf.len() {
+                    let write_bytes = ring.buffer_write(&buf[buf_start..]);
+                    buf_start += write_bytes;
+                    write_size += write_bytes;
+                    if ring.head == ring.tail {
+                        ring.status = RingBufferStatus::FULL;
+                        return write_size;
+                    }
+                }
             }
             return write_size;
         }
