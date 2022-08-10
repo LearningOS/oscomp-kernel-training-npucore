@@ -1,7 +1,9 @@
+#[cfg(feature = "board_k210")]
 mod sdcard;
 mod virtio_blk;
 mod mem_blk;
 
+#[cfg(feature = "board_k210")]
 pub use sdcard::SDCardWrapper;
 pub use virtio_blk::VirtIOBlock;
 pub use mem_blk::MemBlockWrapper;
