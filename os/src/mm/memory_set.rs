@@ -12,6 +12,7 @@ use crate::task::{
     current_task, trap_cx_bottom_from_tid, ustack_bottom_from_tid, AuxvEntry, AuxvType, ELFInfo,
 };
 use crate::timer::TICKS_PER_SEC;
+use crate::trap::TrapContext;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -76,7 +77,7 @@ impl MemorySet {
     pub fn new_bare() -> Self {
         Self {
             page_table: PageTable::new(),
-            areas: Vec::new(),
+            areas: Vec::with_capacity(16),
         }
     }
     /// Getter to the token of current memory space, or "this" page table.
@@ -612,13 +613,11 @@ impl MemorySet {
         let trap_cx_area = user_space.areas.last().unwrap();
         let area = MapArea::from_another(trap_cx_area);
         memory_set.push(area, None).unwrap();
-        for vpn in trap_cx_area.inner.vpn_range {
-            let src_ppn = user_space.translate(vpn).unwrap().ppn();
-            let dst_ppn = memory_set.translate(vpn).unwrap().ppn();
-            dst_ppn
-                .get_bytes_array()
-                .copy_from_slice(src_ppn.get_bytes_array());
-        }
+
+        let vpn = trap_cx_area.inner.vpn_range.get_start();
+        let src_pa: PhysAddr = user_space.translate(vpn).unwrap().ppn().into();
+        let dst_pa: PhysAddr = memory_set.translate(vpn).unwrap().ppn().into();
+        unsafe { core::ptr::copy_nonoverlapping(src_pa.0 as *const TrapContext, dst_pa.0 as *mut TrapContext, 1) };
         debug!(
             "[fork] copy trap_cx area: {:?}",
             trap_cx_area.inner.vpn_range

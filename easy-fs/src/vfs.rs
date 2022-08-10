@@ -297,7 +297,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         let byts_per_sec = self.fs.byts_per_sec as usize;
         let sec_per_cache = T::CACHE_SZ / byts_per_sec;
         let mut sec_id = inner_cache_id * sec_per_cache;
-        let mut block_ids = Vec::new();
+        let mut block_ids = Vec::with_capacity(sec_per_cache);
         for _ in 0..sec_per_cache {
             let cluster_id = sec_id / sec_per_clus;
             if cluster_id >= clus_list.len() {
@@ -641,14 +641,10 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn get_all_cache(&self) -> Vec<Arc<Mutex<T::CacheType>>> {
         let inode_lock = self.read();
         let lock = self.file_content.read();
-        let mut inner_cache_id = 0;
-        let mut cache_list = Vec::<Arc<Mutex<T::CacheType>>>::new();
-        loop {
-            if inner_cache_id * T::CACHE_SZ >= lock.size as usize {
-                break;
-            }
+        let cache_num = (lock.size as usize + T::CACHE_SZ - 1) / T::CACHE_SZ;
+        let mut cache_list = Vec::<Arc<Mutex<T::CacheType>>>::with_capacity(cache_num);
+        for inner_cache_id in 0..cache_num {
             cache_list.push(self.get_single_cache_lock(&inode_lock, inner_cache_id));
-            inner_cache_id += 1;
         }
         cache_list
     }
