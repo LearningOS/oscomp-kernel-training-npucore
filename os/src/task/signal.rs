@@ -7,7 +7,9 @@ use riscv::register::scause::{Exception, Trap};
 use riscv::register::{scause, stval};
 
 use crate::config::*;
-use crate::mm::{copy_from_user, copy_to_user, get_from_user_checked, translated_ref};
+use crate::mm::{
+    copy_from_user, copy_to_user, get_from_user_checked, translated_ref, translated_refmut,
+};
 use crate::syscall::errno::*;
 use crate::task::manager::wait_with_timeout;
 use crate::task::{block_current_and_run_next, exit_current_and_run_next, exit_group_and_run_next};
@@ -137,11 +139,12 @@ impl Signals {
             Err(())
         }
     }
-    pub fn peek_front(&self) -> Option<Signals> {
+    /// Returns rightmost signal's signum if self is not empty.
+    pub fn peek_front(&self) -> Option<usize> {
         if self.is_empty() {
             None
         } else {
-            Signals::from_bits(1 << (self.bits().trailing_zeros() as usize))
+            Some(self.bits().trailing_zeros() as usize + 1)
         }
     }
 }
@@ -244,7 +247,7 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
             trace!("[sigaction] signal: {:?}", Signals::from_signum(signum));
             let token = task.get_user_token();
             if !oldact.is_null() {
-                if let Some(sigact) = &task.sighand.lock()[signum] {
+                if let Some(sigact) = &task.sighand.lock()[signum - 1] {
                     copy_to_user(token, sigact.as_ref(), oldact);
                     trace!("[sigaction] *oldact: {:?}", sigact);
                 } else {
@@ -258,9 +261,9 @@ pub fn sigaction(signum: usize, act: *const SigAction, oldact: *mut SigAction) -
                 sigact.mask.remove(Signals::CAN_NOT_BE_MASKED);
                 if !(sigact.handler == SigHandler::SIG_DFL || sigact.handler == SigHandler::SIG_IGN)
                 {
-                    task.sighand.lock()[signum] = Some(Box::new(sigact));
+                    task.sighand.lock()[signum - 1] = Some(Box::new(sigact));
                 } else {
-                    task.sighand.lock()[signum] = None;
+                    task.sighand.lock()[signum - 1] = None;
                 }
                 trace!("[sigaction] *act: {:?}", sigact);
             }
@@ -297,9 +300,9 @@ impl SignalStack {
 
 pub fn do_signal() {
     let task = current_task().unwrap();
-    let mut sighand = task.sighand.lock();
     let mut inner = task.acquire_inner_lock();
-    while let Some(signal) = inner.sigpending.difference(inner.sigmask).peek_front() {
+    while let Some(signum) = inner.sigpending.difference(inner.sigmask).peek_front() {
+        let signal = Signals::from_bits_truncate(1 << (signum - 1));
         inner.sigpending.remove(signal);
         trace!(
             "[do_signal] signal: {:?}, pending: {:?}, sigmask: {:?}",
@@ -307,9 +310,9 @@ pub fn do_signal() {
             inner.sigpending,
             inner.sigmask
         );
-        let signum = signal.to_signum().unwrap();
+        let mut sighand = task.sighand.lock();
         // user-defined handler
-        if let Some(act) = &sighand[signum] {
+        if let Some(act) = &sighand[signum - 1] {
             let trap_cx = inner.get_trap_cx();
             // if this syscall wants to restart
             if scause::read().cause() == Trap::Exception(Exception::UserEnvCall)
@@ -361,12 +364,11 @@ pub fn do_signal() {
                                                   // In this case, signal handler only have one parameter (a0 <- signum), so only copy something necessary
                                                   // To simplify the implementation of sigreturn, here we keep the same layout as above...
                 } else {
-                    copy_to_user(
+                    *translated_refmut(
                         token,
-                        &inner.sigmask,
                         (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>())
                             as *mut Signals,
-                    ); // push sigmask into user stack
+                    ) = inner.sigmask; // push sigmask into user stack
                     copy_to_user(
                         token,
                         (trap_cx as *const TrapContext).cast::<MachineContext>(),
@@ -410,7 +412,7 @@ pub fn do_signal() {
                 (signal | act.mask) - Signals::CAN_NOT_BE_MASKED
             };
             if act.flags.contains(SigActionFlags::SA_RESETHAND) {
-                sighand[signum] = None;
+                sighand[signum - 1] = None;
             }
             // go back to `trap_return`
             return;
@@ -481,24 +483,23 @@ pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize
     let token = task.get_user_token();
     // If oldset is non-NULL, the previous value of the signal mask is stored in oldset
     if oldset as usize != 0 {
-        copy_to_user(token, &inner.sigmask, oldset);
+        *translated_refmut(token, oldset) = inner.sigmask;
         trace!("[sigprocmask] *oldset: ({:?})", inner.sigmask);
     }
     // If set is NULL, then the signal mask is unchanged
     if set as usize != 0 {
         let how = SigMaskHow::from_bits(how);
-        let mut signal_set: Signals = unsafe { MaybeUninit::uninit().assume_init() };
-        copy_from_user(token, set, &mut signal_set);
+        let signal_set = *translated_ref(token, set);
         trace!("[sigprocmask] how: {:?}, *set: ({:?})", how, signal_set);
         match how {
             // add the signals not yet blocked in the given set to the mask
             Some(SigMaskHow::SIG_BLOCK) => {
-                inner.sigmask = inner.sigmask.union(signal_set);
+                inner.sigmask.insert(signal_set);
             }
             // remove the blocked signals in the set from the sigmask
             // NOTE: unblocking a signal not blocked is allowed
             Some(SigMaskHow::SIG_UNBLOCK) => {
-                inner.sigmask = inner.sigmask.difference(signal_set);
+                inner.sigmask.remove(signal_set);
             }
             // set the signal mask to what we see
             Some(SigMaskHow::SIG_SETMASK) => {
@@ -509,7 +510,7 @@ pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize
         };
         // unblock SIGILL & SIGSEGV, otherwise infinite loop may occurred
         // unblock SIGKILL & SIGSTOP, they can't be masked according to standard
-        inner.sigmask = inner.sigmask.difference(Signals::CAN_NOT_BE_MASKED);
+        inner.sigmask.remove(Signals::CAN_NOT_BE_MASKED);
     }
     SUCCESS
 }
@@ -599,8 +600,7 @@ pub fn sigtimedwait(set: *const Signals, info: *mut SigInfo, timeout: *const Tim
     // interrupted by signal(s)
     if !inner.sigpending.is_empty() {
         match (inner.sigpending & set).peek_front() {
-            Some(signal) => {
-                let signum = signal.to_signum().unwrap();
+            Some(signum) => {
                 if !info.is_null() {
                     copy_to_user(token, &SigInfo::new(signum, 0, 0), info);
                 }

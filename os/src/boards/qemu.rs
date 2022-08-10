@@ -8,8 +8,8 @@ pub const MMIO: &[(usize, usize)] = &[
 
 pub type BlockDeviceImpl = crate::drivers::block::VirtIOBlock;
 
-pub const VIRT_PLIC: usize = 0xC00_0000;
-pub const VIRT_UART: usize = 0x1000_0000;
+// pub const VIRT_PLIC: usize = 0xC00_0000;
+// pub const VIRT_UART: usize = 0x1000_0000;
 
 // use crate::drivers::plic::{IntrTargetPriority, PLIC};
 

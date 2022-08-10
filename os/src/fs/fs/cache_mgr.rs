@@ -374,20 +374,24 @@ impl CacheManager for PageCacheManager {
     where
         FUNC: Fn() -> Vec<usize>,
     {
-        let mut new_page_cache = PageCache::new();
+        crate::mm::frame_reserve(1);
         let mut lock = self.cache_pool.lock();
         while inner_cache_id >= lock.len() {
             lock.push(None);
         }
-        let mut page_cache = lock[inner_cache_id].clone();
-        if page_cache.is_none() {
-            new_page_cache.read_in(neighbor(), &block_device);
-            let new_page_cache = Arc::new(Mutex::new(new_page_cache));
-            page_cache = Some(new_page_cache.clone());
-            lock[inner_cache_id] = Some(new_page_cache);
-            self.allocated_cache.lock().push(inner_cache_id);
-        }
-        let page_cache = page_cache.unwrap();
+        let page_cache = match &lock[inner_cache_id] {
+            Some(page_cache) => {
+                page_cache.clone()
+            },
+            None => {
+                let mut new_page_cache = PageCache::new();
+                new_page_cache.read_in(neighbor(), &block_device);
+                let new_page_cache = Arc::new(Mutex::new(new_page_cache));
+                lock[inner_cache_id] = Some(new_page_cache.clone());
+                self.allocated_cache.lock().push(inner_cache_id);
+                new_page_cache
+            },
+        };
         let mut inner_lock = page_cache.lock();
         if inner_lock.priority < PRIORITY_UPPERBOUND {
             inner_lock.priority += 1;

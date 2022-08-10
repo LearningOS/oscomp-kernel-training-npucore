@@ -111,7 +111,7 @@ impl DirectoryTreeNode {
         *self.spe_usage.lock() -= 1;
     }
     pub fn get_cwd(&self) -> String {
-        let mut pathv = Vec::<String>::new();
+        let mut pathv = Vec::<String>::with_capacity(8);
         let mut current_inode = self.get_arc();
         loop {
             let lock = current_inode.father.lock();
@@ -135,7 +135,7 @@ impl DirectoryTreeNode {
         self.selfptr.lock().upgrade().unwrap().clone()
     }
     fn parse_dir_path(path: &str) -> Vec<&str> {
-        path.split('/').fold(Vec::new(), |mut v, s| {
+        path.split('/').fold(Vec::with_capacity(8), |mut v, s| {
             match s {
                 "" | "." => {}
                 ".." => {

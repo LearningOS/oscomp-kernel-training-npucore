@@ -478,8 +478,8 @@ pub fn sys_execve(
     let task = current_task().unwrap();
     let token = task.get_user_token();
     let path = translated_str(token, pathname);
-    let mut argv_vec: Vec<String> = Vec::new();
-    let mut envp_vec: Vec<String> = Vec::new();
+    let mut argv_vec: Vec<String> = Vec::with_capacity(16);
+    let mut envp_vec: Vec<String> = Vec::with_capacity(16);
     if !argv.is_null() {
         loop {
             let arg_ptr = *translated_ref(token, argv);
@@ -939,10 +939,9 @@ pub fn sys_sigreturn() -> isize {
     let trap_cx = inner.get_trap_cx();
     // restore sigmask & trap context
     let ucontext_addr = (trap_cx.gp.sp + size_of::<SigInfo>() + 0x7) & !0x7;
-    copy_from_user(
+    inner.sigmask = *translated_ref(
         token,
         (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>()) as *mut Signals,
-        &mut inner.sigmask,
     ); // restore sigmask
     copy_from_user(
         token,

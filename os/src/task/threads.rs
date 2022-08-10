@@ -146,4 +146,7 @@ impl Futex {
             wake_cnt
         }
     }
+    pub fn clear(&mut self) {
+        self.inner.clear();
+    }
 }

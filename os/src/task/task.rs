@@ -15,7 +15,6 @@ use crate::trap::{trap_handler, TrapContext};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{self, Debug, Formatter};
 use riscv::register::scause::{Interrupt, Trap};
@@ -258,14 +257,12 @@ impl TaskControlBlock {
             exit_signal: Signals::empty(),
             exe: Arc::new(Mutex::new(elf)),
             tid_allocator,
-            files: Arc::new(Mutex::new(FdTable::new(vec![
-                // 0 -> stdin
-                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
-                // 1 -> stdout
-                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
-                // 2 -> stderr
-                Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap()),
-            ]))),
+            files: Arc::new(Mutex::new(FdTable::new({
+                let mut vec = Vec::with_capacity(256);
+                let tty = Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap());
+                vec.resize(3, tty);
+                vec
+            }))),
             fs: Arc::new(Mutex::new(FsStatus {
                 working_inode: Arc::new(
                     ROOT_FD
@@ -375,7 +372,7 @@ impl TaskControlBlock {
             *sigact = None;
         }
         // flush futex
-        *self.futex.lock() = Futex::new();
+        self.futex.lock().clear();
         if self.tid_allocator.lock().get_allocated() > 1 {
             let mut manager = TASK_MANAGER.lock();
             // destory all other threads

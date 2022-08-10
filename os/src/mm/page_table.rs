@@ -100,7 +100,11 @@ impl PageTable {
         let frame = frame_alloc().unwrap();
         PageTable {
             root_ppn: frame.ppn,
-            frames: vec![frame],
+            frames: {
+                let mut vec = Vec::with_capacity(256);
+                vec.push(frame);
+                vec
+            },
         }
     }
     /// Create an empty page table from `satp`
@@ -299,7 +303,7 @@ pub fn translated_byte_buffer_append_to_existing_vec(
     let page_table = PageTable::from_token(token);
     let mut start = ptr as usize;
     let end = start + len;
-    let mut v = existing_vec.unwrap_or_default();
+    let mut v = existing_vec.unwrap_or(Vec::with_capacity(32));
     while start < end {
         let start_va = VirtAddr::from(start);
         let mut vpn = start_va.floor();
