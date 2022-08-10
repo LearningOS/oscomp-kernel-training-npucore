@@ -53,6 +53,8 @@ pub fn rust_main() -> ! {
     println!("[kernel] Hello, world!");
     mm::init();
     mm::remap_test();
+    #[cfg(feature = "board_fu740")]
+    board::clock_init();
     trap::init();
     trap::enable_timer_interrupt();
     timer::set_next_trigger();
