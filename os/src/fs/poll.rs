@@ -135,27 +135,24 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, _time_spec: usize, sigmask: *const S
 
         for poll_fd in poll_fd.iter_mut() {
             let fd = poll_fd.fd as usize;
-            if fd >= fd_table.len() {
-                continue;
-            }
-            match &fd_table[fd] {
-                Some(inner) => {
+            match fd_table.get_ref(fd) {
+                Ok(file_descriptor) => {
                     let mut trigger = 0;
-                    if inner.file.hang_up() {
+                    if file_descriptor.file.hang_up() {
                         poll_fd.revents |= PollEvent::POLLHUP;
                         trigger = 1;
                     }
-                    if poll_fd.events.contains(PollEvent::POLLIN) && inner.file.r_ready() {
+                    if poll_fd.events.contains(PollEvent::POLLIN) && file_descriptor.file.r_ready() {
                         poll_fd.revents |= PollEvent::POLLIN;
                         trigger = 1;
                     }
-                    if poll_fd.events.contains(PollEvent::POLLOUT) && inner.file.w_ready() {
+                    if poll_fd.events.contains(PollEvent::POLLOUT) && file_descriptor.file.w_ready() {
                         poll_fd.revents |= PollEvent::POLLOUT;
                         trigger = 1;
                     }
                     done += trigger;
                 }
-                None => {}
+                Err(_) => continue
             }
         }
         if done > 0 {
@@ -308,7 +305,7 @@ pub fn pselect(
                 if !read_fds.is_set(i) {
                     continue;
                 }
-                if let Some(fd) = &fd_table[i] {
+                if let Ok(fd) = fd_table.get_ref(i) {
                     if fd.r_ready() {
                         done += 1;
                     }
@@ -321,7 +318,7 @@ pub fn pselect(
                 if !write_fds.is_set(i) {
                     continue;
                 }
-                if let Some(fd) = &fd_table[i] {
+                if let Ok(fd) = fd_table.get_ref(i) {
                     if fd.w_ready() {
                         done += 1;
                     }
@@ -352,7 +349,7 @@ pub fn pselect(
             if !read_fds.is_set(i) {
                 continue;
             }
-            if let Some(fd) = &fd_table[i] {
+            if let Ok(fd) = fd_table.get_ref(i) {
                 if !fd.r_ready() {
                     read_fds.clr(i);
                 }
@@ -365,7 +362,7 @@ pub fn pselect(
             if !write_fds.is_set(i) {
                 continue;
             }
-            if let Some(fd) = &fd_table[i] {
+            if let Ok(fd) = fd_table.get_ref(i) {
                 if !fd.w_ready() {
                     write_fds.clr(i);
                 }
