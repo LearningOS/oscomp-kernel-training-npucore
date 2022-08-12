@@ -753,20 +753,16 @@ impl MemorySet {
         if !flags.contains(MapFlags::MAP_ANONYMOUS) {
             warn!("[mmap] file-backed map!");
             let fd_table = task.files.lock();
-            if fd >= fd_table.len() {
-                // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
-                return EBADF;
-            }
-            if let Some(fd) = &fd_table[fd] {
-                if !fd.readable() {
-                    return EACCES;
-                }
-                let file = fd.file.deep_clone();
-                file.lseek(offset as isize, SeekWhence::SEEK_SET).unwrap();
-                new_area.map_file = Some(file);
-            } else {
-                // fd is not a valid file descriptor (and MAP_ANONYMOUS was not set)
-                return EBADF;
+            match fd_table.get_ref(fd) {
+                Ok(file_descriptor) => {
+                    if !file_descriptor.readable() {
+                        return EACCES;
+                    }
+                    let file = file_descriptor.file.deep_clone();
+                    file.lseek(offset as isize, SeekWhence::SEEK_SET).unwrap();
+                    new_area.map_file = Some(file);
+                },
+                Err(errno) => return errno,
             }
         }
         // insert MapArea and keep the order

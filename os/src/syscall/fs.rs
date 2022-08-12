@@ -1,5 +1,5 @@
-use crate::fs::*;
 use crate::fs::poll::{ppoll, pselect, FdSet};
+use crate::fs::*;
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string,
     get_from_user_checked, translated_byte_buffer, translated_byte_buffer_append_to_existing_vec,
@@ -25,7 +25,7 @@ fn __openat(dirfd: usize, path: &str) -> Result<FileDescriptor, isize> {
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return Err(errno),
             }
@@ -75,7 +75,7 @@ pub fn sys_lseek(fd: usize, offset: isize, whence: u32) -> isize {
     );
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -88,7 +88,7 @@ pub fn sys_lseek(fd: usize, offset: isize, whence: u32) -> isize {
 pub fn sys_read(fd: usize, buf: usize, count: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -107,18 +107,14 @@ pub fn sys_read(fd: usize, buf: usize, count: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.read_user(
         None,
-        UserBuffer::new(translated_byte_buffer(
-            token,
-            buf as *const u8,
-            count,
-        ))
+        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
     ) as isize
 }
 
 pub fn sys_write(fd: usize, buf: usize, count: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -136,18 +132,14 @@ pub fn sys_write(fd: usize, buf: usize, count: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.write_user(
         None,
-        UserBuffer::new(translated_byte_buffer(
-            token,
-            buf as *const u8,
-            count,
-        ))
+        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
     ) as isize
 }
 
 pub fn sys_pread(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -166,18 +158,14 @@ pub fn sys_pread(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.read_user(
         Some(offset),
-        UserBuffer::new(translated_byte_buffer(
-            token,
-            buf as *const u8,
-            count,
-        ))
+        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
     ) as isize
 }
 
 pub fn sys_pwrite(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -196,11 +184,7 @@ pub fn sys_pwrite(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.write_user(
         Some(offset),
-        UserBuffer::new(translated_byte_buffer(
-            token,
-            buf as *const u8,
-            count,
-        ))
+        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
     ) as isize
 }
 
@@ -214,7 +198,7 @@ struct IOVec {
 pub fn sys_readv(fd: usize, iov: usize, iovcnt: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -227,25 +211,23 @@ pub fn sys_readv(fd: usize, iov: usize, iovcnt: usize) -> isize {
     copy_from_user_array(token, iov as *const IOVec, iovecs.as_mut_ptr(), iovcnt);
     unsafe { iovecs.set_len(iovcnt) };
     file_descriptor.read_user(
-        None, 
-        UserBuffer::new(iovecs.iter().fold(
-            Vec::new(),
-            |buffer, iovec| {
-                // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
-                translated_byte_buffer_append_to_existing_vec(
-                    Some(buffer),
-                    token,
-                    iovec.iov_base,
-                    iovec.iov_len,
-                )
-            }))
+        None,
+        UserBuffer::new(iovecs.iter().fold(Vec::new(), |buffer, iovec| {
+            // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
+            translated_byte_buffer_append_to_existing_vec(
+                Some(buffer),
+                token,
+                iovec.iov_base,
+                iovec.iov_len,
+            )
+        })),
     ) as isize
 }
 
 pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -259,9 +241,7 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
     unsafe { iovecs.set_len(iovcnt) };
     file_descriptor.write_user(
         None,
-        UserBuffer::new(iovecs.iter().fold(
-        Vec::new(),
-        |buffer, iovec| {
+        UserBuffer::new(iovecs.iter().fold(Vec::new(), |buffer, iovec| {
             // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
             translated_byte_buffer_append_to_existing_vec(
                 Some(buffer),
@@ -269,8 +249,8 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
                 iovec.iov_base,
                 iovec.iov_len,
             )
-        },
-    ))) as isize
+        })),
+    ) as isize
 }
 
 /// If offset is not NULL, then it points to a variable holding the
@@ -290,11 +270,11 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
 pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: *mut usize, count: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let in_file = match fd_table.get_fd(in_fd) {
+    let in_file = match fd_table.get_ref(in_fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
-    let out_file = match fd_table.get_fd(out_fd) {
+    let out_file = match fd_table.get_ref(out_fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -339,28 +319,29 @@ pub fn sys_close(fd: usize) -> isize {
     info!("[sys_close] fd: {}", fd);
     let task = current_task().unwrap();
     let mut fd_table = task.files.lock();
-    if fd >= fd_table.len() || fd_table[fd].is_none() {
-        return EBADF;
+    match fd_table.remove(fd) {
+        Ok(_) => SUCCESS,
+        Err(errno) => errno,
     }
-    fd_table[fd].take();
-    SUCCESS
 }
 
 /// # Warning
 /// Only O_CLOEXEC is supported now
 pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
-    const VALID_FLAGS: OpenFlags = OpenFlags::from_bits_truncate(0o2000000 /* O_CLOEXEC */ | 0o40000 /* O_DIRECT */ | 0o4000 /* O_NONBLOCK */ );
+    const VALID_FLAGS: OpenFlags = OpenFlags::from_bits_truncate(
+        0o2000000 /* O_CLOEXEC */ | 0o40000 /* O_DIRECT */ | 0o4000, /* O_NONBLOCK */
+    );
     let flags = match OpenFlags::from_bits(flags) {
         Some(flags) => {
             // only O_CLOEXEC | O_DIRECT | O_NONBLOCK are valid in pipe2()
-            if flags
-                .difference(VALID_FLAGS)
-                .is_empty()
-            {
+            if flags.difference(VALID_FLAGS).is_empty() {
                 flags
             } else {
                 // some flags are invalid in pipe2(), they are all valid OpenFlags though
-                warn!("[sys_pipe2] invalid flags: {:?}", flags.difference(VALID_FLAGS));
+                warn!(
+                    "[sys_pipe2] invalid flags: {:?}",
+                    flags.difference(VALID_FLAGS)
+                );
                 return EINVAL;
             }
         }
@@ -373,24 +354,23 @@ pub fn sys_pipe2(pipefd: usize, flags: u32) -> isize {
     let task = current_task().unwrap();
     let mut fd_table = task.files.lock();
     let (pipe_read, pipe_write) = make_pipe();
-    let read_fd = match fd_table.alloc_fd() {
-        Some(fd) => fd,
-        None => return EMFILE,
-    };
-    fd_table[read_fd] = Some(FileDescriptor::new(
+    let read_fd = match fd_table.insert(FileDescriptor::new(
         flags.contains(OpenFlags::O_CLOEXEC),
         false,
         pipe_read,
-    ));
-    let write_fd = match fd_table.alloc_fd() {
-        Some(fd) => fd,
-        None => return EMFILE,
+    )) {
+        Ok(fd) => fd,
+        Err(errno) => return errno,
     };
-    fd_table[write_fd] = Some(FileDescriptor::new(
+    let write_fd = match fd_table.insert(FileDescriptor::new(
         flags.contains(OpenFlags::O_CLOEXEC),
         false,
         pipe_write,
-    ));
+    )) {
+        Ok(fd) => fd,
+        Err(errno) => return errno,
+    };
+
     let token = task.get_user_token();
     copy_to_user_array(
         token,
@@ -413,7 +393,7 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
@@ -436,15 +416,15 @@ pub fn sys_getdents64(fd: usize, dirp: *mut u8, count: usize) -> isize {
 pub fn sys_dup(oldfd: usize) -> isize {
     let task = current_task().unwrap();
     let mut fd_table = task.files.lock();
-    if oldfd >= fd_table.len() || fd_table[oldfd].is_none() {
-        return EBADF;
-    }
-    let newfd = match fd_table.alloc_fd() {
-        Some(fd) => fd,
-        None => return EMFILE,
+    let old_file_descriptor = match fd_table.get_ref(oldfd) {
+        Ok(file_descriptor) => file_descriptor.clone(),
+        Err(errno) => return errno,
+    };
+    let newfd = match fd_table.insert(old_file_descriptor) {
+        Ok(fd) => fd,
+        Err(errno) => return errno,
     };
     info!("[sys_dup] oldfd: {}, newfd: {}", oldfd, newfd);
-    fd_table[newfd] = Some(fd_table[oldfd].as_ref().unwrap().clone());
     newfd as isize
 }
 
@@ -455,10 +435,8 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: u32) -> isize {
         newfd,
         OpenFlags::from_bits(flags)
     );
-    let task = current_task().unwrap();
-    let mut fd_table = task.files.lock();
-    if oldfd >= fd_table.len() || fd_table[oldfd].is_none() {
-        return EBADF;
+    if oldfd == newfd {
+        return EINVAL;
     }
     let is_cloexec = match OpenFlags::from_bits(flags) {
         Some(OpenFlags::O_CLOEXEC) => true,
@@ -474,20 +452,18 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: u32) -> isize {
             return EINVAL;
         }
     };
-    if oldfd == newfd {
-        return EINVAL;
+    let task = current_task().unwrap();
+    let mut fd_table = task.files.lock();
+
+    let mut file_descriptor = match fd_table.get_ref(oldfd) {
+        Ok(file_descriptor) => file_descriptor.clone(),
+        Err(errno) => return errno,
+    };
+    file_descriptor.set_cloexec(is_cloexec);
+    match fd_table.insert_at(file_descriptor, newfd) {
+        Ok(fd) => fd as isize,
+        Err(errno) => errno,
     }
-    if newfd >= fd_table.len() {
-        match fd_table.alloc_fd_at(newfd) {
-            // `newfd` is not allocated in this case, so `fd` should never differ from `newfd`
-            Some(fd) => assert_eq!(fd, newfd),
-            // newfd is out of the allowed range for file descriptors
-            None => return EMFILE,
-        };
-    }
-    fd_table[newfd] = Some(fd_table[oldfd].as_ref().unwrap().clone());
-    fd_table[newfd].as_mut().unwrap().set_cloexec(is_cloexec);
-    newfd as isize
 }
 
 // This syscall is not complete at all, only /read proc/self/exe
@@ -552,7 +528,7 @@ pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> i
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
@@ -577,23 +553,19 @@ pub fn sys_fstat(fd: usize, statbuf: *mut u8) -> isize {
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
         }
     };
-    copy_to_user(
-        token,
-        &file_descriptor.get_stat(),
-        statbuf as *mut Stat,
-    );
+    copy_to_user(token, &file_descriptor.get_stat(), statbuf as *mut Stat);
     SUCCESS
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct Statfs{
+pub struct Statfs {
     /// Type of filesystem
     f_type: usize,
     /// Optimal transfer block size
@@ -643,12 +615,11 @@ pub fn sys_statfs(_path: *const u8, buf: *mut Statfs) -> isize {
 
 pub fn sys_fsync(fd: usize) -> isize {
     let task = current_task().unwrap();
-    let token = task.get_user_token();
 
     info!("[sys_fsync] fd: {}", fd);
     let fd_table = task.files.lock();
-    if fd >= fd_table.len() || fd_table[fd].is_none() {
-        return EBADF;
+    if let Err(errno) = fd_table.check(fd) {
+        return errno;
     }
     SUCCESS
 }
@@ -691,7 +662,7 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
@@ -703,11 +674,10 @@ pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize
         Err(errno) => return errno,
     };
 
-    let new_fd = match fd_table.alloc_fd() {
-        Some(fd) => fd,
-        None => return EMFILE,
+    let new_fd = match fd_table.insert(new_file_descriptor) {
+        Ok(fd) => fd,
+        Err(errno) => return errno,
     };
-    fd_table[new_fd] = Some(new_file_descriptor);
     new_fd as isize
 }
 
@@ -732,7 +702,7 @@ pub fn sys_renameat2(
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
@@ -742,7 +712,7 @@ pub fn sys_renameat2(
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
@@ -763,7 +733,7 @@ pub fn sys_renameat2(
 pub fn sys_ioctl(fd: usize, cmd: u32, arg: usize) -> isize {
     let task = current_task().unwrap();
     let fd_table = task.files.lock();
-    let file_descriptor = match fd_table.get_fd(fd) {
+    let file_descriptor = match fd_table.get_ref(fd) {
         Ok(file_descriptor) => file_descriptor,
         Err(errno) => return errno,
     };
@@ -793,7 +763,7 @@ pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
@@ -833,7 +803,7 @@ pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
         AT_FDCWD => task.fs.lock().working_inode.as_ref().clone(),
         fd => {
             let fd_table = task.files.lock();
-            match fd_table.get_fd(fd) {
+            match fd_table.get_ref(fd) {
                 Ok(file_descriptor) => file_descriptor.clone(),
                 Err(errno) => return errno,
             }
@@ -1029,32 +999,47 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
     let task = current_task().unwrap();
     let mut fd_table = task.files.lock();
 
-    if fd >= fd_table.len() || fd_table[fd].is_none() {
-        return EBADF;
-    }
-
-    let file_descriptor = fd_table[fd].as_mut().unwrap();
-
     info!(
         "[sys_fcntl] fd: {}, cmd: {:?}, arg: {:X}",
         fd,
         Fcntl_Command::from_primitive(cmd),
         arg
     );
-    
+
     match Fcntl_Command::from_primitive(cmd) {
-        Fcntl_Command::DUPFD | Fcntl_Command::DUPFD_CLOEXEC => {
-            let newfd = match fd_table.alloc_fd_at(arg) {
-                Some(fd) => fd,
-                // cmd is F_DUPFD and arg is negative or is greater than the maximum allowable value
-                None => return EMFILE,
+        Fcntl_Command::DUPFD => {
+            let new_file_descriptor = match fd_table.get_ref(fd) {
+                Ok(file_descriptor) => file_descriptor.clone(),
+                Err(errno) => return errno,
             };
-            drop(fd_table);
-            // take advantage of `DUPFD == 0`
-            sys_dup3(fd, newfd, OpenFlags::O_CLOEXEC.bits() & cmd)
+            match fd_table.try_insert_at(new_file_descriptor, arg) {
+                Ok(fd) => fd as isize,
+                Err(errno) => errno,
+            }
         }
-        Fcntl_Command::GETFD => file_descriptor.get_cloexec() as isize,
+        Fcntl_Command::DUPFD_CLOEXEC => {
+            let mut new_file_descriptor = match fd_table.get_ref(fd) {
+                Ok(file_descriptor) => file_descriptor.clone(),
+                Err(errno) => return errno,
+            };
+            new_file_descriptor.set_cloexec(true);
+            match fd_table.try_insert_at(new_file_descriptor, arg) {
+                Ok(fd) => fd as isize,
+                Err(errno) => errno,
+            }
+        }
+        Fcntl_Command::GETFD => {
+            let file_descriptor = match fd_table.get_ref(fd) {
+                Ok(file_descriptor) => file_descriptor,
+                Err(errno) => return errno,
+            };
+            file_descriptor.get_cloexec() as isize
+        }
         Fcntl_Command::SETFD => {
+            let file_descriptor = match fd_table.get_refmut(fd) {
+                Ok(file_descriptor) => file_descriptor,
+                Err(errno) => return errno,
+            };
             file_descriptor.set_cloexec((arg & FD_CLOEXEC) != 0);
             if (arg & !FD_CLOEXEC) != 0 {
                 warn!("[fcntl] Unsupported flag exists: {:X}", arg);
@@ -1062,6 +1047,10 @@ pub fn sys_fcntl(fd: usize, cmd: u32, arg: usize) -> isize {
             SUCCESS
         }
         Fcntl_Command::GETFL => {
+            let file_descriptor = match fd_table.get_ref(fd) {
+                Ok(file_descriptor) => file_descriptor,
+                Err(errno) => return errno,
+            };
             // Access control is not fully implemented
             let mut res = OpenFlags::O_RDWR.bits() as isize;
             if file_descriptor.get_nonblock() {
