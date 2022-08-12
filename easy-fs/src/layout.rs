@@ -590,7 +590,7 @@ impl FATLongDirEnt {
             core::ptr::addr_of_mut!(long_ent.name3)
                 .write_unaligned(partial_name[11..].try_into().expect("Failed to cast!"));
         }
-        assert!(order < 0x47);
+        debug_assert!(order < 0x47);
         long_ent.ord = order as u8;
         if is_last_ent {
             long_ent.ord |= LAST_LONG_ENTRY;

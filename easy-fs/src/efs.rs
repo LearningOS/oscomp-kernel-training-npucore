@@ -56,8 +56,8 @@ impl<F: CacheManager> EasyFileSystem<F> {
     /// sector number
     #[inline(always)]
     pub fn first_sector_of_cluster(&self, clus_num: u32) -> u32 {
-        assert_eq!(self.sec_per_clus.count_ones(), 1);
-        assert!(clus_num >= 2);
+        debug_assert_eq!(self.sec_per_clus.count_ones(), 1);
+        debug_assert!(clus_num >= 2);
         let start_block = self.data_area_start_block;
         let offset_blocks = (clus_num - 2) * self.sec_per_clus as u32;
         start_block + offset_blocks
@@ -70,7 +70,7 @@ impl<F: CacheManager> EasyFileSystem<F> {
         block_device: Arc<dyn BlockDevice>,
         index_cache_mgr: Arc<spin::Mutex<F>>,
     ) -> Arc<Self> {
-        assert!(F::CACHE_SZ % BLOCK_SZ == 0);
+        debug_assert!(F::CACHE_SZ % BLOCK_SZ == 0);
         // read SuperBlock
         let fat_cache_mgr = index_cache_mgr.clone();
         index_cache_mgr
@@ -83,7 +83,7 @@ impl<F: CacheManager> EasyFileSystem<F> {
             )
             .lock()
             .read(0, |super_block: &BPB| {
-                assert!(super_block.is_valid(), "Error loading EFS!");
+                debug_assert!(super_block.is_valid(), "Error loading EFS!");
                 let efs = Self {
                     block_device,
                     fat: Fat::new(
@@ -105,7 +105,7 @@ impl<F: CacheManager> EasyFileSystem<F> {
         let sec_per_clus = self.sec_per_clus as usize;
         let alloc_num = blocks.div_ceil(sec_per_clus);
         let clus = self.fat.alloc(&self.block_device, alloc_num, None);
-        assert_eq!(clus.len(), alloc_num);
+        debug_assert_eq!(clus.len(), alloc_num);
         let mut block_ids = Vec::<usize>::new();
         for clus_id in clus {
             let first_sec = self.first_sector_of_cluster(clus_id) as usize;
