@@ -372,7 +372,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     pub fn modify_size_lock(&self, _inode_lock: &RwLockWriteGuard<InodeLock>, diff: isize) {
         let mut lock = self.file_content.write();
 
-        assert!(diff.saturating_add(lock.size as isize) >= 0);
+        debug_assert!(diff.saturating_add(lock.size as isize) >= 0);
 
         let old_size = lock.size;
         let new_size = (lock.size as isize + diff) as u32;
@@ -548,7 +548,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         }
         let end = (offset + buf.len()).min(self.get_file_size() as usize);
 
-        assert!(start <= end);
+        debug_assert!(start <= end);
 
         let mut start_cache = start / T::CACHE_SZ;
         let mut write_size = 0;
@@ -667,7 +667,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         mode: DirIterMode,
         forward: bool,
     ) -> DirIter<'a, 'b, T, F> {
-        assert!(self.is_dir(), "this isn't a directory");
+        debug_assert!(self.is_dir(), "this isn't a directory");
         DirIter::new(inode_lock, offset, mode, forward, self)
     }
     /// Set the offset of the last entry in the directory file(first byte is 0x00) to hint
@@ -844,7 +844,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         inode_lock: &RwLockWriteGuard<InodeLock>,
         offset: u32,
     ) -> Result<(FATShortDirEnt, Vec<FATLongDirEnt>), ()> {
-        assert!(self.is_dir());
+        debug_assert!(self.is_dir());
         let short_ent: FATShortDirEnt;
         let mut long_ents = Vec::<FATLongDirEnt>::new();
 
@@ -897,7 +897,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         inode_lock: &RwLockWriteGuard<InodeLock>,
         offset: u32,
     ) -> Result<(), ()> {
-        assert!(self.is_dir());
+        debug_assert!(self.is_dir());
         let mut iter = self.dir_iter(inode_lock, Some(offset), DirIterMode::Used, BACKWARD);
 
         iter.write_to_current_ent(&FATDirEnt::unused_not_last_entry());
@@ -973,7 +973,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         short_ent: FATShortDirEnt,
         long_ents: Vec<FATLongDirEnt>,
     ) -> Result<u32, ()> {
-        assert!(self.is_dir());
+        debug_assert!(self.is_dir());
         let short_ent_offset = match self.alloc_dir_ent(inode_lock, 1 + long_ents.len()) {
             Ok(offset) => offset,
             Err(_) => return Err(()),
@@ -1012,7 +1012,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
         inode_lock: &RwLockWriteGuard<InodeLock>,
         parent_dir_clus_num: u32,
     ) -> Result<(), ()> {
-        assert!(self.is_dir());
+        debug_assert!(self.is_dir());
         let mut iter = self.dir_iter(inode_lock, None, DirIterMode::Used, FORWARD);
         loop {
             let dir_ent = iter.next();
@@ -1203,7 +1203,7 @@ impl<T: CacheManager, F: CacheManager> Inode<T, F> {
     /// A long name slice
     fn gen_long_name_slice(name: &String, long_ent_index: usize) -> [u16; 13] {
         let mut v: Vec<u16> = name.encode_utf16().collect();
-        assert!(long_ent_index * 13 < v.len());
+        debug_assert!(long_ent_index * 13 < v.len());
         while v.len() < (long_ent_index + 1) * 13 {
             v.push(0);
         }

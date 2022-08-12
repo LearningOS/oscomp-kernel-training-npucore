@@ -203,7 +203,7 @@ impl<T: CacheManager> Fat<T> {
     ) -> Option<u32> {
         if last.is_some() {
             let next_cluster_of_current = self.get_next_clus_num(last.unwrap(), block_device);
-            assert!(next_cluster_of_current >= FAT_ENTRY_RESERVED_TO_END);
+            debug_assert!(next_cluster_of_current >= FAT_ENTRY_RESERVED_TO_END);
         }
         // Now we can allocate clusters freely
 
