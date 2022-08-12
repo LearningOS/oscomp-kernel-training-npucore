@@ -1,24 +1,27 @@
+mod cache;
 mod dev;
 pub mod directory_tree;
+mod fat32;
 pub mod file_trait;
 mod filesystem;
-mod fs;
 mod layout;
 pub mod poll;
 pub mod swap;
 
+pub use self::dev::{hwclock::*, null::*, pipe::*, socket::*, tty::*, zero::*};
 use core::{
     ops::{Index, IndexMut},
     slice::{Iter, IterMut},
 };
-pub use {self::dev::{null::*, pipe::*, socket::*, tty::*, zero::*, hwclock::*}};
 
 pub use self::layout::*;
 
-use self::{directory_tree::DirectoryTreeNode, file_trait::File, fs::cache_mgr::PageCache};
+pub use self::fat32::{BlockDevice, DiskInodeType, BLOCK_SZ};
+
+use self::{cache::PageCache, directory_tree::DirectoryTreeNode, file_trait::File};
 use crate::{
-    mm::{UserBuffer, Frame},
-    syscall::{errno::*},
+    mm::{Frame, UserBuffer},
+    syscall::errno::*,
 };
 use alloc::{
     string::{String, ToString},
@@ -51,7 +54,11 @@ pub struct FileDescriptor {
 #[allow(unused)]
 impl FileDescriptor {
     pub fn new(cloexec: bool, nonblock: bool, file: Arc<dyn File>) -> Self {
-        Self { cloexec, nonblock, file }
+        Self {
+            cloexec,
+            nonblock,
+            file,
+        }
     }
     pub fn set_cloexec(&mut self, flag: bool) {
         self.cloexec = flag;
@@ -62,7 +69,7 @@ impl FileDescriptor {
 
     pub fn get_nonblock(&self) -> bool {
         self.nonblock
-    } 
+    }
 
     pub fn get_cwd(&self) -> Option<String> {
         let inode = self.file.get_dirtree_node();
@@ -218,9 +225,7 @@ impl FileDescriptor {
         let caches = self.get_all_caches().unwrap();
         let frames = caches
             .iter()
-            .map(|cache| {
-                Frame::InMemory(cache.try_lock().unwrap().get_tracker())
-            })
+            .map(|cache| Frame::InMemory(cache.try_lock().unwrap().get_tracker()))
             .collect();
 
         crate::mm::KERNEL_SPACE
@@ -342,7 +347,7 @@ impl FdTable {
                     self.inner.resize(hint + 1, None);
                     Some(hint)
                 }
-            },
+            }
         }
     }
 }

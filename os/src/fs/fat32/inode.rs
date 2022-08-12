@@ -1,20 +1,19 @@
-use super::cache_mgr::*;
-use crate::fs::*;
 use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::file_trait::File;
+use crate::fs::*;
 use crate::mm::UserBuffer;
 use crate::syscall::errno::*;
 use core::panic;
 
+use super::layout::FATDiskInodeType;
+pub use super::DiskInodeType;
+use super::Inode;
 use alloc::string::ToString;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use easy_fs::layout::FATDiskInodeType;
-pub use easy_fs::DiskInodeType;
-use easy_fs::Inode;
 use spin::Mutex;
 
-pub type InodeImpl = Inode<PageCacheManager, BlockCacheManager>;
+pub type InodeImpl = Inode;
 
 pub struct OSInode {
     readable: bool,
@@ -88,17 +87,13 @@ impl File for OSInode {
     fn read(&self, offset: Option<&mut usize>, buffer: &mut [u8]) -> usize {
         match offset {
             Some(offset) => {
-                let len = self
-                    .inner
-                    .read_at_block_cache(*offset, buffer);
+                let len = self.inner.read_at_block_cache(*offset, buffer);
                 *offset += len;
                 len
             }
             None => {
                 let mut offset = self.offset.lock();
-                let len = self
-                    .inner
-                    .read_at_block_cache(*offset, buffer);
+                let len = self.inner.read_at_block_cache(*offset, buffer);
                 *offset += len;
                 len
             }
@@ -114,9 +109,7 @@ impl File for OSInode {
     fn write(&self, offset: Option<&mut usize>, buffer: &[u8]) -> usize {
         match offset {
             Some(offset) => {
-                let len = self
-                    .inner
-                    .write_at_block_cache(*offset, buffer);
+                let len = self.inner.write_at_block_cache(*offset, buffer);
                 *offset += len;
                 len
             }
@@ -157,7 +150,7 @@ impl File for OSInode {
                     *offset += read_size;
                     total_read_size += read_size;
                 }
-            },
+            }
             None => {
                 let mut offset = self.offset.lock();
                 for slice in buf.buffers.iter_mut() {
@@ -170,7 +163,7 @@ impl File for OSInode {
                     *offset += read_size;
                     total_read_size += read_size;
                 }
-            },
+            }
         }
         total_read_size
     }
@@ -189,7 +182,7 @@ impl File for OSInode {
                     *offset += write_size;
                     total_write_size += write_size;
                 }
-            },
+            }
             None => {
                 let mut offset = self.offset.lock();
                 if self.append {
@@ -203,7 +196,7 @@ impl File for OSInode {
                     *offset += write_size;
                     total_write_size += write_size;
                 }
-            },
+            }
         }
         total_write_size
     }
@@ -221,7 +214,17 @@ impl File for OSInode {
                     .bits()
             }
         };
-        Stat::new(crate::makedev!(8, 0), ino, st_mod, 1, 0, size, atime, mtime, ctime)
+        Stat::new(
+            crate::makedev!(8, 0),
+            ino,
+            st_mod,
+            1,
+            0,
+            size,
+            atime,
+            mtime,
+            ctime,
+        )
     }
     fn get_file_type(&self) -> DiskInodeType {
         self.inner.get_file_type()
@@ -289,7 +292,12 @@ impl File for OSInode {
         let child_inode_lock = child.inner.write();
         if child
             .inner
-            .link_par_lock(&child_inode_lock, &self.inner, &par_inode_lock, name.to_string())
+            .link_par_lock(
+                &child_inode_lock,
+                &self.inner,
+                &par_inode_lock,
+                name.to_string(),
+            )
             .is_err()
         {
             panic!();
@@ -394,7 +402,9 @@ impl File for OSInode {
         }
         let inode_lock = self.inner.read();
         let inner_cache_id = offset >> 12;
-        Ok(self.inner.get_single_cache_lock(&inode_lock, inner_cache_id))
+        Ok(self
+            .inner
+            .get_single_cache_lock(&inode_lock, inner_cache_id))
     }
     fn get_all_caches(&self) -> Result<Vec<Arc<Mutex<PageCache>>>, ()> {
         Ok(self.inner.get_all_cache())

@@ -7,12 +7,12 @@ use alloc::{
     vec::Vec,
 };
 use downcast_rs::*;
-use easy_fs::DiskInodeType;
+use super::fat32::DiskInodeType;
 use spin::Mutex;
 
 use super::{
     directory_tree::DirectoryTreeNode,
-    fs::cache_mgr::PageCache,
+    cache::PageCache,
     layout::*,
 };
 

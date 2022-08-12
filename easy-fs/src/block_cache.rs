@@ -31,39 +31,6 @@ pub trait CacheManager {
     fn new() -> Self
     where
         Self: Sized;
-
-    /// Try to get the block cache and return `None` if not found.
-    /// # Argument
-    /// + `block_id`: The demanded block id(for block cache).
-    /// + `inner_cache_id`: The ordinal number of the cache inside the file(for page cache).
-    /// # Return Value
-    /// If found, return Some(pointer to cache)
-    /// otherwise, return None
-    fn try_get_block_cache(
-        &self,
-        block_id: usize,
-        inner_cache_id: usize,
-    ) -> Option<Arc<Mutex<Self::CacheType>>>;
-
-    /// Attempt to get block cache from the cache.
-    /// If failed, the manager should try to copy the block from sdcard.
-    /// # Argument
-    /// + `block_id`: The demanded block id(for block cache).
-    /// + `inner_cache_id`: The ordinal number of the cache inside the file(for page cache).
-    /// + `neighbor`: A closure to get block ids when cache miss.
-    /// + `block_device`: The pointer to the block_device.
-    /// # Return Value
-    /// Pointer to cache
-    fn get_block_cache<FUNC>(
-        &self,
-        block_id: usize,
-        inner_cache_id: usize,
-        neighbor: FUNC,
-        block_device: &Arc<dyn BlockDevice>,
-    ) -> Arc<Mutex<Self::CacheType>>
-    where
-        FUNC: Fn() -> Vec<usize>;
-    
     /// Tell cache manager to write back cache and release memory
     /// # Argument
     /// + `neighbor`: A closure to get block ids when cache miss.
@@ -89,4 +56,65 @@ pub trait CacheManager {
     ) {
         unreachable!()
     }
+}
+
+pub trait BlockCacheManager: CacheManager {
+    /// Try to get the block cache and return `None` if not found.
+    /// # Argument
+    /// + `block_id`: The demanded block id(for block cache).
+    /// + `inner_cache_id`: The ordinal number of the cache inside the file(for page cache).
+    /// # Return Value
+    /// If found, return Some(pointer to cache)
+    /// otherwise, return None
+    fn try_get_block_cache(
+        &self,
+        block_id: usize,
+    ) -> Option<Arc<Mutex<Self::CacheType>>>;
+
+    /// Attempt to get block cache from the cache.
+    /// If failed, the manager should try to copy the block from sdcard.
+    /// # Argument
+    /// + `block_id`: The demanded block id(for block cache).
+    /// + `inner_cache_id`: The ordinal number of the cache inside the file(for page cache).
+    /// + `neighbor`: A closure to get block ids when cache miss.
+    /// + `block_device`: The pointer to the block_device.
+    /// # Return Value
+    /// Pointer to cache
+    fn get_block_cache<FUNC>(
+        &self,
+        block_id: usize,
+        block_device: &Arc<dyn BlockDevice>,
+    ) -> Arc<Mutex<Self::CacheType>>;
+}
+
+pub trait PageCacheManager: CacheManager {
+    /// Try to get the block cache and return `None` if not found.
+    /// # Argument
+    /// + `block_id`: The demanded block id(for block cache).
+    /// + `inner_cache_id`: The ordinal number of the cache inside the file(for page cache).
+    /// # Return Value
+    /// If found, return Some(pointer to cache)
+    /// otherwise, return None
+    fn try_get_page_cache(
+        &self,
+        inner_cache_id: usize,
+    ) -> Option<Arc<Mutex<Self::CacheType>>>;
+
+    /// Attempt to get block cache from the cache.
+    /// If failed, the manager should try to copy the block from sdcard.
+    /// # Argument
+    /// + `block_id`: The demanded block id(for block cache).
+    /// + `inner_cache_id`: The ordinal number of the cache inside the file(for page cache).
+    /// + `neighbor`: A closure to get block ids when cache miss.
+    /// + `block_device`: The pointer to the block_device.
+    /// # Return Value
+    /// Pointer to cache
+    fn get_page_cache<FUNC>(
+        &self,
+        inner_id: usize,
+        neighbor: FUNC,
+        block_device: &Arc<dyn BlockDevice>,
+    ) -> Arc<Mutex<Self::CacheType>>
+    where
+        FUNC: Fn() -> Vec<usize>;
 }

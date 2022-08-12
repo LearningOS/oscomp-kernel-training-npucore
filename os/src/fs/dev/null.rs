@@ -1,5 +1,5 @@
 use alloc::sync::Arc;
-use easy_fs::DiskInodeType;
+use crate::fs::DiskInodeType;
 
 use crate::{
     fs::{directory_tree::DirectoryTreeNode, file_trait::File, layout::Stat, StatMode},
@@ -127,13 +127,13 @@ impl File for Null {
     fn get_single_cache(
         &self,
         offset: usize,
-    ) -> Result<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    ) -> Result<Arc<spin::Mutex<crate::fs::PageCache>>, ()> {
         todo!()
     }
 
     fn get_all_caches(
         &self,
-    ) -> Result<alloc::vec::Vec<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    ) -> Result<alloc::vec::Vec<Arc<spin::Mutex<crate::fs::PageCache>>>, ()> {
         todo!()
     }
 

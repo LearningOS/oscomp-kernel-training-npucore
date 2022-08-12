@@ -1,6 +1,7 @@
 use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::file_trait::File;
 use crate::fs::layout::Stat;
+use crate::fs::DiskInodeType;
 use crate::fs::StatMode;
 use crate::mm::{copy_from_user, copy_to_user};
 use crate::mm::{translated_ref, translated_refmut, UserBuffer};
@@ -8,7 +9,6 @@ use crate::sbi::console_getchar;
 use crate::syscall::errno::*;
 use crate::task::suspend_current_and_run_next;
 use alloc::sync::Arc;
-use easy_fs::DiskInodeType;
 use lazy_static::lazy_static;
 use log::{info, warn};
 use num_enum::FromPrimitive;
@@ -272,13 +272,13 @@ impl File for Teletype {
     fn get_single_cache(
         &self,
         offset: usize,
-    ) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    ) -> Result<Arc<Mutex<crate::fs::PageCache>>, ()> {
         todo!()
     }
 
     fn get_all_caches(
         &self,
-    ) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    ) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::PageCache>>>, ()> {
         todo!()
     }
 

@@ -1,6 +1,7 @@
 use crate::config::PAGE_SIZE;
 use crate::fs::directory_tree::DirectoryTreeNode;
 use crate::fs::layout::Stat;
+use crate::fs::DiskInodeType;
 use crate::fs::StatMode;
 use crate::syscall::errno::*;
 use crate::syscall::fs::Fcntl_Command;
@@ -8,7 +9,6 @@ use crate::task::{current_task, suspend_current_and_run_next};
 use crate::{fs::file_trait::File, mm::UserBuffer};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use easy_fs::DiskInodeType;
 use num_enum::FromPrimitive;
 use spin::Mutex;
 
@@ -99,11 +99,7 @@ impl PipeRingBuffer {
         let dst_slice = &mut buf[..read_bytes];
         dst_slice.copy_from_slice(src_slice);
         // update head
-        self.head = if end == self.arr.len() {
-            0
-        } else {
-            end
-        };
+        self.head = if end == self.arr.len() { 0 } else { end };
         read_bytes
     }
     fn buffer_write(&mut self, buf: &[u8]) -> usize {
@@ -123,11 +119,7 @@ impl PipeRingBuffer {
         let dst_slice = &mut self.arr[begin..end];
         dst_slice.copy_from_slice(src_slice);
         // update tail
-        self.tail = if end == self.arr.len() {
-            0
-        } else {
-            end
-        };
+        self.tail = if end == self.arr.len() { 0 } else { end };
         write_bytes
     }
     fn set_write_end(&mut self, write_end: &Arc<Pipe>) {
@@ -354,7 +346,7 @@ impl File for Pipe {
     fn get_size(&self) -> usize {
         todo!()
     }
-    
+
     fn get_stat(&self) -> Stat {
         Stat::new(
             crate::makedev!(8, 0),
@@ -427,13 +419,13 @@ impl File for Pipe {
     fn get_single_cache(
         &self,
         offset: usize,
-    ) -> Result<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    ) -> Result<Arc<Mutex<crate::fs::PageCache>>, ()> {
         todo!()
     }
 
     fn get_all_caches(
         &self,
-    ) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    ) -> Result<alloc::vec::Vec<Arc<Mutex<crate::fs::PageCache>>>, ()> {
         todo!()
     }
 

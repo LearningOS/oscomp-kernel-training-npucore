@@ -4,7 +4,7 @@ use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
 };
-use easy_fs::{CacheManager, DiskInodeType, EasyFileSystem};
+use super::fat32::{DiskInodeType, EasyFileSystem};
 use lazy_static::*;
 use spin::{Mutex, RwLock, RwLockWriteGuard, MutexGuard};
 
@@ -13,21 +13,21 @@ use super::{
     file_trait::File,
     filesystem::FileSystem,
     layout::OpenFlags, swap::SWAP_DEVICE, Hwclock,
+    cache::{BlockCacheManager}
 };
 use crate::{syscall::errno::*, mm::tlb_invalidate};
 use crate::{
     drivers::BLOCK_DEVICE,
     fs::{
         filesystem::FS,
-        fs::{
-            cache_mgr::BlockCacheManager,
+        fat32::{
             inode::{InodeImpl, OSInode},
         },
     },
 };
 
 lazy_static! {
-    pub static ref FILE_SYSTEM: Arc<EasyFileSystem<BlockCacheManager>> = EasyFileSystem::open(
+    pub static ref FILE_SYSTEM: Arc<EasyFileSystem> = EasyFileSystem::open(
         BLOCK_DEVICE.clone(),
         Arc::new(Mutex::new(BlockCacheManager::new()))
     );

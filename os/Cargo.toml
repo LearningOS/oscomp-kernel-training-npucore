@@ -19,7 +19,6 @@ k210-hal = { path = "../dependency/k210-hal", optional = true }
 k210-soc = { path = "../dependency/k210-soc", optional = true }
 fu740-pac = { path = "../dependency/fu740-pac", optional = true }
 fu740-hal = { path = "../dependency/fu740-hal", optional = true }
-easy-fs = { path = "../easy-fs" }
 embedded-hal = "=1.0.0-alpha.7"
 nb = "1.0"
 log = "0.4"
