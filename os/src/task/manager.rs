@@ -110,6 +110,19 @@ pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
     TASK_MANAGER.lock().fetch()
 }
 
+pub fn do_oom() {
+    let manager = TASK_MANAGER.lock();
+    for task in manager
+        .interruptible_queue
+        .iter()
+        .chain(manager.ready_queue.iter().rev())
+    {
+        if task.vm.lock().do_oom() > 0 {
+            break;
+        };
+    }
+}
+
 /// This function add a `task` to `interruptible_queue`,
 /// but won't take it out from `ready_queue`.
 /// So you should make sure that the `task` won't be presented in `ready_queue`.
@@ -213,7 +226,9 @@ impl WaitQueue {
                 Some(task) => {
                     let mut inner = task.acquire_inner_lock();
                     match inner.task_status {
-                        super::TaskStatus::Interruptible => inner.task_status = super::task::TaskStatus::Ready,
+                        super::TaskStatus::Interruptible => {
+                            inner.task_status = super::task::TaskStatus::Ready
+                        }
                         // for `Ready` or `Running`, we don't need to do wake,
                         // for `Zombie`, we will mess up the process management if we do wake...
                         _ => continue,
@@ -293,7 +308,9 @@ impl TimeoutWaitQueue {
                     Some(task) => {
                         let mut inner = task.acquire_inner_lock();
                         match inner.task_status {
-                            super::TaskStatus::Interruptible => inner.task_status = super::task::TaskStatus::Ready,
+                            super::TaskStatus::Interruptible => {
+                                inner.task_status = super::task::TaskStatus::Ready
+                            }
                             // for `Ready` or `Running`, we don't need to do wake,
                             // for `Zombie`, we will mess up the process management if we do wake...
                             _ => continue,
@@ -333,5 +350,7 @@ pub fn wait_with_timeout(task: Weak<TaskControlBlock>, timeout: TimeSpec) {
 
 /// Wake all expired waiter on `TIMEOUT_WAITQUEUE`
 pub fn do_wake_expired() {
-    TIMEOUT_WAITQUEUE.lock().wake_expired(crate::timer::TimeSpec::now());
+    TIMEOUT_WAITQUEUE
+        .lock()
+        .wake_expired(crate::timer::TimeSpec::now());
 }

@@ -1,9 +1,9 @@
 use crate::config::{PAGE_SIZE, USER_STACK_SIZE};
 use crate::fs::OpenFlags;
 use crate::mm::{
-    copy_from_user, copy_to_user, copy_to_user_string, get_from_user, get_from_user_checked,
-    translated_byte_buffer, translated_ref, translated_refmut, translated_str, MapFlags,
-    MapPermission, UserBuffer,
+    copy_from_user, copy_to_user, copy_to_user_string, get_from_user, translated_byte_buffer,
+    translated_ref, translated_refmut, translated_str, try_get_from_user, MapFlags, MapPermission,
+    UserBuffer,
 };
 use crate::show_frame_consumption;
 use crate::syscall::errno::*;
@@ -160,7 +160,10 @@ pub fn sys_nanosleep(req: *const TimeSpec, rem: *mut TimeSpec) -> isize {
     }
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let req = get_from_user(token, req);
+    let req = match get_from_user(token, req) {
+        Ok(req) => req,
+        Err(errno) => return errno,
+    };
 
     let end = TimeSpec::now() + req;
     wait_with_timeout(Arc::downgrade(&task), end);
@@ -240,7 +243,12 @@ pub struct UTSName {
 
 pub fn sys_uname(buf: *mut u8) -> isize {
     let token = current_user_token();
-    let mut buffer = UserBuffer::new(translated_byte_buffer(token, buf, size_of::<UTSName>()));
+    let mut buffer = UserBuffer::new(
+        match translated_byte_buffer(token, buf, size_of::<UTSName>()) {
+            Ok(buffer) => buffer,
+            Err(errno) => return errno,
+        },
+    );
     // A little stupid but still efficient.
     const FIELD_OFFSET: usize = 65;
     buffer.write_at(FIELD_OFFSET * 0, b"Linux\0");
@@ -456,10 +464,16 @@ pub fn sys_clone(
     }
     let new_pid = child.pid.0;
     if flags.contains(CloneFlags::CLONE_PARENT_SETTID) {
-        *translated_refmut(parent.get_user_token(), ptid) = child.pid.0 as u32;
+        match translated_refmut(parent.get_user_token(), ptid) {
+            Ok(word) => *word = child.pid.0 as u32,
+            Err(errno) => return errno,
+        };
     }
     if flags.contains(CloneFlags::CLONE_CHILD_SETTID) {
-        *translated_refmut(child.get_user_token(), ctid) = child.pid.0 as u32;
+        match translated_refmut(child.get_user_token(), ctid) {
+            Ok(word) => *word = child.pid.0 as u32,
+            Err(errno) => return errno,
+        };
     }
     if flags.contains(CloneFlags::CLONE_CHILD_CLEARTID) {
         child.acquire_inner_lock().clear_child_tid = ctid as usize;
@@ -477,16 +491,25 @@ pub fn sys_execve(
     const DEFAULT_SHELL: &str = "/bin/bash";
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let path = translated_str(token, pathname);
+    let path = match translated_str(token, pathname) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     let mut argv_vec: Vec<String> = Vec::with_capacity(16);
     let mut envp_vec: Vec<String> = Vec::with_capacity(16);
     if !argv.is_null() {
         loop {
-            let arg_ptr = *translated_ref(token, argv);
+            let arg_ptr = match translated_ref(token, argv) {
+                Ok(argv) => *argv,
+                Err(errno) => return errno,
+            };
             if arg_ptr.is_null() {
                 break;
             }
-            argv_vec.push(translated_str(token, arg_ptr));
+            argv_vec.push(match translated_str(token, arg_ptr) {
+                Ok(arg) => arg,
+                Err(errno) => return errno,
+            });
             unsafe {
                 argv = argv.add(1);
             }
@@ -494,11 +517,17 @@ pub fn sys_execve(
     }
     if !envp.is_null() {
         loop {
-            let env_ptr = *translated_ref(token, envp);
+            let env_ptr = match translated_ref(token, envp) {
+                Ok(envp) => *envp,
+                Err(errno) => return errno,
+            };
             if env_ptr.is_null() {
                 break;
             }
-            envp_vec.push(translated_str(token, env_ptr));
+            envp_vec.push(match translated_str(token, env_ptr) {
+                Ok(env) => env,
+                Err(errno) => return errno,
+            });
             unsafe {
                 envp = envp.add(1);
             }
@@ -607,7 +636,10 @@ pub fn sys_wait4(pid: isize, status: *mut u32, option: u32, ru: *mut Rusage) -> 
                 // ++++ release child PCB lock
                 if !status.is_null() {
                     // this may NULL!!!
-                    *translated_refmut(token, status) = exit_code;
+                    match translated_refmut(token, status) {
+                        Ok(word) => *word = exit_code,
+                        Err(errno) => return errno,
+                    };
                 }
                 return found_pid as isize;
             }
@@ -774,7 +806,10 @@ pub fn sys_futex(
     if uaddr.is_null() || uaddr.align_offset(4) != 0 {
         return EINVAL;
     }
-    let futex_word = translated_refmut(token, uaddr);
+    let futex_word = match translated_refmut(token, uaddr) {
+        Ok(futex_word) => futex_word,
+        Err(errno) => return errno,
+    };
     let cmd = threads::FutexCmd::from_primitive(futex_op & 0x7fu32);
     let option = FutexOption::from_bits_truncate(futex_op);
     if !option.contains(FutexOption::PRIVATE) {
@@ -788,7 +823,10 @@ pub fn sys_futex(
         FutexCmd::Wait => {
             let timeout = match cmd {
                 FutexCmd::Wait | FutexCmd::LockPi | FutexCmd::WaitBitset => {
-                    get_from_user_checked(token, timeout)
+                    match try_get_from_user(token, timeout) {
+                        Ok(timeout) => timeout,
+                        Err(errno) => return errno,
+                    }
                 }
                 _ => None,
             };
@@ -804,7 +842,10 @@ pub fn sys_futex(
             if uaddr2.is_null() || uaddr2.align_offset(4) != 0 {
                 return EINVAL;
             }
-            let futex_word_2 = translated_refmut(token, uaddr2);
+            let futex_word_2 = match translated_refmut(token, uaddr2) {
+                Ok(futex_word_2) => futex_word_2,
+                Err(errno) => return errno,
+            };
             task.futex
                 .lock()
                 .requeue(futex_word, futex_word_2, val, timeout as u32)
@@ -942,7 +983,8 @@ pub fn sys_sigreturn() -> isize {
     inner.sigmask = *translated_ref(
         token,
         (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>()) as *mut Signals,
-    ); // restore sigmask
+    )
+    .unwrap(); // restore sigmask
     copy_from_user(
         token,
         (ucontext_addr

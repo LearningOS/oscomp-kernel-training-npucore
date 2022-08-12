@@ -18,7 +18,7 @@ pub use elf::{load_elf_interp, AuxvEntry, AuxvType, ELFInfo};
 use lazy_static::*;
 use manager::fetch_task;
 pub use manager::{
-    add_task, do_wake_expired, find_task_by_pid, find_task_by_tgid, procs_count,
+    add_task, do_oom, do_wake_expired, find_task_by_pid, find_task_by_tgid, procs_count,
     sleep_interruptible, wait_with_timeout, wake_interruptible,
 };
 pub use pid::{pid_alloc, trap_cx_bottom_from_tid, ustack_bottom_from_tid, KernelStack, PidHandle};
@@ -112,9 +112,13 @@ pub fn do_exit(task: Arc<TaskControlBlock>, exit_code: u32) {
             "[do_exit] do futex wake on clear_child_tid: {:X}",
             inner.clear_child_tid
         );
-        let phys_ref = translated_refmut(task.get_user_token(), inner.clear_child_tid as *mut u32);
-        *phys_ref = 0;
-        task.futex.lock().wake(phys_ref as *const u32 as usize, 1);
+        let phys_ref = match translated_refmut(task.get_user_token(), inner.clear_child_tid as *mut u32) {
+            Ok(phys_ref) => {
+                *phys_ref = 0;
+                task.futex.lock().wake(phys_ref as *const u32 as usize, 1);
+            },
+            Err(_) => log::warn!("invalid clear_child_tid"),
+        };
     }
     // deallocate user resource (trap context and user stack)
     task.vm.lock().dealloc_user_res(task.tid);

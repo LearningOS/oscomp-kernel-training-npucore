@@ -210,7 +210,7 @@ impl MemorySet {
     /// The REAL handler to page fault.
     /// Handles all types of page fault:(In regex:) "(Store|Load|Instruction)(Page)?Fault"
     /// Checks the permission to decide whether to copy.
-    pub fn do_page_fault(&mut self, addr: VirtAddr) -> Result<(), MemoryError> {
+    pub fn do_page_fault(&mut self, addr: VirtAddr) -> Result<PhysAddr, MemoryError> {
         let vpn = addr.floor();
         if let Some(area) = self.areas.iter_mut().find(|area| {
             area.map_perm.contains(MapPermission::R | MapPermission::U)// If there is such a page in user space
@@ -240,6 +240,7 @@ impl MemorySet {
                         });
                         file.lseek(old_offset as isize, SeekWhence::SEEK_SET)
                             .unwrap();
+                        Ok(allocated_ppn.offset(addr.page_offset()))
                     // map to phys page directly
                     } else {
                         let cache_phys_page = file
@@ -248,16 +249,18 @@ impl MemorySet {
                             .try_lock()
                             .unwrap()
                             .get_tracker();
+                        let cache_ppn = cache_phys_page.ppn;
                         self.page_table.map(
                             vpn,
-                            cache_phys_page.ppn,
+                            cache_ppn,
                             PTEFlags::from_bits(area.map_perm.bits).unwrap(),
                         );
                         area.inner.alloc_in_memory(vpn, cache_phys_page);
+                        Ok(cache_ppn.offset(addr.page_offset()))
                     }
                 } else {
                     let frame = area.inner.get_mut(&vpn);
-                    match frame {
+                    let allocated_ppn = match frame {
                         // Page table is not mapped, but frame is in memory.
                         Frame::InMemory(_) => unreachable!(),
                         Frame::Compressed(_) => {
@@ -269,6 +272,7 @@ impl MemorySet {
                             );
                             area.inner.compressed -= 1;
                             info!("[do_page_fault] addr: {:?}, solution: decompress", addr);
+                            ppn
                         }
                         Frame::SwappedOut(_) => {
                             let ppn = frame.swap_in().unwrap();
@@ -279,20 +283,22 @@ impl MemorySet {
                             );
                             area.inner.swapped -= 1;
                             info!("[do_page_fault] addr: {:?}, solution: swap in", addr);
+                            ppn
                         }
                         Frame::Unallocated => {
-                            area.map_one_unchecked(&mut self.page_table, vpn);
                             info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
+                            area.map_one_unchecked(&mut self.page_table, vpn)
                         }
                     };
+                    Ok(allocated_ppn.offset(addr.page_offset()))
                 }
-                Ok(())
             } else {
                 // mapped before the assignment
                 if area.map_perm.contains(MapPermission::W) {
-                    info!("[do_page_fault] addr: {:?}, solution: copy on write", addr);
                     // Whoever triggers this fault shall cause the area to be copied into a new area.
-                    area.copy_on_write(&mut self.page_table, vpn)
+                    let allocated_ppn = area.copy_on_write(&mut self.page_table, vpn)?;
+                    info!("[do_page_fault] addr: {:?}, solution: copy on write", addr);
+                    Ok(allocated_ppn.offset(addr.page_offset()))
                 } else {
                     // Write without permission
                     error!(
@@ -308,13 +314,15 @@ impl MemorySet {
             Err(MemoryError::BadAddress)
         }
     }
-    pub fn do_oom(&mut self) {
+    pub fn do_oom(&mut self) -> usize {
         let area = self
             .areas
             .iter_mut()
             .filter(|area| area.map_file.is_none())
             .max_by_key(|area| area.inner.frames.len())
             .unwrap();
+        let compressed_before = area.inner.compressed;
+        let swapped_before = area.inner.swapped;
         let mut start_vpn = area.inner.vpn_range.get_end();
         // find first frame which is in memory...
         for vpn in area.inner.vpn_range {
@@ -354,6 +362,7 @@ impl MemorySet {
                 _ => unreachable!(),
             }
         }
+        area.inner.compressed + area.inner.swapped - compressed_before - swapped_before
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -617,7 +626,13 @@ impl MemorySet {
         let vpn = trap_cx_area.inner.vpn_range.get_start();
         let src_pa: PhysAddr = user_space.translate(vpn).unwrap().ppn().into();
         let dst_pa: PhysAddr = memory_set.translate(vpn).unwrap().ppn().into();
-        unsafe { core::ptr::copy_nonoverlapping(src_pa.0 as *const TrapContext, dst_pa.0 as *mut TrapContext, 1) };
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                src_pa.0 as *const TrapContext,
+                dst_pa.0 as *mut TrapContext,
+                1,
+            )
+        };
         debug!(
             "[fork] copy trap_cx area: {:?}",
             trap_cx_area.inner.vpn_range
@@ -761,7 +776,7 @@ impl MemorySet {
                     let file = file_descriptor.file.deep_clone();
                     file.lseek(offset as isize, SeekWhence::SEEK_SET).unwrap();
                     new_area.map_file = Some(file);
-                },
+                }
                 Err(errno) => return errno,
             }
         }
@@ -1651,16 +1666,18 @@ impl MapArea {
         &mut self,
         page_table: &mut PageTable,
         vpn: VirtPageNum,
-    ) -> Result<(), MemoryError> {
+    ) -> Result<PhysPageNum, MemoryError> {
         let old_frame = self.inner.remove_in_memory(&vpn).unwrap();
         if Arc::strong_count(&old_frame) == 1 {
             // don't need to copy
             // push back old frame and set pte flags to allow write
+            let old_ppn = old_frame.ppn;
             self.inner.alloc_in_memory(vpn, old_frame);
             page_table.set_pte_flags(vpn, self.map_perm).unwrap();
             // Starting from this, the write (page) fault will not be triggered in this space,
             // for the pte permission now contains Write.
             trace!("[copy_on_write] no copy occurred");
+            Ok(old_ppn)
         } else {
             // do copy in this case
             let old_ppn = old_frame.ppn;
@@ -1676,8 +1693,8 @@ impl MapArea {
                 .get_bytes_array()
                 .copy_from_slice(old_ppn.get_bytes_array());
             trace!("[copy_on_write] copy occurred");
+            Ok(new_ppn)
         }
-        Ok(())
     }
     /// If `new_end` is equal to the current end of area, do nothing and return `Ok(())`.
     pub fn expand_to(&mut self, new_end: VirtAddr) -> Result<(), ()> {
@@ -1840,6 +1857,19 @@ impl MapArea {
             },
         ))
     }
+}
+
+pub fn check_page_fault(addr: VirtAddr) -> Result<PhysAddr, isize> {
+    // This is where we handle the page fault.
+    super::frame_reserve(3);
+    let task = current_task().unwrap();
+    match task.vm.lock().do_page_fault(addr) {
+        Ok(pa) => return Ok(pa),
+        Err(MemoryError::BeyondEOF) | Err(MemoryError::NoPermission) | Err(MemoryError::BadAddress) => {
+            return Err(EFAULT);
+        }
+        _ => unreachable!(),
+    };
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
