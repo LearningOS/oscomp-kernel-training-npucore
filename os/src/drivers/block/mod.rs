@@ -1,16 +1,17 @@
+mod block_dev;
+mod mem_blk;
 #[cfg(feature = "board_k210")]
 mod sdcard;
 mod virtio_blk;
-mod mem_blk;
 
+pub use block_dev::{BlockDevice, BLOCK_SZ};
+pub use mem_blk::MemBlockWrapper;
 #[cfg(feature = "board_k210")]
 pub use sdcard::SDCardWrapper;
 pub use virtio_blk::VirtIOBlock;
-pub use mem_blk::MemBlockWrapper;
 
 use crate::board::BlockDeviceImpl;
 use alloc::sync::Arc;
-use easy_fs::BlockDevice;
 use lazy_static::*;
 
 lazy_static! {

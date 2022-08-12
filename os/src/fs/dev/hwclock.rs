@@ -1,4 +1,7 @@
-use crate::{fs::file_trait::File, syscall::errno::SUCCESS};
+use crate::{
+    fs::{file_trait::File, DiskInodeType},
+    syscall::errno::SUCCESS,
+};
 
 pub struct Hwclock;
 
@@ -39,7 +42,7 @@ impl File for Hwclock {
     fn write_user(&self, offset: Option<usize>, buf: crate::mm::UserBuffer) -> usize {
         todo!()
     }
-    
+
     fn get_size(&self) -> usize {
         todo!()
     }
@@ -48,15 +51,19 @@ impl File for Hwclock {
         todo!()
     }
 
-    fn get_file_type(&self) -> easy_fs::DiskInodeType {
-        easy_fs::DiskInodeType::File
+    fn get_file_type(&self) -> DiskInodeType {
+        DiskInodeType::File
     }
 
-    fn info_dirtree_node(&self, dirnode_ptr: alloc::sync::Weak<crate::fs::directory_tree::DirectoryTreeNode>) {
-        
+    fn info_dirtree_node(
+        &self,
+        dirnode_ptr: alloc::sync::Weak<crate::fs::directory_tree::DirectoryTreeNode>,
+    ) {
     }
 
-    fn get_dirtree_node(&self) -> Option<alloc::sync::Arc<crate::fs::directory_tree::DirectoryTreeNode>> {
+    fn get_dirtree_node(
+        &self,
+    ) -> Option<alloc::sync::Arc<crate::fs::directory_tree::DirectoryTreeNode>> {
         todo!()
     }
 
@@ -68,13 +75,18 @@ impl File for Hwclock {
         todo!()
     }
 
-    fn create(&self, name: &str, file_type: easy_fs::DiskInodeType) -> Result<alloc::sync::Arc<dyn File>, isize> {
+    fn create(
+        &self,
+        name: &str,
+        file_type: DiskInodeType,
+    ) -> Result<alloc::sync::Arc<dyn File>, isize> {
         todo!()
     }
 
     fn link_child(&self, name: &str, child: &Self) -> Result<(), isize>
     where
-        Self: Sized {
+        Self: Sized,
+    {
         todo!()
     }
 
@@ -102,11 +114,19 @@ impl File for Hwclock {
         todo!()
     }
 
-    fn get_single_cache(&self, offset: usize) -> Result<alloc::sync::Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    fn get_single_cache(
+        &self,
+        offset: usize,
+    ) -> Result<alloc::sync::Arc<spin::Mutex<crate::fs::PageCache>>, ()> {
         todo!()
     }
 
-    fn get_all_caches(&self) -> Result<alloc::vec::Vec<alloc::sync::Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    fn get_all_caches(
+        &self,
+    ) -> Result<
+        alloc::vec::Vec<alloc::sync::Arc<spin::Mutex<crate::fs::PageCache>>>,
+        (),
+    > {
         todo!()
     }
 

@@ -1,10 +1,9 @@
-use super::BlockDevice;
+use super::{BlockDevice, BLOCK_SZ};
 use crate::mm::{
     frame_alloc, frame_dealloc, kernel_token, FrameTracker, PageTable, PhysAddr, PhysPageNum,
     StepByOne, VirtAddr,
 };
 use alloc::{sync::Arc, vec::Vec};
-use easy_fs::BLOCK_SZ;
 use lazy_static::*;
 use spin::Mutex;
 use virtio_drivers::{VirtIOBlk, VirtIOHeader};

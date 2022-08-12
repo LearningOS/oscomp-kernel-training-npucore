@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use easy_fs::BLOCK_SZ;
 use spin::Mutex;
 
 use crate::drivers::BLOCK_DEVICE;

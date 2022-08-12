@@ -1,9 +1,27 @@
+use super::BlockDevice;
 use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
-use crate::mm::{frame_alloc, FrameTracker, KERNEL_SPACE, PageTableEntry};
+use crate::mm::{frame_alloc, FrameTracker, PageTableEntry, KERNEL_SPACE};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use easy_fs::{BlockDevice, Cache, CacheManager};
 use spin::Mutex;
+
+pub trait Cache {
+    /// The read-only mapper to the block cache
+    /// # Argument
+    /// + `offset`: offset in cache
+    /// + `f`: a closure to read
+    fn read<T, V>(&self, offset: usize, f: impl FnOnce(&T) -> V) -> V;
+    /// The mutable mapper to the block cache
+    /// # Argument
+    /// + `offset`: offset in cache
+    /// + `f`: a closure to write
+    fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V;
+    /// Tell cache to write back
+    /// # Argument
+    /// + `block_ids`: block ids in this cache
+    /// + `block_device`: The pointer to the block_device.
+    fn sync(&self, _block_ids: Vec<usize>, _block_device: &Arc<dyn BlockDevice>) {}
+}
 
 const PAGE_BUFFERS: usize = 8;
 const BUFFER_SIZE: usize = 512;
@@ -70,7 +88,7 @@ pub struct BlockCacheManager {
 }
 
 impl BlockCacheManager {
-    fn oom(&self, block_device: &Arc<dyn BlockDevice>) {
+    pub fn oom(&self, block_device: &Arc<dyn BlockDevice>) {
         for buffer_cache in &self.cache_pool {
             if Arc::strong_count(buffer_cache) > 1 {
                 continue;
@@ -97,30 +115,12 @@ impl BlockCacheManager {
             self.oom(block_device);
         }
     }
-
-    fn try_get_block_cache(
-        &self,
-        block_id: usize,
-        _inner_cache_id: usize,
-    ) -> Option<Arc<Mutex<BufferCache>>> {
-        for buffer_cache in &self.cache_pool {
-            let mut locked = buffer_cache.lock();
-            if locked.block_id == block_id {
-                if locked.priority < PRIORITY_UPPERBOUND {
-                    locked.priority += 1;
-                }
-                return Some(buffer_cache.clone());
-            }
-        }
-        None
-    }
 }
 
-impl CacheManager for BlockCacheManager {
-    const CACHE_SZ: usize = BUFFER_SIZE;
-    type CacheType = BufferCache;
+impl BlockCacheManager {
+    pub const CACHE_SZ: usize = BUFFER_SIZE;
 
-    fn new() -> Self {
+    pub fn new() -> Self {
         let mut hold: Vec<Arc<FrameTracker>> = Vec::new();
         let mut cache_pool: Vec<Arc<Mutex<BufferCache>>> = Vec::new();
         for i in 0..CACHEPOOLPAGE {
@@ -136,11 +136,7 @@ impl CacheManager for BlockCacheManager {
             cache_pool,
         }
     }
-    fn try_get_block_cache(
-        &self,
-        block_id: usize,
-        _inner_cache_id: usize,
-    ) -> Option<Arc<Mutex<Self::CacheType>>> {
+    pub fn try_get_block_cache(&self, block_id: usize) -> Option<Arc<Mutex<BufferCache>>> {
         for buffer_cache in &self.cache_pool {
             let mut locked = buffer_cache.lock();
             if locked.block_id == block_id {
@@ -153,17 +149,12 @@ impl CacheManager for BlockCacheManager {
         None
     }
 
-    fn get_block_cache<FUNC>(
+    pub fn get_block_cache(
         &self,
         block_id: usize,
-        inner_cache_id: usize,
-        _neighbor: FUNC,
         block_device: &Arc<dyn BlockDevice>,
-    ) -> Arc<Mutex<Self::CacheType>>
-    where
-        FUNC: Fn() -> Vec<usize>,
-    {
-        match self.try_get_block_cache(block_id, inner_cache_id) {
+    ) -> Arc<Mutex<BufferCache>> {
+        match self.try_get_block_cache(block_id) {
             Some(block_cache) => block_cache,
             None => {
                 let buffer_cache = self.alloc_buffer_cache(block_device);
@@ -174,7 +165,7 @@ impl CacheManager for BlockCacheManager {
                 }
                 drop(locked);
                 buffer_cache
-            },
+            }
         }
     }
 }
@@ -218,8 +209,12 @@ impl Cache for PageCache {
 
     fn sync(&self, block_ids: Vec<usize>, block_device: &Arc<dyn BlockDevice>) {
         match self.get_pte() {
-            Some(pte) => {if !pte.is_dirty() {return;}},
-            None => {},
+            Some(pte) => {
+                if !pte.is_dirty() {
+                    return;
+                }
+            }
+            None => {}
         }
         self.write_back(block_ids, block_device)
     }
@@ -244,9 +239,7 @@ impl PageCache {
     fn get_pte(&self) -> Option<PageTableEntry> {
         let lock = KERNEL_SPACE.try_lock();
         match lock {
-            Some(lock) => {
-                Some(lock.translate(self.tracker.ppn.0.into())).unwrap()
-            },
+            Some(lock) => Some(lock.translate(self.tracker.ppn.0.into())).unwrap(),
             None => None,
         }
     }
@@ -334,22 +327,18 @@ pub struct PageCacheManager {
     cache_pool: Mutex<Vec<Option<Arc<Mutex<PageCache>>>>>,
     allocated_cache: Mutex<Vec<usize>>,
 }
-impl CacheManager for PageCacheManager {
-    const CACHE_SZ: usize = PAGE_SIZE;
-    type CacheType = PageCache;
 
-    fn new() -> Self {
+impl PageCacheManager {
+    pub const CACHE_SZ: usize = PAGE_SIZE;
+
+    pub fn new() -> Self {
         Self {
             cache_pool: Mutex::new(Vec::new()),
             allocated_cache: Mutex::new(Vec::new()),
         }
     }
 
-    fn try_get_block_cache(
-        &self,
-        _block_id: usize,
-        inner_cache_id: usize,
-    ) -> Option<Arc<Mutex<PageCache>>> {
+    pub fn try_get_cache(&self, inner_cache_id: usize) -> Option<Arc<Mutex<PageCache>>> {
         let lock = self.cache_pool.lock();
         if inner_cache_id >= lock.len() {
             return None;
@@ -364,13 +353,12 @@ impl CacheManager for PageCacheManager {
         page_cache
     }
 
-    fn get_block_cache<FUNC>(
+    pub fn get_cache<FUNC>(
         &self,
-        _block_id: usize,
         inner_cache_id: usize,
         neighbor: FUNC,
         block_device: &Arc<dyn BlockDevice>,
-    ) -> Arc<Mutex<Self::CacheType>>
+    ) -> Arc<Mutex<PageCache>>
     where
         FUNC: Fn() -> Vec<usize>,
     {
@@ -380,9 +368,7 @@ impl CacheManager for PageCacheManager {
             lock.push(None);
         }
         let page_cache = match &lock[inner_cache_id] {
-            Some(page_cache) => {
-                page_cache.clone()
-            },
+            Some(page_cache) => page_cache.clone(),
             None => {
                 let mut new_page_cache = PageCache::new();
                 new_page_cache.read_in(neighbor(), &block_device);
@@ -390,7 +376,7 @@ impl CacheManager for PageCacheManager {
                 lock[inner_cache_id] = Some(new_page_cache.clone());
                 self.allocated_cache.lock().push(inner_cache_id);
                 new_page_cache
-            },
+            }
         };
         let mut inner_lock = page_cache.lock();
         if inner_lock.priority < PRIORITY_UPPERBOUND {
@@ -400,7 +386,7 @@ impl CacheManager for PageCacheManager {
         page_cache
     }
 
-    fn oom<FUNC>(&self, neighbor: FUNC, block_device: &Arc<dyn BlockDevice>) -> usize
+    pub fn oom<FUNC>(&self, neighbor: FUNC, block_device: &Arc<dyn BlockDevice>) -> usize
     where
         FUNC: Fn(usize) -> Vec<usize>,
     {
@@ -433,7 +419,7 @@ impl CacheManager for PageCacheManager {
         dropped
     }
 
-    fn notify_new_size(&self, new_size: usize) {
+    pub fn notify_new_size(&self, new_size: usize) {
         let mut lock = self.cache_pool.lock();
         let new_pages = (new_size + PAGE_SIZE - 1) / PAGE_SIZE;
         while lock.len() > new_pages {
@@ -445,8 +431,8 @@ impl CacheManager for PageCacheManager {
         }
         lock.shrink_to_fit();
 
-        self.allocated_cache.lock().retain(|cache_id|{
-            *cache_id < new_pages
-        });
+        self.allocated_cache
+            .lock()
+            .retain(|cache_id| *cache_id < new_pages);
     }
 }

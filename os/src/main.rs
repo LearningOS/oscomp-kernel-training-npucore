@@ -4,6 +4,8 @@
 #![feature(alloc_error_handler)]
 #![feature(btree_drain_filter)]
 #![feature(drain_filter)]
+#![feature(int_roundings)]
+#![feature(string_remove_matches)]
 
 extern crate alloc;
 

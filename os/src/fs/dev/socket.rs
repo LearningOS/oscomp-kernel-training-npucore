@@ -1,11 +1,11 @@
 use alloc::sync::{Arc, Weak};
 
-use crate::fs::file_trait::File;
+use crate::fs::{file_trait::File, DiskInodeType};
 
 struct Socket;
 
 pub fn make_socket() -> Arc<dyn File> {
-    Arc::new(Socket{})
+    Arc::new(Socket {})
 }
 
 #[allow(unused)]
@@ -45,7 +45,7 @@ impl File for Socket {
     fn write_user(&self, offset: Option<usize>, buf: crate::mm::UserBuffer) -> usize {
         todo!()
     }
-    
+
     fn get_size(&self) -> usize {
         todo!()
     }
@@ -54,7 +54,7 @@ impl File for Socket {
         todo!()
     }
 
-    fn get_file_type(&self) -> easy_fs::DiskInodeType {
+    fn get_file_type(&self) -> DiskInodeType {
         todo!()
     }
 
@@ -74,13 +74,14 @@ impl File for Socket {
         todo!()
     }
 
-    fn create(&self, name: &str, file_type: easy_fs::DiskInodeType) -> Result<Arc<dyn File>, isize> {
+    fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
         todo!()
     }
 
     fn link_child(&self, name: &str, child: &Self) -> Result<(), isize>
     where
-        Self: Sized {
+        Self: Sized,
+    {
         todo!()
     }
 
@@ -108,11 +109,16 @@ impl File for Socket {
         todo!()
     }
 
-    fn get_single_cache(&self, offset: usize) -> Result<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>, ()> {
+    fn get_single_cache(
+        &self,
+        offset: usize,
+    ) -> Result<Arc<spin::Mutex<crate::fs::PageCache>>, ()> {
         todo!()
     }
 
-    fn get_all_caches(&self) -> Result<alloc::vec::Vec<Arc<spin::Mutex<crate::fs::fs::cache_mgr::PageCache>>>, ()> {
+    fn get_all_caches(
+        &self,
+    ) -> Result<alloc::vec::Vec<Arc<spin::Mutex<crate::fs::PageCache>>>, ()> {
         todo!()
     }
 
