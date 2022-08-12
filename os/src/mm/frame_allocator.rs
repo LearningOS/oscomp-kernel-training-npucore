@@ -122,11 +122,11 @@ pub fn init_frame_allocator() {
 pub fn oom_handler() {
     if let Err(_) = fs::directory_tree::oom() {
         let task = current_task().unwrap();
-        match task.vm.try_lock() {
-            Some(mut memory_set) => {
-                memory_set.do_oom();
-            }
-            None => log::warn!("[swap] try lock vm failed."),
+        if let Some(mut memory_set) = task.vm.try_lock() {
+            memory_set.do_oom();
+        } else {
+            log::warn!("[oom_handler] try lock current vm failed.");
+            crate::task::do_oom();
         };
     };
 }

@@ -8,7 +8,7 @@ use riscv::register::{scause, stval};
 
 use crate::config::*;
 use crate::mm::{
-    copy_from_user, copy_to_user, get_from_user_checked, translated_ref, translated_refmut,
+    copy_from_user, copy_to_user, translated_ref, translated_refmut, try_get_from_user,
 };
 use crate::syscall::errno::*;
 use crate::task::manager::wait_with_timeout;
@@ -368,7 +368,8 @@ pub fn do_signal() {
                         token,
                         (ucontext_addr + 2 * size_of::<usize>() + size_of::<SignalStack>())
                             as *mut Signals,
-                    ) = inner.sigmask; // push sigmask into user stack
+                    )
+                    .unwrap() = inner.sigmask; // push sigmask into user stack
                     copy_to_user(
                         token,
                         (trap_cx as *const TrapContext).cast::<MachineContext>(),
@@ -483,13 +484,19 @@ pub fn sigprocmask(how: u32, set: *const Signals, oldset: *mut Signals) -> isize
     let token = task.get_user_token();
     // If oldset is non-NULL, the previous value of the signal mask is stored in oldset
     if oldset as usize != 0 {
-        *translated_refmut(token, oldset) = inner.sigmask;
+        match translated_refmut(token, oldset) {
+            Ok(oldset) => *oldset = inner.sigmask,
+            Err(errno) => return errno,
+        }
         trace!("[sigprocmask] *oldset: ({:?})", inner.sigmask);
     }
     // If set is NULL, then the signal mask is unchanged
     if set as usize != 0 {
         let how = SigMaskHow::from_bits(how);
-        let signal_set = *translated_ref(token, set);
+        let signal_set = match translated_ref(token, set) {
+            Ok(set) => *set,
+            Err(errno) => return errno,
+        };
         trace!("[sigprocmask] how: {:?}, *set: ({:?})", how, signal_set);
         match how {
             // add the signals not yet blocked in the given set to the mask
@@ -583,10 +590,16 @@ impl SigInfo {
 pub fn sigtimedwait(set: *const Signals, info: *mut SigInfo, timeout: *const TimeSpec) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let set = *translated_ref(token, set);
-    let timeout = match get_from_user_checked(token, timeout) {
-        Some(timeout) => timeout,
-        None => return EINVAL,
+    let set = match translated_ref(token, set) {
+        Ok(set) => *set,
+        Err(errno) => return errno,
+    };
+    let timeout = match try_get_from_user(token, timeout) {
+        Ok(timeout) => match timeout {
+            Some(timeout) => timeout,
+            None => return EINVAL,
+        },
+        Err(errno) => return errno,
     };
     debug!("[sigtimedwait] set: {:?}, timeout: {:?}", set, timeout);
 

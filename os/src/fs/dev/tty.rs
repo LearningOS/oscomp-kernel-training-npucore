@@ -308,12 +308,22 @@ impl File for Teletype {
                 SUCCESS
             }
             TeletypeCommand::TIOCGPGRP => {
-                *translated_refmut(token, argp as *mut u32) = inner.foreground_pgid;
-                SUCCESS
+                match translated_refmut(token, argp as *mut u32) {
+                    Ok(word) => {
+                        *word = inner.foreground_pgid;
+                        SUCCESS
+                    },
+                    Err(errno) => errno,
+                }
             }
             TeletypeCommand::TIOCSPGRP => {
-                inner.foreground_pgid = *translated_ref(token, argp as *const u32);
-                SUCCESS
+                match translated_ref(token, argp as *const u32) {
+                    Ok(word) => {
+                        inner.foreground_pgid = *word;
+                        SUCCESS
+                    },
+                    Err(errno) => errno,
+                }
             }
             TeletypeCommand::TIOCGWINSZ => {
                 copy_to_user(token, &inner.winsize, argp as *mut WinSize);

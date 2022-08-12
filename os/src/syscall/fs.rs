@@ -2,8 +2,8 @@ use crate::fs::poll::{ppoll, pselect, FdSet};
 use crate::fs::*;
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string,
-    get_from_user_checked, translated_byte_buffer, translated_byte_buffer_append_to_existing_vec,
-    translated_refmut, translated_str, MapPermission, UserBuffer, VirtAddr,
+    translated_byte_buffer, translated_byte_buffer_append_to_existing_vec, translated_refmut,
+    translated_str, try_get_from_user, MapPermission, UserBuffer, VirtAddr,
 };
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
@@ -55,8 +55,13 @@ pub fn sys_getcwd(buf: usize, size: usize) -> isize {
         return ERANGE;
     }
     let token = task.get_user_token();
-    UserBuffer::new(translated_byte_buffer(token, buf as *const u8, size))
-        .write(working_dir.as_bytes());
+    UserBuffer::new({
+        match translated_byte_buffer(token, buf as *const u8, size) {
+            Ok(buffer) => buffer,
+            Err(errno) => return errno,
+        }
+    })
+    .write(working_dir.as_bytes());
     buf as isize
 }
 
@@ -107,7 +112,12 @@ pub fn sys_read(fd: usize, buf: usize, count: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.read_user(
         None,
-        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
+        UserBuffer::new({
+            match translated_byte_buffer(token, buf as *const u8, count) {
+                Ok(buffer) => buffer,
+                Err(errno) => return errno,
+            }
+        }),
     ) as isize
 }
 
@@ -132,7 +142,12 @@ pub fn sys_write(fd: usize, buf: usize, count: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.write_user(
         None,
-        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
+        UserBuffer::new({
+            match translated_byte_buffer(token, buf as *const u8, count) {
+                Ok(buffer) => buffer,
+                Err(errno) => return errno,
+            }
+        }),
     ) as isize
 }
 
@@ -158,7 +173,12 @@ pub fn sys_pread(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.read_user(
         Some(offset),
-        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
+        UserBuffer::new({
+            match translated_byte_buffer(token, buf as *const u8, count) {
+                Ok(buffer) => buffer,
+                Err(errno) => return errno,
+            }
+        }),
     ) as isize
 }
 
@@ -184,7 +204,12 @@ pub fn sys_pwrite(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     let token = task.get_user_token();
     file_descriptor.write_user(
         Some(offset),
-        UserBuffer::new(translated_byte_buffer(token, buf as *const u8, count)),
+        UserBuffer::new({
+            match translated_byte_buffer(token, buf as *const u8, count) {
+                Ok(buffer) => buffer,
+                Err(errno) => return errno,
+            }
+        }),
     ) as isize
 }
 
@@ -212,15 +237,21 @@ pub fn sys_readv(fd: usize, iov: usize, iovcnt: usize) -> isize {
     unsafe { iovecs.set_len(iovcnt) };
     file_descriptor.read_user(
         None,
-        UserBuffer::new(iovecs.iter().fold(Vec::new(), |buffer, iovec| {
-            // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
-            translated_byte_buffer_append_to_existing_vec(
-                Some(buffer),
-                token,
-                iovec.iov_base,
-                iovec.iov_len,
-            )
-        })),
+        UserBuffer::new({
+            let mut vec = Vec::with_capacity(32);
+            for iovec in iovecs.iter() {
+                match translated_byte_buffer_append_to_existing_vec(
+                    &mut vec,
+                    token,
+                    iovec.iov_base,
+                    iovec.iov_len,
+                ) {
+                    Ok(_) => continue,
+                    Err(errno) => return errno,
+                }
+            }
+            vec
+        }),
     ) as isize
 }
 
@@ -241,15 +272,21 @@ pub fn sys_writev(fd: usize, iov: usize, iovcnt: usize) -> isize {
     unsafe { iovecs.set_len(iovcnt) };
     file_descriptor.write_user(
         None,
-        UserBuffer::new(iovecs.iter().fold(Vec::new(), |buffer, iovec| {
-            // This function aims to avoid the extra cost caused by `Vec::append` (it moves data on heap)
-            translated_byte_buffer_append_to_existing_vec(
-                Some(buffer),
-                token,
-                iovec.iov_base,
-                iovec.iov_len,
-            )
-        })),
+        UserBuffer::new({
+            let mut vec = Vec::with_capacity(32);
+            for iovec in iovecs.iter() {
+                match translated_byte_buffer_append_to_existing_vec(
+                    &mut vec,
+                    token,
+                    iovec.iov_base,
+                    iovec.iov_len,
+                ) {
+                    Ok(_) => continue,
+                    Err(errno) => return errno,
+                }
+            }
+            vec
+        }),
     ) as isize
 }
 
@@ -288,7 +325,10 @@ pub fn sys_sendfile(out_fd: usize, in_fd: usize, offset: *mut usize, count: usiz
     let offset = if offset.is_null() {
         offset
     } else {
-        translated_refmut(token, offset) as *mut usize
+        match translated_refmut(token, offset) {
+            Ok(offset) => offset as *mut usize,
+            Err(errno) => return errno,
+        }
     };
 
     // a buffer in kernel
@@ -470,7 +510,10 @@ pub fn sys_dup3(oldfd: usize, newfd: usize, flags: u32) -> isize {
 pub fn sys_readlinkat(dirfd: usize, pathname: *const u8, buf: *mut u8, bufsiz: usize) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let path = translated_str(token, pathname);
+    let path = match translated_str(token, pathname) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     let real_path = if path.as_str() == "/proc/self/exe" {
         task.exe.lock().get_cwd().unwrap()
     } else {
@@ -509,7 +552,10 @@ bitflags! {
 
 pub fn sys_fstatat(dirfd: usize, path: *const u8, buf: *mut u8, flags: u32) -> isize {
     let token = current_user_token();
-    let path = translated_str(token, path);
+    let path = match translated_str(token, path) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     let flags = match FstatatFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -627,7 +673,10 @@ pub fn sys_fsync(fd: usize) -> isize {
 pub fn sys_chdir(path: *const u8) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let path = translated_str(token, path);
+    let path = match translated_str(token, path) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     info!("[sys_chdir] path: {}", path);
 
     let mut lock = task.fs.lock();
@@ -644,7 +693,10 @@ pub fn sys_chdir(path: *const u8) -> isize {
 pub fn sys_openat(dirfd: usize, path: *const u8, flags: u32, mode: u32) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let path = translated_str(token, path);
+    let path = match translated_str(token, path) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     let flags = match OpenFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -690,9 +742,14 @@ pub fn sys_renameat2(
 ) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let oldpath = translated_str(token, oldpath);
-    let newpath = translated_str(token, newpath);
-
+    let oldpath = match translated_str(token, oldpath) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
+    let newpath = match translated_str(token, newpath) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     info!(
         "[sys_renameat2] olddirfd: {}, oldpath: {}, newdirfd: {}, newpath: {}, flags: {}",
         olddirfd as isize, oldpath, newdirfd as isize, newpath, flags
@@ -752,7 +809,10 @@ pub fn sys_ppoll(poll_fd: usize, nfds: usize, time_spec: usize, sigmask: usize) 
 pub fn sys_mkdirat(dirfd: usize, path: *const u8, mode: u32) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let path = translated_str(token, path);
+    let path = match translated_str(token, path) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     info!(
         "[sys_mkdirat] dirfd: {}, path: {}, mode: {:?}",
         dirfd as isize,
@@ -786,7 +846,10 @@ bitflags! {
 pub fn sys_unlinkat(dirfd: usize, path: *const u8, flags: u32) -> isize {
     let task = current_task().unwrap();
     let token = task.get_user_token();
-    let path = translated_str(token, path);
+    let path = match translated_str(token, path) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     let flags = match UnlinkatFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -829,7 +892,10 @@ pub fn sys_umount2(target: *const u8, flags: u32) -> isize {
         return EINVAL;
     }
     let token = current_user_token();
-    let target = translated_str(token, target);
+    let target = match translated_str(token, target) {
+        Ok(target) => target,
+        Err(errno) => return errno,
+    };
     let flags = match UmountFlags::from_bits(flags) {
         Some(flags) => flags,
         None => return EINVAL,
@@ -884,9 +950,18 @@ pub fn sys_mount(
         return EINVAL;
     }
     let token = current_user_token();
-    let source = translated_str(token, source);
-    let target = translated_str(token, target);
-    let filesystemtype = translated_str(token, filesystemtype);
+    let source = match translated_str(token, source) {
+        Ok(source) => source,
+        Err(errno) => return errno,
+    };
+    let target = match translated_str(token, target) {
+        Ok(target) => target,
+        Err(errno) => return errno,
+    };
+    let filesystemtype = match translated_str(token, filesystemtype) {
+        Ok(filesystemtype) => filesystemtype,
+        Err(errno) => return errno,
+    };
     // infallible
     let mountflags = MountFlags::from_bits(mountflags).unwrap();
     info!(
@@ -913,7 +988,10 @@ pub fn sys_utimensat(
     const UTIME_OMIT: usize = 0x3ffffffe;
 
     let token = current_user_token();
-    let path = translated_str(token, pathname);
+    let path = match translated_str(token, pathname) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     let flags = match UtimensatFlags::from_bits(flags) {
         Some(flags) => flags,
         None => {
@@ -1077,10 +1155,22 @@ pub fn sys_pselect(
         return EINVAL;
     }
     let token = current_user_token();
-    let mut kread_fds = get_from_user_checked(token, read_fds);
-    let mut kwrite_fds = get_from_user_checked(token, write_fds);
-    let mut kexception_fds = get_from_user_checked(token, exception_fds);
-    let ktimeout = get_from_user_checked(token, timeout);
+    let mut kread_fds = match try_get_from_user(token, read_fds) {
+        Ok(fds) => fds,
+        Err(errno) => return errno,
+    };
+    let mut kwrite_fds = match try_get_from_user(token, write_fds) {
+        Ok(fds) => fds,
+        Err(errno) => return errno,
+    };
+    let mut kexception_fds = match try_get_from_user(token, exception_fds) {
+        Ok(fds) => fds,
+        Err(errno) => return errno,
+    };
+    let ktimeout = match try_get_from_user(token, timeout) {
+        Ok(timeout) => timeout,
+        Err(errno) => return errno,
+    };
     let ret = pselect(
         nfds,
         &mut kread_fds,
@@ -1132,7 +1222,10 @@ bitflags! {
 
 pub fn sys_faccessat2(dirfd: usize, pathname: *const u8, mode: u32, flags: u32) -> isize {
     let token = current_user_token();
-    let pathname = translated_str(token, pathname);
+    let pathname = match translated_str(token, pathname) {
+        Ok(path) => path,
+        Err(errno) => return errno,
+    };
     let mode = match FaccessatMode::from_bits(mode) {
         Some(mode) => mode,
         None => {

@@ -1,10 +1,10 @@
+use super::memory_set::check_page_fault;
 use super::{
     frame_alloc, tlb_invalidate, FrameTracker, MapPermission, PhysAddr, PhysPageNum, StepByOne,
     VirtAddr, VirtPageNum,
 };
 use _core::mem::MaybeUninit;
 use _core::ops::{Index, IndexMut};
-use alloc::vec;
 use alloc::vec::Vec;
 use alloc::{string::String, sync::Arc};
 use bitflags::*;
@@ -295,19 +295,57 @@ impl PageTable {
 
 /// if `existing_vec == None`, a empty `Vec` will be created.
 pub fn translated_byte_buffer_append_to_existing_vec(
-    existing_vec: Option<Vec<&'static mut [u8]>>,
+    existing_vec: &mut Vec<&'static mut [u8]>,
     token: usize,
     ptr: *const u8,
     len: usize,
-) -> Vec<&'static mut [u8]> {
+) -> Result<(), isize> {
     let page_table = PageTable::from_token(token);
     let mut start = ptr as usize;
     let end = start + len;
-    let mut v = existing_vec.unwrap_or(Vec::with_capacity(32));
     while start < end {
         let start_va = VirtAddr::from(start);
         let mut vpn = start_va.floor();
-        let ppn = page_table.translate(vpn).unwrap().ppn();
+        let ppn = match page_table.translate(vpn) {
+            Some(pte) => pte.ppn(),
+            None => {
+                let pa = check_page_fault(vpn.into())?;
+                pa.floor()
+            }
+        };
+        vpn.step();
+        let mut end_va: VirtAddr = vpn.into();
+        end_va = end_va.min(VirtAddr::from(end));
+        if end_va.page_offset() == 0 {
+            existing_vec.push(&mut ppn.get_bytes_array()[start_va.page_offset()..]);
+        } else {
+            existing_vec
+                .push(&mut ppn.get_bytes_array()[start_va.page_offset()..end_va.page_offset()]);
+        }
+        start = end_va.into();
+    }
+    Ok(())
+}
+
+pub fn translated_byte_buffer(
+    token: usize,
+    ptr: *const u8,
+    len: usize,
+) -> Result<Vec<&'static mut [u8]>, isize> {
+    let page_table = PageTable::from_token(token);
+    let mut start = ptr as usize;
+    let end = start + len;
+    let mut v = Vec::with_capacity(32);
+    while start < end {
+        let start_va = VirtAddr::from(start);
+        let mut vpn = start_va.floor();
+        let ppn = match page_table.translate(vpn) {
+            Some(pte) => pte.ppn(),
+            None => {
+                let pa = check_page_fault(vpn.into())?;
+                pa.floor()
+            }
+        };
         vpn.step();
         let mut end_va: VirtAddr = vpn.into();
         end_va = end_va.min(VirtAddr::from(end));
@@ -318,56 +356,59 @@ pub fn translated_byte_buffer_append_to_existing_vec(
         }
         start = end_va.into();
     }
-    v
-}
-
-pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&'static mut [u8]> {
-    translated_byte_buffer_append_to_existing_vec(None, token, ptr, len)
+    Ok(v)
 }
 
 /// Load a string from other address spaces into kernel space without an end `\0`.
-pub fn translated_str(token: usize, ptr: *const u8) -> String {
+pub fn translated_str(token: usize, ptr: *const u8) -> Result<String, isize> {
     if ptr.is_null() {
         log::warn!("[translated_str] ptr is null!");
-        return String::new();
+        return Ok(String::new());
     }
 
     let page_table = PageTable::from_token(token);
     let mut string = String::new();
-    let mut va = ptr as usize;
+    let mut cur = ptr as usize;
     loop {
-        let ch: u8 = *(page_table
-            .translate_va(VirtAddr::from(va))
-            .unwrap()
-            .get_mut());
+        let ch: u8 = *({
+            let va = VirtAddr::from(cur);
+            let pa = match page_table.translate_va(va) {
+                Some(pa) => pa,
+                None => check_page_fault(va)?,
+            };
+            pa.get_mut()
+        });
         if ch == 0 {
             break;
         }
         string.push(ch as char);
-        va += 1;
+        cur += 1;
     }
-    string
+    Ok(string)
 }
 
 /// Translate the user space pointer `ptr` into a reference in user space through page table `token`
-pub fn translated_ref<T>(token: usize, ptr: *const T) -> &'static T {
+pub fn translated_ref<T>(token: usize, ptr: *const T) -> Result<&'static T, isize> {
     let page_table = PageTable::from_token(token);
-    page_table
-        .translate_va(VirtAddr::from(ptr as usize))
-        .unwrap()
-        .get_ref()
+    let va = VirtAddr::from(ptr as usize);
+    let pa = match page_table.translate_va(va) {
+        Some(pa) => pa,
+        None => check_page_fault(va)?,
+    };
+    Ok(pa.get_ref())
 }
 
 /// Translate the user space pointer `ptr` into a mutable reference in user space through page table `token`
 /// # Implementation Information
 /// * Get the pagetable from token
-pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
+pub fn translated_refmut<T>(token: usize, ptr: *mut T) -> Result<&'static mut T, isize> {
     let page_table = PageTable::from_token(token);
-    let va = ptr as usize;
-    page_table
-        .translate_va(VirtAddr::from(va))
-        .unwrap()
-        .get_mut()
+    let va = VirtAddr::from(ptr as usize);
+    let pa = match page_table.translate_va(va) {
+        Some(pa) => pa,
+        None => check_page_fault(va)?,
+    };
+    Ok(pa.get_mut())
 }
 /// A buffer in user space. Kernel space code may use this struct to copy to/ read from user space.
 /// This struct is meaningless in case that the kernel page is present in the user side MemorySet.
@@ -540,16 +581,21 @@ impl Iterator for UserBufferIterator {
 
 /// Copy `*src: T` to kernel space.
 /// `src` is a pointer in user space, `dst` is a pointer in kernel space.
-pub fn copy_from_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
+pub fn copy_from_user<T: 'static + Copy>(
+    token: usize,
+    src: *const T,
+    dst: *mut T,
+) -> Result<(), isize> {
     let size = core::mem::size_of::<T>();
     // if all data of `*src` is in the same page, read directly
     if VirtAddr::from(src as usize).floor() == VirtAddr::from(src as usize + size - 1).floor() {
-        unsafe { _core::ptr::copy_nonoverlapping(translated_ref(token, src), dst, 1) };
+        unsafe { _core::ptr::copy_nonoverlapping(translated_ref(token, src)?, dst, 1) };
     // or we should use UserBuffer to read across user space pages
     } else {
-        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
+        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size)?)
             .read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
     }
+    Ok(())
 }
 
 /// Copy array `*src: [T;len]` to kernel space.
@@ -559,89 +605,119 @@ pub fn copy_from_user_array<T: 'static + Copy>(
     src: *const T,
     dst: *mut T,
     len: usize,
-) {
+) -> Result<(), isize> {
     let size = core::mem::size_of::<T>() * len;
     // if all data of `*src` is in the same page, read directly
     if VirtAddr::from(src as usize).floor() == VirtAddr::from(src as usize + size - 1).floor() {
         let page_table = PageTable::from_token(token);
-        let src_pa = page_table
-            .translate_va(VirtAddr::from(src as usize))
-            .unwrap();
+        let src_va = VirtAddr::from(src as usize);
+        let src_pa = match page_table.translate_va(src_va) {
+            Some(pa) => pa,
+            None => {
+                let pa = check_page_fault(src_va)?;
+                pa
+            }
+        };
         unsafe {
             _core::ptr::copy_nonoverlapping(src_pa.0 as *const T, dst, len);
         }
     // or we should use UserBuffer to read across user space pages
     } else {
-        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size))
+        UserBuffer::new(translated_byte_buffer(token, src as *const u8, size)?)
             .read(unsafe { core::slice::from_raw_parts_mut(dst as *mut u8, size) });
     }
+    Ok(())
 }
 
 /// Copy `*src: T` to user space.
 /// `src` is a pointer in kernel space, `dst` is a pointer in user space.
-pub fn copy_to_user<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T) {
+pub fn copy_to_user<T: 'static + Copy>(
+    token: usize,
+    src: *const T,
+    dst: *mut T,
+) -> Result<(), isize> {
     let size = core::mem::size_of::<T>();
     // A nice predicate. Well done!
     // Re: Thanks!
     if VirtAddr::from(dst as usize).floor() == VirtAddr::from(dst as usize + size - 1).floor() {
-        unsafe { _core::ptr::copy_nonoverlapping(src, translated_refmut(token, dst), 1) };
+        unsafe { _core::ptr::copy_nonoverlapping(src, translated_refmut(token, dst)?, 1) };
     // use UserBuffer to write across user space pages
     } else {
-        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
+        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size)?)
             .write(unsafe { core::slice::from_raw_parts(src as *const u8, size) });
     }
+    Ok(())
 }
 
 /// Copy `*src: T` to kernel space.
 /// `src` is a pointer in user space, `dst` is a pointer in kernel space.
 #[inline(always)]
-pub fn get_from_user<T: 'static + Copy>(token: usize, src: *const T) -> T {
+pub fn get_from_user<T: 'static + Copy>(token: usize, src: *const T) -> Result<T, isize> {
     unsafe {
         let mut dst: T = MaybeUninit::uninit().assume_init();
-        copy_from_user(token, src, &mut dst);
-        return dst;
+        copy_from_user(token, src, &mut dst)?;
+        return Ok(dst);
     }
 }
 
 #[inline(always)]
-pub fn get_from_user_checked<T: 'static + Copy>(token: usize, src: *const T) -> Option<T> {
+pub fn try_get_from_user<T: 'static + Copy>(
+    token: usize,
+    src: *const T,
+) -> Result<Option<T>, isize> {
     if !src.is_null() {
-        Some(get_from_user(token, src))
+        Ok(Some(get_from_user(token, src)?))
     } else {
-        None
+        Ok(None)
     }
 }
 
 /// Copy array `*src: [T;len]` to user space.
 /// `src` is a pointer in kernel space, `dst` is a pointer in user space.
-pub fn copy_to_user_array<T: 'static + Copy>(token: usize, src: *const T, dst: *mut T, len: usize) {
+pub fn copy_to_user_array<T: 'static + Copy>(
+    token: usize,
+    src: *const T,
+    dst: *mut T,
+    len: usize,
+) -> Result<(), isize> {
     let size = core::mem::size_of::<T>() * len;
     // if all data of `*dst` is in the same page, write directly
     if VirtAddr::from(dst as usize).floor() == VirtAddr::from(dst as usize + size - 1).floor() {
         let page_table = PageTable::from_token(token);
-        let dst_pa = page_table
-            .translate_va(VirtAddr::from(dst as usize))
-            .unwrap();
+        let dst_va = VirtAddr::from(dst as usize);
+        let dst_pa = match page_table.translate_va(dst_va) {
+            Some(pa) => pa,
+            None => {
+                let pa = check_page_fault(dst_va)?;
+                pa
+            }
+        };
         unsafe {
             _core::ptr::copy_nonoverlapping(src, dst_pa.0 as *mut T, len);
         };
     // or we should use UserBuffer to write across user space pages
     } else {
-        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
+        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size)?)
             .write(unsafe { core::slice::from_raw_parts(src as *const u8, size) });
     }
+    Ok(())
 }
 
 /// Automatically add `'\0'` in the end,
 /// so total written length is `src.len() + 1` (with trailing `'\0'`).
 /// # Warning
 /// Caller should ensure `src` is not too large, or this function will write out of bound.
-pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
+pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) -> Result<(), isize> {
     let size = src.len();
     let page_table = PageTable::from_token(token);
-    let dst_pa = page_table
-        .translate_va(VirtAddr::from(dst as usize))
-        .unwrap();
+    let dst_va = VirtAddr::from(dst as usize);
+    let dst_pa = match page_table.translate_va(dst_va) {
+        Some(pa) => pa,
+        None => {
+            let pa = check_page_fault(dst_va)?;
+            pa
+        }
+    };
     let dst_ptr = dst_pa.0 as *mut u8;
     // if all data of `*dst` is in the same page, write directly
     if VirtAddr::from(dst as usize).floor() == VirtAddr::from(dst as usize + size).floor() {
@@ -651,10 +727,11 @@ pub fn copy_to_user_string(token: usize, src: &str, dst: *mut u8) {
         }
     // or we should use UserBuffer to write across user space pages
     } else {
-        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size))
+        UserBuffer::new(translated_byte_buffer(token, dst as *mut u8, size)?)
             .write(unsafe { core::slice::from_raw_parts(src.as_ptr(), size) });
         unsafe {
             dst_ptr.add(size).write(b'\0');
         }
     }
+    Ok(())
 }

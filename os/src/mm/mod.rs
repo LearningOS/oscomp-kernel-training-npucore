@@ -18,7 +18,7 @@ pub use memory_set::{
 use page_table::PTEFlags;
 pub use page_table::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string,
-    get_from_user, get_from_user_checked, translated_byte_buffer,
+    get_from_user, try_get_from_user, translated_byte_buffer,
     translated_byte_buffer_append_to_existing_vec, translated_ref, translated_refmut,
     translated_str, PageTable, PageTableEntry, UserBuffer, UserBufferIterator,
 };
