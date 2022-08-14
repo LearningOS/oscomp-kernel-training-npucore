@@ -112,13 +112,18 @@ pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
 
 pub fn do_oom() {
     let manager = TASK_MANAGER.lock();
-    for task in manager
-        .interruptible_queue
-        .iter()
-        .chain(manager.ready_queue.iter().rev())
-    {
-        if task.vm.lock().do_oom() > 0 {
-            break;
+    for task in manager.interruptible_queue.iter() {
+        let released = task.vm.lock().do_deep_clean();
+        log::warn!("deep clean on task: {}, released: {}", task.tgid, released);
+        if released > 0 {
+            return;
+        };
+    }
+    for task in manager.ready_queue.iter().rev() {
+        let released = task.vm.lock().do_shallow_clean();
+        log::warn!("shallow clean on task: {}, released: {}", task.tgid, released);
+        if released > 0 {
+            return;
         };
     }
 }

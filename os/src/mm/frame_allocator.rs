@@ -122,10 +122,13 @@ pub fn init_frame_allocator() {
 pub fn oom_handler() {
     if let Err(_) = fs::directory_tree::oom() {
         let task = current_task().unwrap();
+        let mut released = 0;
         if let Some(mut memory_set) = task.vm.try_lock() {
-            memory_set.do_oom();
-        } else {
-            log::warn!("[oom_handler] try lock current vm failed.");
+            released = memory_set.do_shallow_clean();
+            log::warn!("[oom_handler] current task released: {}", released);
+        };
+        if released == 0 {
+            log::warn!("[oom_handler] notify all tasks!");
             crate::task::do_oom();
         };
     };
