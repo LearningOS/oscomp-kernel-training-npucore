@@ -141,6 +141,13 @@ impl File for Teletype {
                 .as_mut_ptr()
                 .write_volatile(console_getchar() as u8);
         }
+        if inner.termios.lflag & LocalModes::ECHO.bits() != 0 {
+            if inner.last_char == '\r' as u8 {
+                print!("\n");
+            } else {
+                print!("{}", inner.last_char as char);
+            }
+        }
         // fake failed reading to make pseudo non-block reading,
         // in order to return properly in r_ready(),
         // so that we could let bash echo what we input on k210.
@@ -173,6 +180,13 @@ impl File for Teletype {
             //we can guarantee last_char isn't a illegal char
             unsafe {
                 ptr.write_volatile(inner.last_char);
+            }
+            if inner.termios.lflag & LocalModes::ECHO.bits() != 0 {
+                if inner.last_char == '\r' as u8 {
+                    print!("\n");
+                } else {
+                    print!("{}", inner.last_char as char);
+                }
             }
             inner.last_char = console_getchar() as u8;
             count += 1;
