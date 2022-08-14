@@ -242,8 +242,11 @@ impl DirectoryTreeNode {
             path
         };
         const LIBC_PATH: &str = "/lib/libc.so";
-        const REDIRECT_TO_LIBC: [&str; 2] =
-            ["/lib/ld-musl-riscv64.so.1", "/lib/ld-musl-riscv64-sf.so.1"];
+        const REDIRECT_TO_LIBC: [&str; 3] = [
+            "/lib/ld-musl-riscv64.so.1",
+            "/lib/ld-musl-riscv64-sf.so.1",
+            "/lib/ld-linux-riscv64-lp64d.so.1",
+        ];
         let path = if REDIRECT_TO_LIBC.contains(&path) {
             LIBC_PATH
         } else {
