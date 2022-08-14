@@ -101,14 +101,6 @@ pub fn sys_read(fd: usize, buf: usize, count: usize) -> isize {
     if !file_descriptor.readable() {
         return EBADF;
     }
-    // buf is outside your accessible address space.
-    if !task
-        .vm
-        .lock()
-        .contains_valid_buffer(buf, count, MapPermission::W)
-    {
-        return EFAULT;
-    }
     let token = task.get_user_token();
     file_descriptor.read_user(
         None,
@@ -130,14 +122,6 @@ pub fn sys_write(fd: usize, buf: usize, count: usize) -> isize {
     };
     if !file_descriptor.writable() {
         return EBADF;
-    }
-    // buf is outside your accessible address space.
-    if !task
-        .vm
-        .lock()
-        .contains_valid_buffer(buf, count, MapPermission::R)
-    {
-        return EFAULT;
     }
     let token = task.get_user_token();
     file_descriptor.write_user(
@@ -162,14 +146,6 @@ pub fn sys_pread(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     if !file_descriptor.readable() {
         return EBADF;
     }
-    // buf is outside your accessible address space.
-    if !task
-        .vm
-        .lock()
-        .contains_valid_buffer(buf, count, MapPermission::W)
-    {
-        return EFAULT;
-    }
     let token = task.get_user_token();
     file_descriptor.read_user(
         Some(offset),
@@ -192,14 +168,6 @@ pub fn sys_pwrite(fd: usize, buf: usize, count: usize, offset: usize) -> isize {
     // fd is not open for writing
     if !file_descriptor.writable() {
         return EBADF;
-    }
-    // buf is outside your accessible address space.
-    if !task
-        .vm
-        .lock()
-        .contains_valid_buffer(buf, count, MapPermission::R)
-    {
-        return EFAULT;
     }
     let token = task.get_user_token();
     file_descriptor.write_user(
