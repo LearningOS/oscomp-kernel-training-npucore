@@ -13,6 +13,7 @@ use crate::task::{
 };
 use crate::timer::TICKS_PER_SEC;
 use crate::trap::TrapContext;
+use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -270,6 +271,9 @@ impl MemorySet {
                                 ppn,
                                 PTEFlags::from_bits(area.map_perm.bits).unwrap(),
                             );
+                            area.inner
+                                .active
+                                .push_back((vpn.0 - area.inner.vpn_range.get_start().0) as u16);
                             area.inner.compressed -= 1;
                             info!("[do_page_fault] addr: {:?}, solution: decompress", addr);
                             ppn
@@ -281,6 +285,9 @@ impl MemorySet {
                                 ppn,
                                 PTEFlags::from_bits(area.map_perm.bits).unwrap(),
                             );
+                            area.inner
+                                .active
+                                .push_back((vpn.0 - area.inner.vpn_range.get_start().0) as u16);
                             area.inner.swapped -= 1;
                             info!("[do_page_fault] addr: {:?}, solution: swap in", addr);
                             ppn
@@ -314,55 +321,29 @@ impl MemorySet {
             Err(MemoryError::BadAddress)
         }
     }
-    pub fn do_oom(&mut self) -> usize {
-        let area = self
-            .areas
+    pub fn do_shallow_clean(&mut self) -> usize {
+        let page_table = &mut self.page_table;
+        self.areas
             .iter_mut()
-            .filter(|area| area.map_file.is_none())
-            .max_by_key(|area| area.inner.frames.len())
-            .unwrap();
-        let compressed_before = area.inner.compressed;
-        let swapped_before = area.inner.swapped;
-        let mut start_vpn = area.inner.vpn_range.get_end();
-        // find first frame which is in memory...
-        for vpn in area.inner.vpn_range {
-            match area.inner.frames[vpn.0 - area.inner.vpn_range.get_start().0] {
-                Frame::InMemory(_) => {
-                    start_vpn = vpn;
-                    break;
-                }
-                _ => continue,
-            }
-        }
-        for vpn in VPNRange::new(start_vpn, area.inner.vpn_range.get_end()) {
-            let frame = &mut area.inner.frames[vpn.0 - area.inner.vpn_range.get_start().0];
-            // first, try to compress
-            match frame.zip() {
-                Ok(zram_id) => {
-                    self.page_table.unmap(vpn);
-                    area.inner.compressed += 1;
-                    trace!("[do_oom] compress frame: {:?}, zram_id: {}", frame, zram_id);
-                    continue;
-                }
-                Err(MemoryError::SharedPage) => continue,
-                Err(MemoryError::ZramIsFull) => {}
-                Err(MemoryError::NotInMemory) => break,
-                _ => unreachable!(),
-            }
-            // zram is full, try to swap out
-            match frame.swap_out() {
-                Ok(swap_id) => {
-                    self.page_table.unmap(vpn);
-                    area.inner.swapped += 1;
-                    trace!("[do_oom] swap out frame: {:?}, swap_id: {}", frame, swap_id);
-                    continue;
-                }
-                Err(MemoryError::SharedPage) => continue,
-                Err(MemoryError::NotInMemory) => break,
-                _ => unreachable!(),
-            }
-        }
-        area.inner.compressed + area.inner.swapped - compressed_before - swapped_before
+            .filter(|area| {
+                let start_vpn = area.inner.vpn_range.get_start();
+                start_vpn.0 >= (MMAP_BASE >> PAGE_SIZE_BITS)
+                    && start_vpn.0 < (TASK_SIZE >> PAGE_SIZE_BITS)
+                    && area.map_file.is_none()
+            })
+            .map(|area| area.do_oom(page_table))
+            .sum()
+    }
+    pub fn do_deep_clean(&mut self) -> usize {
+        let page_table = &mut self.page_table;
+        self.areas
+            .iter_mut()
+            .filter(|area| {
+                area.inner.vpn_range.get_start().0 < (TASK_SIZE >> PAGE_SIZE_BITS)
+                    && area.map_file.is_none()
+            })
+            .map(|area| area.do_oom(page_table))
+            .sum()
     }
     /// Mention that trampoline is not collected by areas.
     fn map_trampoline(&mut self) {
@@ -1229,6 +1210,7 @@ impl Frame {
 pub struct LinearMap {
     vpn_range: VPNRange,
     frames: Vec<Frame>,
+    active: VecDeque<u16>,
     compressed: usize,
     swapped: usize,
 }
@@ -1239,6 +1221,7 @@ impl LinearMap {
         let mut new_dict = Self {
             vpn_range,
             frames: Vec::with_capacity(len),
+            active: VecDeque::new(),
             compressed: 0,
             swapped: 0,
         };
@@ -1259,14 +1242,16 @@ impl LinearMap {
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
     pub fn alloc_in_memory(&mut self, key: VirtPageNum, value: Arc<FrameTracker>) {
-        self.frames[key.0 - self.vpn_range.get_start().0]
-            .insert_in_memory(value)
-            .unwrap()
+        let idx = key.0 - self.vpn_range.get_start().0;
+        self.active.push_back(idx as u16);
+        self.frames[idx].insert_in_memory(value).unwrap()
     }
     /// # Warning
     /// a key which exceeds the end of `vpn_range` would cause panic
     pub fn remove_in_memory(&mut self, key: &VirtPageNum) -> Option<Arc<FrameTracker>> {
-        self.frames[key.0 - self.vpn_range.get_start().0].take_in_memory()
+        let idx = key.0 - self.vpn_range.get_start().0;
+        self.active.retain(|&elem| elem as usize != idx);
+        self.frames[idx].take_in_memory()
     }
     // /// # Warning
     // /// a key which exceeds the end of `vpn_range` would cause panic
@@ -1310,12 +1295,58 @@ impl LinearMap {
             )
         }
     }
+    fn split_active_into_two(
+        active: &VecDeque<u16>,
+        cut_idx: usize,
+    ) -> (VecDeque<u16>, VecDeque<u16>) {
+        if active.is_empty() {
+            (VecDeque::new(), VecDeque::new())
+        } else {
+            active.iter().fold(
+                (VecDeque::new(), VecDeque::new()),
+                |(mut first_active, mut second_active), &idx| {
+                    if (idx as usize) < cut_idx {
+                        first_active.push_back(idx);
+                    } else {
+                        second_active.push_back(idx - cut_idx as u16);
+                    }
+                    (first_active, second_active)
+                },
+            )
+        }
+    }
+    fn split_active_into_three(
+        active: &VecDeque<u16>,
+        first_cut_idx: usize,
+        second_cut_idx: usize,
+    ) -> (VecDeque<u16>, VecDeque<u16>, VecDeque<u16>) {
+        assert!(first_cut_idx < second_cut_idx);
+        if active.is_empty() {
+            (VecDeque::new(), VecDeque::new(), VecDeque::new())
+        } else {
+            active.iter().fold(
+                (VecDeque::new(), VecDeque::new(), VecDeque::new()),
+                |(mut first_active, mut second_active, mut third_active), &idx| {
+                    if (idx as usize) < first_cut_idx {
+                        first_active.push_back(idx);
+                    } else if (idx as usize) < second_cut_idx {
+                        second_active.push_back(idx - first_cut_idx as u16);
+                    } else {
+                        third_active.push_back(idx - second_cut_idx as u16)
+                    }
+                    (first_active, second_active, third_active)
+                },
+            )
+        }
+    }
     pub fn into_two(self, cut: VirtPageNum) -> Result<(Self, Self), ()> {
         let vpn_start = self.vpn_range.get_start();
         let vpn_end = self.vpn_range.get_end();
         if cut <= vpn_start || cut >= vpn_end {
             return Err(());
         }
+        let (first_active, second_active) =
+            LinearMap::split_active_into_two(&self.active, cut.0 - vpn_start.0);
         let (first_start, first_end) = (0, cut.0 - vpn_start.0);
         let first_frames = self.frames[first_start..first_end].to_vec();
         let (first_compressed, first_swapped) =
@@ -1323,6 +1354,7 @@ impl LinearMap {
         let first = LinearMap {
             vpn_range: VPNRange::new(vpn_start, cut),
             frames: first_frames,
+            active: first_active,
             compressed: first_compressed,
             swapped: first_swapped,
         };
@@ -1333,6 +1365,7 @@ impl LinearMap {
         let second = LinearMap {
             vpn_range: VPNRange::new(cut, vpn_end),
             frames: second_frames,
+            active: second_active,
             compressed: second_compressed,
             swapped: second_swapped,
         };
@@ -1348,6 +1381,11 @@ impl LinearMap {
         if first_cut <= vpn_start || second_cut >= vpn_end || first_cut > second_cut {
             return Err(());
         }
+        let (first_active, second_active, third_active) = LinearMap::split_active_into_three(
+            &self.active,
+            first_cut.0 - vpn_start.0,
+            second_cut.0 - vpn_start.0,
+        );
         let (first_start, first_end) = (0, first_cut.0 - vpn_start.0);
         let first_frames = self.frames[first_start..first_end].to_vec();
         let (first_compressed, first_swapped) =
@@ -1355,6 +1393,7 @@ impl LinearMap {
         let first = LinearMap {
             vpn_range: VPNRange::new(vpn_start, first_cut),
             frames: first_frames,
+            active: first_active,
             compressed: first_compressed,
             swapped: first_swapped,
         };
@@ -1365,6 +1404,7 @@ impl LinearMap {
         let second = LinearMap {
             vpn_range: VPNRange::new(first_cut, second_cut),
             frames: second_frames,
+            active: second_active,
             compressed: second_compressed,
             swapped: second_swapped,
         };
@@ -1375,6 +1415,7 @@ impl LinearMap {
         let third = LinearMap {
             vpn_range: VPNRange::new(second_cut, vpn_end),
             frames: third_frames,
+            active: third_active,
             compressed: third_compressed,
             swapped: third_swapped,
         };
@@ -1460,7 +1501,8 @@ impl MapArea {
             map_file: another.map_file.clone(),
         }
     }
-    /// Create `MapArea` from `Vec<Arc<FrameTracker>>` \
+    /// Create `MapArea` from `Vec<Arc<FrameTracker>>`. This function should only be used to
+    /// generate a `MapArea` in `KERNEL_SPACE`. \
     /// # NOTE
     /// `start_vpn` will be set to `start_va.floor()`,
     /// `end_vpn` will be set to `start_vpn + frames.len()`,
@@ -1477,6 +1519,8 @@ impl MapArea {
             inner: LinearMap {
                 vpn_range: VPNRange::new(start_vpn, end_vpn),
                 frames,
+                // Unsafe if this `MapArea` is inserted to somewhere except `KERNEL_SPACE`.
+                active: VecDeque::new(),
                 compressed: 0,
                 swapped: 0,
             },
@@ -1857,6 +1901,39 @@ impl MapArea {
             },
         ))
     }
+    pub fn do_oom(&mut self, page_table: &mut PageTable) -> usize {
+        let start_vpn = self.inner.vpn_range.get_start();
+        let compressed_before = self.inner.compressed;
+        let swapped_before = self.inner.swapped;
+        warn!("{:?}", self.inner.active);
+        while let Some(idx) = self.inner.active.pop_front() {
+            let frame = &mut self.inner.frames[idx as usize];
+            // first, try to compress
+            match frame.zip() {
+                Ok(zram_id) => {
+                    page_table.unmap(VirtPageNum::from(start_vpn.0 + idx as usize));
+                    self.inner.compressed += 1;
+                    trace!("[do_oom] compress frame: {:?}, zram_id: {}", frame, zram_id);
+                    continue;
+                }
+                Err(MemoryError::SharedPage) => continue,
+                Err(MemoryError::ZramIsFull) => {}
+                _ => unreachable!(),
+            }
+            // zram is full, try to swap out
+            match frame.swap_out() {
+                Ok(swap_id) => {
+                    page_table.unmap(VirtPageNum::from(start_vpn.0 + idx as usize));
+                    self.inner.swapped += 1;
+                    trace!("[do_oom] swap out frame: {:?}, swap_id: {}", frame, swap_id);
+                    continue;
+                }
+                Err(MemoryError::SharedPage) => continue,
+                _ => unreachable!(),
+            }
+        }
+        self.inner.compressed + self.inner.swapped - compressed_before - swapped_before
+    }
 }
 
 pub fn check_page_fault(addr: VirtAddr) -> Result<PhysAddr, isize> {
@@ -1865,7 +1942,9 @@ pub fn check_page_fault(addr: VirtAddr) -> Result<PhysAddr, isize> {
     let task = current_task().unwrap();
     match task.vm.lock().do_page_fault(addr) {
         Ok(pa) => return Ok(pa),
-        Err(MemoryError::BeyondEOF) | Err(MemoryError::NoPermission) | Err(MemoryError::BadAddress) => {
+        Err(MemoryError::BeyondEOF)
+        | Err(MemoryError::NoPermission)
+        | Err(MemoryError::BadAddress) => {
             return Err(EFAULT);
         }
         _ => unreachable!(),
