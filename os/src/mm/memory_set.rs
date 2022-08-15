@@ -1,11 +1,11 @@
-use super::zram::ZRAM_DEVICE;
+use super::zram::{ZramTracker, ZRAM_DEVICE};
 use super::{frame_alloc, FrameTracker};
 use super::{PTEFlags, PageTable, PageTableEntry};
 use super::{PhysAddr, PhysPageNum, VirtAddr, VirtPageNum};
 use super::{StepByOne, VPNRange};
 use crate::config::*;
 use crate::fs::file_trait::File;
-use crate::fs::swap::SWAP_DEVICE;
+use crate::fs::swap::{SwapTracker, SWAP_DEVICE};
 use crate::fs::SeekWhence;
 use crate::syscall::errno::*;
 use crate::task::{
@@ -342,7 +342,13 @@ impl MemorySet {
                 area.inner.vpn_range.get_start().0 < (TASK_SIZE >> PAGE_SIZE_BITS)
                     && area.map_file.is_none()
             })
-            .map(|area| area.do_oom(page_table))
+            .map(|area| {
+                if area.inner.vpn_range.get_start().0 < MMAP_BASE >> PAGE_SIZE_BITS {
+                    area.force_swap(page_table)
+                } else {
+                    area.do_oom(page_table)
+                }
+            })
             .sum()
     }
     /// Mention that trampoline is not collected by areas.
@@ -1101,6 +1107,11 @@ impl MemorySet {
                 MemoryError::AreaNotFound => {
                     warn!("[dealloc_user_res] user stack is not allocated")
                 }
+                MemoryError::NotMapped => {
+                    warn!(
+                        "[dealloc_user_res] user stack is partially unmapped, is it caused by oom?"
+                    )
+                }
                 _ => unreachable!(),
             }
         }
@@ -1114,8 +1125,8 @@ impl MemorySet {
 #[derive(Clone, Debug)]
 pub enum Frame {
     InMemory(Arc<FrameTracker>),
-    Compressed(usize),
-    SwappedOut(usize),
+    Compressed(Arc<ZramTracker>),
+    SwappedOut(Arc<SwapTracker>),
     Unallocated,
 }
 
@@ -1148,9 +1159,10 @@ impl Frame {
         match self {
             Frame::InMemory(frame_ref) => {
                 if Arc::strong_count(frame_ref) == 1 {
-                    let swap_id = SWAP_DEVICE.lock().write(frame_ref.ppn.get_bytes_array());
+                    let swap_tracker = SWAP_DEVICE.lock().write(frame_ref.ppn.get_bytes_array());
+                    let swap_id = swap_tracker.0;
                     // frame_tracker should be dropped
-                    *self = Frame::SwappedOut(swap_id);
+                    *self = Frame::SwappedOut(swap_tracker);
                     Ok(swap_id)
                 } else {
                     Err(MemoryError::SharedPage)
@@ -1159,12 +1171,29 @@ impl Frame {
             _ => Err(MemoryError::NotInMemory),
         }
     }
+    /// # Warning
+    /// This function do not check reference count of frame,
+    /// So it's possible that some pages was write to external storage, but no page is released.
+    pub fn force_swap_out(&mut self) -> Result<usize, MemoryError> {
+        match self {
+            Frame::InMemory(frame_ref) => {
+                let swap_tracker = SWAP_DEVICE.lock().write(frame_ref.ppn.get_bytes_array());
+                let swap_id = swap_tracker.0;
+                // frame_tracker should be dropped
+                *self = Frame::SwappedOut(swap_tracker);
+                Ok(swap_id)
+            }
+            _ => Err(MemoryError::NotInMemory),
+        }
+    }
     pub fn swap_in(&mut self) -> Result<PhysPageNum, MemoryError> {
         match self {
-            Frame::SwappedOut(swap_id) => {
+            Frame::SwappedOut(swap_tracker) => {
                 let frame = frame_alloc().unwrap();
                 let ppn = frame.ppn;
-                SWAP_DEVICE.lock().read(*swap_id, ppn.get_bytes_array());
+                SWAP_DEVICE
+                    .lock()
+                    .read(swap_tracker.0, ppn.get_bytes_array());
                 *self = Frame::InMemory(frame);
                 Ok(ppn)
             }
@@ -1175,9 +1204,12 @@ impl Frame {
         match self {
             Frame::InMemory(frame_ref) => {
                 if Arc::strong_count(frame_ref) == 1 {
-                    if let Ok(zram_id) = ZRAM_DEVICE.lock().write(frame_ref.ppn.get_bytes_array()) {
+                    if let Ok(zram_tracker) =
+                        ZRAM_DEVICE.lock().write(frame_ref.ppn.get_bytes_array())
+                    {
+                        let zram_id = zram_tracker.0;
                         // frame_tracker should be dropped
-                        *self = Frame::Compressed(zram_id);
+                        *self = Frame::Compressed(zram_tracker);
                         Ok(zram_id)
                     } else {
                         Err(MemoryError::ZramIsFull)
@@ -1191,12 +1223,12 @@ impl Frame {
     }
     pub fn unzip(&mut self) -> Result<PhysPageNum, MemoryError> {
         match self {
-            Frame::Compressed(zram_id) => {
+            Frame::Compressed(zram_tracker) => {
                 let frame = frame_alloc().unwrap();
                 let ppn = frame.ppn;
                 ZRAM_DEVICE
                     .lock()
-                    .read(*zram_id, ppn.get_bytes_array())
+                    .read(zram_tracker.0, ppn.get_bytes_array())
                     .unwrap();
                 *self = Frame::InMemory(frame);
                 Ok(ppn)
@@ -1420,27 +1452,6 @@ impl LinearMap {
             swapped: third_swapped,
         };
         Ok((first, second, third))
-    }
-}
-
-impl Drop for LinearMap {
-    fn drop(&mut self) {
-        if self.compressed != 0 {
-            let mut zram = ZRAM_DEVICE.lock();
-            self.frames.iter().for_each(|frame| {
-                if let Frame::Compressed(zram_id) = frame {
-                    zram.discard(*zram_id).unwrap();
-                }
-            })
-        }
-        if self.swapped != 0 {
-            let mut swap = SWAP_DEVICE.lock();
-            self.frames.iter().for_each(|frame| {
-                if let Frame::SwappedOut(swap_id) = frame {
-                    swap.discard(*swap_id);
-                }
-            })
-        }
     }
 }
 
@@ -1933,6 +1944,28 @@ impl MapArea {
             }
         }
         self.inner.compressed + self.inner.swapped - compressed_before - swapped_before
+    }
+    pub fn force_swap(&mut self, page_table: &mut PageTable) -> usize {
+        let start_vpn = self.inner.vpn_range.get_start();
+        let swapped_before = self.inner.swapped;
+        warn!("{:?}", self.inner.active);
+        while let Some(idx) = self.inner.active.pop_front() {
+            let frame = &mut self.inner.frames[idx as usize];
+            match frame.force_swap_out() {
+                Ok(swap_id) => {
+                    page_table.unmap(VirtPageNum::from(start_vpn.0 + idx as usize));
+                    self.inner.swapped += 1;
+                    trace!(
+                        "[force_swap] swap out frame: {:?}, swap_id: {}",
+                        frame,
+                        swap_id
+                    );
+                    continue;
+                }
+                _ => unreachable!(),
+            }
+        }
+        self.inner.swapped - swapped_before
     }
 }
 

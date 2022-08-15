@@ -1,4 +1,4 @@
-use crate::config::{PAGE_SIZE, USER_STACK_SIZE};
+use crate::config::{PAGE_SIZE, USER_STACK_SIZE, SYSTEM_TASK_LIMIT};
 use crate::fs::OpenFlags;
 use crate::mm::{
     copy_from_user, copy_to_user, copy_to_user_string, get_from_user, translated_byte_buffer,
@@ -719,8 +719,8 @@ pub fn sys_prlimit(
                     copy_to_user(
                         token,
                         &(RLimit {
-                            rlim_cur: 32,
-                            rlim_max: 32,
+                            rlim_cur: SYSTEM_TASK_LIMIT,
+                            rlim_max: SYSTEM_TASK_LIMIT,
                         }),
                         old_limit,
                     );

@@ -258,7 +258,7 @@ impl TaskControlBlock {
             exe: Arc::new(Mutex::new(elf)),
             tid_allocator,
             files: Arc::new(Mutex::new(FdTable::new({
-                let mut vec = Vec::with_capacity(256);
+                let mut vec = Vec::with_capacity(144);
                 let tty = Some(ROOT_FD.open("/dev/tty", OpenFlags::O_RDWR, false).unwrap());
                 vec.resize(3, tty);
                 vec
@@ -399,6 +399,7 @@ impl TaskControlBlock {
         let memory_set = if flags.contains(CloneFlags::CLONE_VM) {
             self.vm.clone()
         } else {
+            crate::mm::frame_reserve(16);
             Arc::new(Mutex::new(MemorySet::from_existing_user(
                 &mut self.vm.lock(),
             )))

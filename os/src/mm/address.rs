@@ -142,10 +142,10 @@ impl From<PhysPageNum> for PhysAddr {
 
 impl VirtPageNum {
     pub fn start_addr(&self) -> VirtAddr {
-        VirtAddr::from(self.0 << 12)
+        VirtAddr::from(self.0 << PAGE_SIZE_BITS)
     }
     pub fn offset(&self, offset: usize) -> VirtAddr {
-        VirtAddr::from(self.0 << 12 + offset)
+        VirtAddr::from((self.0 << PAGE_SIZE_BITS) + offset)
     }
     pub fn indexes(&self) -> [usize; 3] {
         let mut vpn = self.0;
@@ -168,10 +168,10 @@ impl PhysAddr {
 }
 impl PhysPageNum {
     pub fn start_addr(&self) -> PhysAddr {
-        PhysAddr::from(self.0 << 12)
+        PhysAddr::from(self.0 << PAGE_SIZE_BITS)
     }
     pub fn offset(&self, offset: usize) -> PhysAddr {
-        PhysAddr::from(self.0 << 12 + offset)
+        PhysAddr::from((self.0 << PAGE_SIZE_BITS) + offset)
     }
     pub fn get_pte_array(&self) -> &'static mut [PageTableEntry] {
         let pa: PhysAddr = self.clone().into();

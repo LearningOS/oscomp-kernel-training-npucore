@@ -1,16 +1,46 @@
 use core::cmp::Ordering;
 
+use crate::config::SYSTEM_TASK_LIMIT;
 use crate::timer::TimeSpec;
 
 use super::{current_task, TaskControlBlock};
 use alloc::collections::{BinaryHeap, VecDeque};
 use alloc::sync::{Arc, Weak};
+use alloc::vec::Vec;
 use lazy_static::*;
 use spin::Mutex;
+
+pub struct ActiveTracker {
+    bitmap: Vec<u64>,
+}
+
+#[allow(unused)]
+impl ActiveTracker {
+    pub const DEFAULT_SIZE: usize = SYSTEM_TASK_LIMIT;
+    pub fn new() -> Self {
+        let len = (Self::DEFAULT_SIZE + 63) / 64;
+        let mut bitmap = Vec::with_capacity(len);
+        bitmap.resize(len, 0);
+        Self { bitmap }
+    }
+    pub fn check_active(&self, pid: usize) -> bool {
+        (self.bitmap[pid / 64] & (1 << (pid % 64))) != 0
+    }
+    pub fn check_inactive(&self, pid: usize) -> bool {
+        (self.bitmap[pid / 64] & (1 << (pid % 64))) == 0
+    }
+    pub fn mark_active(&mut self, pid: usize) {
+        self.bitmap[pid / 64] |= 1 << (pid % 64)
+    }
+    pub fn mark_inactive(&mut self, pid: usize) {
+        self.bitmap[pid / 64] &= !(1 << (pid % 64))
+    }
+}
 
 pub struct TaskManager {
     pub ready_queue: VecDeque<Arc<TaskControlBlock>>,
     pub interruptible_queue: VecDeque<Arc<TaskControlBlock>>,
+    pub active_tracker: ActiveTracker,
 }
 
 /// A simple FIFO scheduler.
@@ -19,13 +49,20 @@ impl TaskManager {
         Self {
             ready_queue: VecDeque::new(),
             interruptible_queue: VecDeque::new(),
+            active_tracker: ActiveTracker::new(),
         }
     }
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
         self.ready_queue.push_back(task);
     }
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        match self.ready_queue.pop_front() {
+            Some(task) => {
+                self.active_tracker.mark_active(task.pid.0);
+                Some(task)
+            }
+            None => None,
+        }
     }
     pub fn add_interruptible(&mut self, task: Arc<TaskControlBlock>) {
         self.interruptible_queue.push_back(task);
@@ -110,22 +147,49 @@ pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
     TASK_MANAGER.lock().fetch()
 }
 
-pub fn do_oom() {
-    let manager = TASK_MANAGER.lock();
-    for task in manager.interruptible_queue.iter() {
+/// Try to clean all tasks' memory space until `req` pages are released.
+pub fn do_oom(req: usize) -> Result<(), ()> {
+    let mut manager = TASK_MANAGER.lock();
+    let mut cleaned = Vec::with_capacity(16);
+    let mut total_released = 0;
+    for task in manager
+        .interruptible_queue
+        .iter()
+        .filter(|task| manager.active_tracker.check_active(task.pid.0))
+    {
         let released = task.vm.lock().do_deep_clean();
         log::warn!("deep clean on task: {}, released: {}", task.tgid, released);
-        if released > 0 {
-            return;
+        cleaned.push(task.pid.0);
+        total_released += released;
+        if total_released >= req {
+            while let Some(pid) = cleaned.pop() {
+                manager.active_tracker.mark_inactive(pid)
+            }
+            return Ok(());
         };
     }
-    for task in manager.ready_queue.iter().rev() {
+    for task in manager
+        .ready_queue
+        .iter()
+        .rev()
+        .filter(|task| manager.active_tracker.check_active(task.pid.0))
+    {
         let released = task.vm.lock().do_shallow_clean();
-        log::warn!("shallow clean on task: {}, released: {}", task.tgid, released);
-        if released > 0 {
-            return;
+        log::warn!(
+            "shallow clean on task: {}, released: {}",
+            task.tgid,
+            released
+        );
+        cleaned.push(task.pid.0);
+        total_released += released;
+        if total_released >= req {
+            while let Some(pid) = cleaned.pop() {
+                manager.active_tracker.mark_inactive(pid)
+            }
+            return Ok(());
         };
     }
+    Err(())
 }
 
 /// This function add a `task` to `interruptible_queue`,

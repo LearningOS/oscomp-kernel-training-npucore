@@ -535,7 +535,7 @@ impl DirectoryTreeNode {
     }
 }
 
-pub fn oom() -> Result<(), ()> {
+pub fn oom() -> usize {
     tlb_invalidate();
     const MAX_FAIL_TIME: usize = 3;
     let mut fail_time = 0;
@@ -550,11 +550,11 @@ pub fn oom() -> Result<(), ()> {
         }
         if dropped > 0 {
             log::warn!("[oom] recycle pages: {}", dropped);
-            return Ok(());
+            return dropped;
         }
         fail_time += 1;
         if fail_time >= MAX_FAIL_TIME {
-            return Err(());
+            return dropped;
         }
     }
 }

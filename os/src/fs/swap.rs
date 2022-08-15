@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{vec::Vec, sync::Arc};
 use spin::Mutex;
 
 use crate::drivers::BLOCK_DEVICE;
@@ -10,6 +10,15 @@ lazy_static! {
     pub static ref SWAP_DEVICE: Mutex<Swap> = Mutex::new(
         Swap::new(16)
     );
+}
+
+#[derive(Debug)]
+pub struct SwapTracker(pub usize);
+
+impl Drop for SwapTracker {
+    fn drop(&mut self) {
+        SWAP_DEVICE.lock().discard(self.0);
+    }
 }
 
 pub struct Swap {
@@ -58,13 +67,12 @@ impl Swap {
     }
     pub fn read(&mut self, swap_id: usize, buf: &mut [u8]) {
         Self::read_page(self.get_block_ids(swap_id), buf);
-        self.clear_bit(swap_id);
     }
-    pub fn write(&mut self, buf: &[u8]) -> usize {
+    pub fn write(&mut self, buf: &[u8]) -> Arc<SwapTracker> {
         let swap_id = self.alloc_page().unwrap();
         Self::write_page(self.get_block_ids(swap_id), buf);
         self.set_bit(swap_id);
-        swap_id
+        Arc::new(SwapTracker(swap_id))
     }
     #[inline(always)]
     pub fn discard(&mut self, swap_id: usize) {

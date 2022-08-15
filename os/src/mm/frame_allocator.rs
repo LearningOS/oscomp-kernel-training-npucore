@@ -119,25 +119,35 @@ pub fn init_frame_allocator() {
     );
 }
 
-pub fn oom_handler() {
-    if let Err(_) = fs::directory_tree::oom() {
-        let task = current_task().unwrap();
-        let mut released = 0;
-        if let Some(mut memory_set) = task.vm.try_lock() {
-            released = memory_set.do_shallow_clean();
-            log::warn!("[oom_handler] current task released: {}", released);
-        };
-        if released == 0 {
-            log::warn!("[oom_handler] notify all tasks!");
-            crate::task::do_oom();
-        };
-    };
+/// Try to release `req` pages through all possible methods,
+/// on success returns `Ok(())` else return `Err(())`.
+pub fn oom_handler(req: usize) -> Result<(), ()> {
+    // step 1: clean fs
+    let mut released = 0;
+    released += fs::directory_tree::oom();
+    if released >= req {
+        return Ok(());
+    }
+    // step 2: clean current task's memory space
+    let task = current_task().unwrap();
+    if let Some(mut memory_set) = task.vm.try_lock() {
+        released += memory_set.do_shallow_clean();
+        log::warn!("[oom_handler] current task released: {}", released);
+    } else {
+        log::warn!("[oom_handler] try lock current task vm failed!");
+    }
+    if released >= req {
+        return Ok(());
+    }
+    // step 3: clean all tasks' memory space
+    log::warn!("[oom_handler] notify all tasks!");
+    crate::task::do_oom(req - released)
 }
 
 pub fn frame_reserve(num: usize) {
     let remain = FRAME_ALLOCATOR.read().unallocated_frames();
     if remain < num {
-        oom_handler()
+        oom_handler(num - remain).unwrap()
     }
 }
 
@@ -151,7 +161,7 @@ pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     } else {
         crate::show_frame_consumption! {
             "GC";
-            oom_handler();
+            oom_handler(1).unwrap();
         };
         FRAME_ALLOCATOR
             .write()
