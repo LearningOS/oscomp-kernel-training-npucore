@@ -10,6 +10,15 @@ pub enum ZramError {
     NotAllocated,
 }
 
+#[derive(Debug)]
+pub struct ZramTracker(pub usize);
+
+impl Drop for ZramTracker {
+    fn drop(&mut self) {
+        ZRAM_DEVICE.lock().discard(self.0).unwrap();
+    }
+}
+
 pub struct Zram {
     compressed: Vec<Option<Vec<u8>>>,
     recycled: Vec<u16>,
@@ -26,7 +35,7 @@ impl Zram {
             tail: 0,
         }
     }
-    fn insert(&mut self, data: Vec<u8>) -> Result<usize, ZramError> {
+    fn insert(&mut self, data: Vec<u8>) -> Result<Arc<ZramTracker>, ZramError> {
         let zram_id = match self.recycled.pop() {
             Some(zram_id) => zram_id as usize,
             None => {
@@ -39,7 +48,16 @@ impl Zram {
             }
         };
         self.compressed[zram_id] = Some(data);
-        Ok(zram_id)
+        Ok(Arc::new(ZramTracker(zram_id)))
+    }
+    fn get(&self, zram_id: usize) -> Result<&Vec<u8>, ZramError> {
+        if zram_id >= self.compressed.len() {
+            return Err(ZramError::InvalidIndex);
+        }
+        match &self.compressed[zram_id] {
+            Some(compressed_data) => Ok(compressed_data),
+            None => Err(ZramError::NotAllocated),
+        }
     }
     fn remove(&mut self, zram_id: usize) -> Result<Vec<u8>, ZramError> {
         if zram_id >= self.compressed.len() {
@@ -56,7 +74,7 @@ impl Zram {
         }
     }
     pub fn read(&mut self, zram_id: usize, buf: &mut [u8]) -> Result<(), ZramError> {
-        match self.remove(zram_id) {
+        match self.get(zram_id) {
             Ok(compressed_data) => {
                 let decompressed_data =
                     decompress_size_prepended(compressed_data.as_slice()).unwrap();
@@ -66,7 +84,7 @@ impl Zram {
             Err(error) => Err(error),
         }
     }
-    pub fn write(&mut self, buf: &[u8]) -> Result<usize, ZramError> {
+    pub fn write(&mut self, buf: &[u8]) -> Result<Arc<ZramTracker>, ZramError> {
         let mut compressed = compress_prepend_size(buf);
         compressed.shrink_to_fit();
         log::trace!("[zram] compressed len: {}", compressed.len());
