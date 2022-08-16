@@ -10,10 +10,12 @@ use alloc::vec::Vec;
 use lazy_static::*;
 use spin::Mutex;
 
+#[cfg(feature = "oom_handler")]
 pub struct ActiveTracker {
     bitmap: Vec<u64>,
 }
 
+#[cfg(feature = "oom_handler")]
 #[allow(unused)]
 impl ActiveTracker {
     pub const DEFAULT_SIZE: usize = SYSTEM_TASK_LIMIT;
@@ -37,14 +39,22 @@ impl ActiveTracker {
     }
 }
 
+#[cfg(feature = "oom_handler")]
 pub struct TaskManager {
     pub ready_queue: VecDeque<Arc<TaskControlBlock>>,
     pub interruptible_queue: VecDeque<Arc<TaskControlBlock>>,
     pub active_tracker: ActiveTracker,
 }
 
+#[cfg(not(feature = "oom_handler"))]
+pub struct TaskManager {
+    pub ready_queue: VecDeque<Arc<TaskControlBlock>>,
+    pub interruptible_queue: VecDeque<Arc<TaskControlBlock>>,
+}
+
 /// A simple FIFO scheduler.
 impl TaskManager {
+    #[cfg(feature = "oom_handler")]
     pub fn new() -> Self {
         Self {
             ready_queue: VecDeque::new(),
@@ -52,9 +62,17 @@ impl TaskManager {
             active_tracker: ActiveTracker::new(),
         }
     }
+    #[cfg(not(feature = "oom_handler"))]
+    pub fn new() -> Self {
+        Self {
+            ready_queue: VecDeque::new(),
+            interruptible_queue: VecDeque::new(),
+        }
+    }
     pub fn add(&mut self, task: Arc<TaskControlBlock>) {
         self.ready_queue.push_back(task);
     }
+    #[cfg(feature = "oom_handler")]
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
         match self.ready_queue.pop_front() {
             Some(task) => {
@@ -63,6 +81,10 @@ impl TaskManager {
             }
             None => None,
         }
+    }
+    #[cfg(not(feature = "oom_handler"))]
+    pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
+        self.ready_queue.pop_front()
     }
     pub fn add_interruptible(&mut self, task: Arc<TaskControlBlock>) {
         self.interruptible_queue.push_back(task);
@@ -148,6 +170,7 @@ pub fn fetch_task() -> Option<Arc<TaskControlBlock>> {
 }
 
 /// Try to clean all tasks' memory space until `req` pages are released.
+#[cfg(feature = "oom_handler")]
 pub fn do_oom(req: usize) -> Result<(), ()> {
     let mut manager = TASK_MANAGER.lock();
     let mut cleaned = Vec::with_capacity(16);
@@ -190,6 +213,12 @@ pub fn do_oom(req: usize) -> Result<(), ()> {
         };
     }
     Err(())
+}
+
+#[cfg(not(feature = "oom_handler"))]
+#[allow(unused)]
+pub fn do_oom() {
+    // do nothing
 }
 
 /// This function add a `task` to `interruptible_queue`,

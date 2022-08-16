@@ -12,7 +12,7 @@ use super::{
     dev::{null::Null, tty::Teletype, zero::Zero},
     file_trait::File,
     filesystem::FileSystem,
-    layout::OpenFlags, swap::SWAP_DEVICE, Hwclock,
+    layout::OpenFlags, Hwclock,
     cache::{BlockCacheManager}
 };
 use crate::{syscall::errno::*, mm::tlb_invalidate};
@@ -583,7 +583,6 @@ pub fn init_fs() {
     init_device_directory();
     init_tmp_directory();
     init_proc_directory();
-    init_swap_device();
 }
 #[allow(unused)]
 fn init_device_directory() {
@@ -651,7 +650,4 @@ fn init_proc_directory() {
     match ROOT.open("/proc/mounts", OpenFlags::O_CREAT, false) {
         _ => {}
     }
-}
-fn init_swap_device() {
-    SWAP_DEVICE.lock();
 }

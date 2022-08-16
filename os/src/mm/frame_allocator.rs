@@ -152,6 +152,7 @@ pub fn init_frame_allocator() {
 
 /// Try to release `req` pages through all possible methods,
 /// on success returns `Ok(())` else return `Err(())`.
+#[cfg(feature = "oom_handler")]
 pub fn oom_handler(req: usize) -> Result<(), ()> {
     // step 1: clean fs
     let mut released = 0;
@@ -175,6 +176,7 @@ pub fn oom_handler(req: usize) -> Result<(), ()> {
     crate::task::do_oom(req - released)
 }
 
+#[cfg(feature = "oom_handler")]
 pub fn frame_reserve(num: usize) {
     let remain = FRAME_ALLOCATOR.read().unallocated_frames();
     if remain < num {
@@ -182,6 +184,12 @@ pub fn frame_reserve(num: usize) {
     }
 }
 
+#[cfg(not(feature = "oom_handler"))]
+pub fn frame_reserve(_num: usize) {
+    // do nothing
+}
+
+#[cfg(feature = "oom_handler")]
 pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     let result = FRAME_ALLOCATOR.write().alloc();
     match result {
@@ -199,6 +207,12 @@ pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
     }
 }
 
+#[cfg(not(feature = "oom_handler"))]
+pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
+    FRAME_ALLOCATOR.write().alloc().map(|frame_tracker| Arc::new(frame_tracker))
+}
+
+#[cfg(feature = "oom_handler")]
 pub unsafe fn frame_alloc_uninit() -> Option<Arc<FrameTracker>> {
     let result = FRAME_ALLOCATOR.write().alloc_uninit();
     match result {
@@ -214,6 +228,11 @@ pub unsafe fn frame_alloc_uninit() -> Option<Arc<FrameTracker>> {
                 .map(|frame_tracker| Arc::new(frame_tracker))
         }
     }
+}
+
+#[cfg(not(feature = "oom_handler"))]
+pub unsafe fn frame_alloc_uninit() -> Option<Arc<FrameTracker>> {
+    FRAME_ALLOCATOR.write().alloc_uninit().map(|frame_tracker| Arc::new(frame_tracker))
 }
 
 pub fn frame_dealloc(ppn: PhysPageNum) {
