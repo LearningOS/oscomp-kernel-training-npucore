@@ -379,14 +379,14 @@ impl File for OSInode {
     }
     fn modify_size(&self, diff: isize) -> Result<(), isize> {
         let inode_lock = self.inner.write();
-        self.inner.modify_size_lock(&inode_lock, diff);
+        self.inner.modify_size_lock(&inode_lock, diff, true);
         Ok(())
     }
     fn truncate_size(&self, new_size: usize) -> Result<(), isize> {
         let inode_lock = self.inner.write();
         let old_size = self.inner.get_file_size_wlock(&inode_lock);
         self.inner
-            .modify_size_lock(&inode_lock, new_size as isize - old_size as isize);
+            .modify_size_lock(&inode_lock, new_size as isize - old_size as isize, true);
         Ok(())
     }
     fn set_timestamp(&self, ctime: Option<usize>, atime: Option<usize>, mtime: Option<usize>) {

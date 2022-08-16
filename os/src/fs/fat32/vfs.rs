@@ -102,7 +102,7 @@ impl Drop for Inode {
             let inode_lock = self.write();
             // Clear size
             let old_size = self.get_file_size();
-            self.modify_size_lock(&inode_lock, -(old_size as isize));
+            self.modify_size_lock(&inode_lock, -(old_size as isize), false);
         } else {
             if self.parent_dir.lock().is_none() {
                 return;
@@ -370,7 +370,7 @@ impl Inode {
     /// # Warning
     /// This function will not modify its parent directory (since we changed the size of the current file),
     /// we will modify it when it is deleted.
-    pub fn modify_size_lock(&self, _inode_lock: &RwLockWriteGuard<InodeLock>, diff: isize) {
+    pub fn modify_size_lock(&self, inode_lock: &RwLockWriteGuard<InodeLock>, diff: isize, clear: bool) {
         let mut lock = self.file_content.write();
 
         debug_assert!(diff.saturating_add(lock.size as isize) >= 0);
@@ -388,7 +388,59 @@ impl Inode {
         }
 
         lock.size = new_size;
-        self.file_cache_mgr.notify_new_size(new_size as usize);
+        drop(lock);
+
+        if diff > 0 {
+            if clear {
+                self.clear_at_block_cache_lock(inode_lock, old_size as usize, (new_size - old_size) as usize);
+            }
+        } else {
+            self.file_cache_mgr.notify_new_size(new_size as usize)
+        }
+    }
+
+    fn clear_at_block_cache_lock(
+        &self,
+        _inode_lock: &RwLockWriteGuard<InodeLock>,
+        offset: usize,
+        length: usize,
+    ) -> usize {
+        let mut start = offset;
+        let end = offset + length;
+
+        let mut start_cache = start / PageCacheManager::CACHE_SZ;
+        let mut write_size = 0;
+        loop {
+            // calculate end of current block
+            let mut end_current_block =
+                (start / PageCacheManager::CACHE_SZ + 1) * PageCacheManager::CACHE_SZ;
+            end_current_block = end_current_block.min(end);
+            // write and update write size
+            let lock = self.file_content.read();
+            let block_write_size = end_current_block - start;
+            self.file_cache_mgr
+                .get_cache(
+                    start_cache,
+                    || -> Vec<usize> { self.get_neighboring_sec(&lock.clus_list, start_cache) },
+                    &self.fs.block_device,
+                )
+                .lock()
+                // I know hardcoding 4096 in is bad, but I can't get around Rust's syntax checking...
+                .modify(0, |data_block: &mut [u8; 4096]| {
+                    let dst = &mut data_block[start % PageCacheManager::CACHE_SZ
+                        ..start % PageCacheManager::CACHE_SZ + block_write_size];
+                    dst.fill(0);
+                });
+            drop(lock);
+            write_size += block_write_size;
+            // move to next block
+            if end_current_block == end {
+                break;
+            }
+            start_cache += 1;
+            start = end_current_block;
+        }
+        write_size
     }
 
     /// When memory is low, it is called to free its cache
@@ -450,6 +502,7 @@ impl Inode {
                         ..start % PageCacheManager::CACHE_SZ + block_read_size];
                     dst.copy_from_slice(src);
                 });
+            drop(lock);
             read_size += block_read_size;
             // move to next block
             if end_current_block == end {
@@ -497,6 +550,7 @@ impl Inode {
                         ..start % PageCacheManager::CACHE_SZ + block_read_size];
                     dst.copy_from_slice(src);
                 });
+            drop(lock);
             read_size += block_read_size;
             // move to next block
             if end_current_block == end {
@@ -543,7 +597,7 @@ impl Inode {
         let diff_len = buf.len() as isize + offset as isize - old_size as isize;
         if diff_len > 0 as isize {
             // allocate as many clusters as possible.
-            self.modify_size_lock(inode_lock, diff_len);
+            self.modify_size_lock(inode_lock, diff_len, false);
         }
         let end = (offset + buf.len()).min(self.get_file_size() as usize);
 
@@ -714,7 +768,7 @@ impl Inode {
     /// Default is Ok
     fn expand_dir_size(&self, inode_lock: &RwLockWriteGuard<InodeLock>) -> Result<(), ()> {
         let diff_size = self.fs.clus_size();
-        self.modify_size_lock(inode_lock, diff_size as isize);
+        self.modify_size_lock(inode_lock, diff_size as isize, false);
         Ok(())
     }
     /// Shrink directory file's size to fit `hint`.
@@ -733,7 +787,7 @@ impl Inode {
             .max(self.fs.clus_size());
         let diff_size = new_size as isize - lock.size as isize;
         drop(lock);
-        self.modify_size_lock(inode_lock, diff_size as isize);
+        self.modify_size_lock(inode_lock, diff_size as isize, false);
         Ok(())
     }
     /// Allocate directory entries required for new file.

@@ -194,8 +194,12 @@ impl FileDescriptor {
     pub fn modify_size(&self, diff: isize) -> Result<(), isize> {
         self.file.modify_size(diff)
     }
-    pub fn truncate_size(&self, new_size: usize) -> Result<(), isize> {
-        self.file.truncate_size(new_size)
+    pub fn truncate_size(&self, new_size: isize) -> Result<(), isize> {
+        if new_size < 0 || !self.writable() {
+            return Err(EINVAL);
+        }
+        // todo: support ETXTBSY
+        self.file.truncate_size(new_size as usize)
     }
     pub fn set_timestamp(
         &self,
