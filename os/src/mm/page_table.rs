@@ -361,11 +361,6 @@ pub fn translated_byte_buffer(
 
 /// Load a string from other address spaces into kernel space without an end `\0`.
 pub fn translated_str(token: usize, ptr: *const u8) -> Result<String, isize> {
-    if ptr.is_null() {
-        log::warn!("[translated_str] ptr is null!");
-        return Ok(String::new());
-    }
-
     let page_table = PageTable::from_token(token);
     let mut string = String::new();
     let mut cur = ptr as usize;
