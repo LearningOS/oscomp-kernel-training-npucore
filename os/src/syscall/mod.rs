@@ -9,6 +9,7 @@ const SYSCALL_LINKAT: usize = 37;
 const SYSCALL_UMOUNT2: usize = 39;
 const SYSCALL_MOUNT: usize = 40;
 const SYSCALL_STATFS: usize = 43;
+const SYSCALL_FTRUNCATE: usize = 46;
 const SYSCALL_FACCESSAT: usize = 48;
 const SYSCALL_CHDIR: usize = 49;
 const SYSCALL_OPENAT: usize = 56;
@@ -140,6 +141,7 @@ pub fn syscall_name(id: usize) -> &'static str {
         SYSCALL_FSTATAT => "fstatat",
         SYSCALL_FSTAT => "fstat",
         SYSCALL_STATFS => "statfs",
+        SYSCALL_FTRUNCATE => "ftruncate",
         SYSCALL_FSYNC => "fsync",
         SYSCALL_UTIMENSAT => "utimensat",
         SYSCALL_EXIT => "exit",
@@ -291,6 +293,7 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             args[3] as u32,
         ),
         SYSCALL_FSTAT => sys_fstat(args[0], args[1] as *mut u8),
+        SYSCALL_FTRUNCATE => sys_ftruncate(args[0], args[1] as isize),
         SYSCALL_FSYNC => sys_fsync(args[0]),
         SYSCALL_UTIMENSAT => sys_utimensat(
             args[0],

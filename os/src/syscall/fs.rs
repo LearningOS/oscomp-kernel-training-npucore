@@ -1257,3 +1257,16 @@ pub fn sys_msync(addr: usize, length: usize, flags: u32) -> isize {
     );
     SUCCESS
 }
+
+pub fn sys_ftruncate(fd: usize, length: isize) -> isize {
+    let task = current_task().unwrap();
+    let fd_table = task.files.lock();
+    let file_descriptor = match fd_table.get_ref(fd) {
+        Ok(file_descriptor) => file_descriptor,
+        Err(errno) => return errno,
+    };
+    match file_descriptor.truncate_size(length) {
+        Ok(()) => SUCCESS,
+        Err(errno) => errno,
+    }
+}
