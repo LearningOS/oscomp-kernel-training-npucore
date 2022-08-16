@@ -287,7 +287,7 @@ impl File for Teletype {
     }
 
     fn hang_up(&self) -> bool {
-        todo!()
+        false
     }
 
     fn ioctl(&self, cmd: u32, argp: usize) -> isize {

@@ -1,4 +1,5 @@
 use crate::{
+    mm::try_get_from_user,
     task::{current_user_token, signal::Signals},
     timer::TimeSpec,
 };
@@ -71,11 +72,6 @@ bitflags! {
     }
 }
 
-#[allow(unused)]
-/// `ppoll()` witout `sigmask`. See `ppoll` for more information.
-pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
-    ppoll(poll_fd, nfds, time_spec, null::<Signals>())
-}
 /// Wait for one of the events in `poll_fd_p` to happen, or the time limit to run out if any.
 /// Unlike the function family of `select()` which are basically AND'S,
 /// `poll()`'s act like OR's for polling the files.
@@ -103,24 +99,31 @@ pub fn poll(poll_fd: usize, nfds: usize, time_spec: usize) -> isize {
 /// * A value of 0 indicates that the call timed out and no file descriptors were ready.
 /// * On error, -1 is returned, and errno is set appropriately.
 /// * The observed event is written back to the array, with others cleared.
-pub fn ppoll(poll_fd_p: usize, nfds: usize, _time_spec: usize, sigmask: *const Signals) -> isize {
+pub fn ppoll(
+    fds: *mut PollFd,
+    nfds: usize,
+    tmo_p: *const TimeSpec,
+    sigmask: *const Signals,
+) -> isize {
+    let task = current_task().unwrap();
+    let token = task.get_user_token();
+    let timeout: Option<TimeSpec> = match try_get_from_user(token, tmo_p) {
+        Ok(tmo) => match tmo {
+            Some(tmo) => Some(tmo + crate::timer::TimeSpec::now()),
+            None => None,
+        },
+        Err(errno) => return errno,
+    };
     // push to the top of TrapContext page, make use of redundant space
-    let oldsig = ((current_task().unwrap().trap_cx_user_va() + crate::config::PAGE_SIZE)
-        as *mut Signals)
-        .wrapping_sub(1);
+    let oldsig =
+        ((task.trap_cx_user_va() + crate::config::PAGE_SIZE) as *mut Signals).wrapping_sub(1);
     if !sigmask.is_null() {
         sigprocmask(SigMaskHow::SIG_SETMASK.bits(), sigmask, oldsig);
     }
+    drop(task);
 
-    let token = current_user_token();
     let mut poll_fd = Vec::<PollFd>::with_capacity(nfds);
-    copy_from_user_array(
-        token,
-        poll_fd_p as *const PollFd,
-        poll_fd.as_mut_ptr(),
-        nfds,
-    );
-
+    copy_from_user_array(token, fds, poll_fd.as_mut_ptr(), nfds);
     unsafe {
         poll_fd.set_len(nfds);
     }
@@ -142,28 +145,36 @@ pub fn ppoll(poll_fd_p: usize, nfds: usize, _time_spec: usize, sigmask: *const S
                         poll_fd.revents |= PollEvent::POLLHUP;
                         trigger = 1;
                     }
-                    if poll_fd.events.contains(PollEvent::POLLIN) && file_descriptor.file.r_ready() {
+                    if poll_fd.events.contains(PollEvent::POLLIN) && file_descriptor.file.r_ready()
+                    {
                         poll_fd.revents |= PollEvent::POLLIN;
                         trigger = 1;
                     }
-                    if poll_fd.events.contains(PollEvent::POLLOUT) && file_descriptor.file.w_ready() {
+                    if poll_fd.events.contains(PollEvent::POLLOUT) && file_descriptor.file.w_ready()
+                    {
                         poll_fd.revents |= PollEvent::POLLOUT;
                         trigger = 1;
                     }
                     done += trigger;
                 }
-                Err(_) => continue
+                Err(_) => continue,
             }
         }
         if done > 0 {
             break;
+        }
+        if let Some(timeout) = timeout {
+            if crate::timer::TimeSpec::now() >= timeout {
+                break;
+            }
         }
         drop(fd_table);
         drop(task);
         suspend_current_and_run_next();
     }
 
-    copy_to_user_array(token, &poll_fd[0], poll_fd_p as *mut PollFd, nfds);
+    log::trace!("[ppoll] result: {:?}", poll_fd);
+    copy_to_user_array(token, &poll_fd[0], fds, nfds);
 
     if !sigmask.is_null() {
         sigprocmask(
