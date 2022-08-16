@@ -1,6 +1,5 @@
 //! The decompression algorithm.
-use crate::block::DecompressError;
-use crate::block::MINMATCH;
+use crate::block::{DecompressError, MINMATCH};
 use crate::sink::{Sink, SliceSink, VecSink};
 use alloc::vec::Vec;
 
@@ -18,8 +17,8 @@ unsafe fn duplicate(
     // Considering that `wild_copy_match_16` can copy up to `16 - 1` extra bytes.
     // Defer to `duplicate_overlapping` in case of an overlapping match
     // OR the if the wild copy would copy beyond the end of the output.
-    if start.add(match_length + 16 - 1) > *output_ptr
-        || output_ptr.add(match_length + 16 - 1) > output_end
+    if (output_ptr.offset_from(start) as usize) < match_length + 16 - 1
+        || (output_end.offset_from(*output_ptr) as usize) < match_length + 16 - 1
     {
         duplicate_overlapping(output_ptr, start, match_length);
     } else {
@@ -93,7 +92,7 @@ unsafe fn copy_from_dict(
     dict_match_length
 }
 
-/// Read an integer LSIC (linear small integer code) encoded.
+/// Read an integer.
 ///
 /// In LZ4, we encode small integers in a way that we can have an arbitrary number of bytes. In
 /// particular, we add the bytes repeatedly until we hit a non-0xFF byte. When we do, we add
@@ -167,8 +166,9 @@ fn check_token() {
     assert_eq!(does_token_fit(0b10110000), true);
 }
 
-/// The token consists of two parts, the literal length (upper 4 bits) and match_length (lower 4 bits)
-/// if the literal length and match_length are both below 15, we don't need to read additional data, so the token does fit the metadata in a single u8.
+/// The token consists of two parts, the literal length (upper 4 bits) and match_length (lower 4
+/// bits) if the literal length and match_length are both below 15, we don't need to read additional
+/// data, so the token does fit the metadata in a single u8.
 #[inline]
 fn does_token_fit(token: u8) -> bool {
     !((token & FIT_TOKEN_MASK_LITERAL) == FIT_TOKEN_MASK_LITERAL
@@ -192,6 +192,13 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
         }
     }
 
+    let ext_dict = if USE_DICT {
+        ext_dict
+    } else {
+        // ensure optimizer knows ext_dict length is 0 if !USE_DICT
+        debug_assert!(ext_dict.is_empty());
+        &[]
+    };
     let output_base = unsafe { output.base_mut_ptr() };
     let output_end = unsafe { output_base.add(output.capacity()) };
     let output_start_pos_ptr = unsafe { output.pos_mut_ptr() };
@@ -209,7 +216,8 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
         )
     };
 
-    // Exhaust the decoder by reading and decompressing all blocks until the remaining buffer is empty.
+    // Exhaust the decoder by reading and decompressing all blocks until the remaining buffer is
+    // empty.
     loop {
         #[cfg(feature = "checked-decode")]
         {
@@ -221,17 +229,17 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
         // Read the token. The token is the first byte in a block. It is divided into two 4-bit
         // subtokens, the higher and the lower.
         // This token contains to 4-bit "fields", a higher and a lower, representing the literals'
-        // length and the back reference's length, respectively. LSIC is used if either are their
-        // maximal values.
+        // length and the back reference's length, respectively.
         let token = unsafe { *input.get_unchecked(input_pos) };
         input_pos += 1;
 
         // Checking for hot-loop.
-        // In most cases the metadata does fit in a single 1byte token (statistically) and we are in a safe-distance to the end.
-        // This enables some optimized handling.
+        // In most cases the metadata does fit in a single 1byte token (statistically) and we are in
+        // a safe-distance to the end. This enables some optimized handling.
         //
-        // Ideally we want to check for safe output pos like: output.pos() <= safe_output_pos; But that doesn't work when the
-        // safe_output_ptr is == output_ptr due to insufficient capacity. So we use `<` instead of `<=`, which covers that case.
+        // Ideally we want to check for safe output pos like: output.pos() <= safe_output_pos; But
+        // that doesn't work when the safe_output_ptr is == output_ptr due to insufficient
+        // capacity. So we use `<` instead of `<=`, which covers that case.
         if does_token_fit(token) && input_pos <= safe_input_pos && output_ptr < safe_output_ptr {
             let literal_length = (token >> 4) as usize;
             let mut match_length = MINMATCH + (token & 0xF) as usize;
@@ -245,7 +253,7 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
             #[cfg(feature = "checked-decode")]
             {
                 // Check if literal is out of bounds for the input
-                if input_pos + literal_length > input.len() {
+                if literal_length > input.len() - input_pos {
                     return Err(DecompressError::OffsetOutOfBounds);
                 }
             }
@@ -262,18 +270,19 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
             }
 
             // input_pos <= safe_input_pos should guarantee we have enough space in input
-            debug_assert!(input_pos + 2 <= input.len());
+            debug_assert!(input.len() - input_pos >= 2);
             let offset = read_u16(input, &mut input_pos) as usize;
-            let mut start_ptr = unsafe { output_ptr.sub(offset) };
+
+            let output_len = unsafe { output_ptr.offset_from(output_base) as usize };
             #[cfg(feature = "checked-decode")]
             {
-                if unsafe { start_ptr.add(ext_dict.len()) } < output_base {
+                if offset > output_len + ext_dict.len() {
                     return Err(DecompressError::OffsetOutOfBounds);
                 }
             }
 
             // Check if part of the match is in the external dict
-            if USE_DICT && start_ptr < output_base {
+            if USE_DICT && offset > output_len {
                 let copied = unsafe {
                     copy_from_dict(output_base, &mut output_ptr, ext_dict, offset, match_length)
                 };
@@ -282,11 +291,15 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
                 }
                 // match crosses ext_dict and output
                 match_length -= copied;
-                unsafe { start_ptr = start_ptr.add(copied) }
             }
 
+            // Calculate the start of this duplicate segment. At this point offset was already
+            // checked to be in bounds and the external dictionary copy, if any, was
+            // already copied and subtracted from match_length.
+            let start_ptr = unsafe { output_ptr.sub(offset) };
             debug_assert!(start_ptr >= output_base);
-            debug_assert!(unsafe { start_ptr.add(match_length) } <= output_end);
+            debug_assert!(start_ptr < output_end);
+            debug_assert!(unsafe { output_end.offset_from(start_ptr) as usize } >= match_length);
 
             // In this branch we know that match_length is at most 18 (14 + MINMATCH).
             // But the blocks can overlap, so make sure they are at least 18 bytes apart
@@ -308,22 +321,24 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
 
         // Now, we read the literals section.
         // Literal Section
-        // If the initial value is 15, it is indicated that another byte will be read and added to it
+        // If the initial value is 15, it is indicated that another byte will be read and added to
+        // it
         let mut literal_length = (token >> 4) as usize;
         if literal_length != 0 {
             if literal_length == 15 {
-                // The literal_length length took the maximal value, indicating that there is more than 15
-                // literal_length bytes. We read the extra integer.
+                // The literal_length length took the maximal value, indicating that there is more
+                // than 15 literal_length bytes. We read the extra integer.
                 literal_length += read_integer(input, &mut input_pos)? as usize;
             }
 
             #[cfg(feature = "checked-decode")]
             {
-                // Check if literal is out of bounds for the input, and if there is enough space on the output
-                if input_pos + literal_length > input.len() {
+                // Check if literal is out of bounds for the input, and if there is enough space on
+                // the output
+                if literal_length > input.len() - input_pos {
                     return Err(DecompressError::LiteralOutOfBounds);
                 }
-                if unsafe { output_ptr.add(literal_length) } > output_end {
+                if literal_length > unsafe { output_end.offset_from(output_ptr) as usize } {
                     return Err(DecompressError::OutputTooSmall {
                         expected: unsafe { output_ptr.offset_from(output_base) as usize }
                             + literal_length,
@@ -351,7 +366,7 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
         // Read duplicate section
         #[cfg(feature = "checked-decode")]
         {
-            if input_pos + 2 > input.len() {
+            if input.len() - input_pos < 2 {
                 return Err(DecompressError::ExpectedAnotherByte);
             }
         }
@@ -373,27 +388,23 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
 
         // We now copy from the already decompressed buffer. This allows us for storing duplicates
         // by simply referencing the other location.
-
-        // Calculate the start of this duplicate segment.
-        let mut start_ptr = unsafe { output_ptr.sub(offset) };
+        let output_len = unsafe { output_ptr.offset_from(output_base) as usize };
 
         // We'll do a bounds check in checked-decode.
         #[cfg(feature = "checked-decode")]
         {
-            if unsafe { start_ptr.add(ext_dict.len()) } < output_base {
+            if offset > output_len + ext_dict.len() {
                 return Err(DecompressError::OffsetOutOfBounds);
             }
-            if unsafe { output_ptr.add(match_length) } > output_end {
+            if match_length > unsafe { output_end.offset_from(output_ptr) as usize } {
                 return Err(DecompressError::OutputTooSmall {
-                    expected: unsafe { output_ptr.offset_from(output_base) as usize }
-                        + match_length,
+                    expected: output_len + match_length,
                     actual: output.capacity(),
                 });
             }
         }
 
-        // Check
-        if USE_DICT && start_ptr < output_base {
+        if USE_DICT && offset > output_len {
             let copied = unsafe {
                 copy_from_dict(output_base, &mut output_ptr, ext_dict, offset, match_length)
             };
@@ -402,10 +413,15 @@ pub(crate) fn decompress_internal<SINK: Sink, const USE_DICT: bool>(
             }
             // match crosses ext_dict and output
             match_length -= copied;
-            unsafe { start_ptr = start_ptr.add(copied) };
         }
+
+        // Calculate the start of this duplicate segment. At this point offset was already checked
+        // to be in bounds and the external dictionary copy, if any, was already copied and
+        // subtracted from match_length.
+        let start_ptr = unsafe { output_ptr.sub(offset) };
         debug_assert!(start_ptr >= output_base);
-        debug_assert!(unsafe { start_ptr.add(match_length) } <= output_end);
+        debug_assert!(start_ptr < output_end);
+        debug_assert!(unsafe { output_end.offset_from(start_ptr) as usize } >= match_length);
         unsafe {
             duplicate(&mut output_ptr, output_end, start_ptr, match_length);
         }
@@ -435,8 +451,8 @@ pub fn decompress_into_with_dict(
     decompress_internal::<_, true>(input, &mut SliceSink::new(output, 0), ext_dict)
 }
 
-/// Decompress all bytes of `input` into a new vec. The first 4 bytes are the uncompressed size in little endian.
-/// Can be used in conjunction with `compress_prepend_size`
+/// Decompress all bytes of `input` into a new vec. The first 4 bytes are the uncompressed size in
+/// little endian. Can be used in conjunction with `compress_prepend_size`
 #[inline]
 pub fn decompress_size_prepended(input: &[u8]) -> Result<Vec<u8>, DecompressError> {
     let (uncompressed_size, input) = super::uncompressed_size(input)?;
@@ -459,8 +475,8 @@ pub fn decompress(input: &[u8], uncompressed_size: usize) -> Result<Vec<u8>, Dec
     Ok(vec)
 }
 
-/// Decompress all bytes of `input` into a new vec. The first 4 bytes are the uncompressed size in little endian.
-/// Can be used in conjunction with `compress_prepend_size_with_dict`
+/// Decompress all bytes of `input` into a new vec. The first 4 bytes are the uncompressed size in
+/// little endian. Can be used in conjunction with `compress_prepend_size_with_dict`
 #[inline]
 pub fn decompress_size_prepended_with_dict(
     input: &[u8],

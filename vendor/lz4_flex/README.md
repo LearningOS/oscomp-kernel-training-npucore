@@ -36,17 +36,17 @@ Compression and decompression uses no usafe via the default feature flags "safe-
 
 Safe:
 ```
-lz4_flex = { version = "0.9.0" }
+lz4_flex = { version = "0.9.3" }
 ```
 
 Performance:
 ```
-lz4_flex = { version = "0.9.0", default-features = false }
+lz4_flex = { version = "0.9.3", default-features = false }
 ```
 
 Warning: If you don't trust your input and your are using the Block format, use checked-decode in order to avoid out of bounds access. When using the Frame format make sure to enable checksums.
 ```
-lz4_flex = { version = "0.9.0", default-features = false, features = ["checked-decode"] }
+lz4_flex = { version = "0.9.3", default-features = false, features = ["checked-decode"] }
 ```
 
 ```rust
@@ -98,17 +98,21 @@ Executed on Core i7-6700 Linux Mint.
 
 [Miri](https://github.com/rust-lang/miri) can be used to find issues related to incorrect unsafe usage:
 
-`MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows" cargo miri test --no-default-features`
+`MIRIFLAGS="-Zmiri-disable-isolation -Zmiri-disable-stacked-borrows" cargo +nightly miri test --no-default-features --features frame`
 
 ## Fuzzer
 This fuzz target generates corrupted data for the decompressor. Make sure to switch to the checked_decode version in `fuzz/Cargo.toml` before testing this.
-`cargo fuzz run fuzz_decomp_corrupt_block` and `cargo fuzz run fuzz_decomp_corrupt_frame`
+`cargo +nightly fuzz run fuzz_decomp_corrupt_block` and `cargo +nightly fuzz run fuzz_decomp_corrupt_frame`
 
 This fuzz target asserts that a compression and decompression rountrip returns the original input.
-`cargo fuzz run fuzz_roundtrip` and `cargo fuzz run fuzz_roundtrip_frame`
+`cargo +nightly fuzz run fuzz_roundtrip` and `cargo +nightly fuzz run fuzz_roundtrip_frame`
 
 This fuzz target asserts compression with cpp and decompression with lz4_flex returns the original input.
-`cargo fuzz run fuzz_roundtrip_cpp_compress`
+`cargo +nightly fuzz run fuzz_roundtrip_cpp_compress`
+
+## Bindings in other languages
+ - Node.js: [lz4-napi](https://github.com/antoniomuso/lz4-napi) 
+ - Wasm: [lz4-wasm](https://github.com/PSeitz/lz4_flex/tree/main/lz4-wasm)
 
 ## TODO
 - High compression

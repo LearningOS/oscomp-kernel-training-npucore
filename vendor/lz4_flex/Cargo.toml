@@ -12,15 +12,31 @@
 [package]
 edition = "2018"
 name = "lz4_flex"
-version = "0.9.2"
-authors = ["Pascal Seitz <pascal.seitz@gmail.com>", "Arthur Silva <arthurprs@gmail.com>", "ticki <Ticki@users.noreply.github.com>"]
-include = ["src/*.rs", "src/frame/**/*", "src/block/**/*", "README.md"]
+version = "0.9.4"
+authors = [
+    "Pascal Seitz <pascal.seitz@gmail.com>",
+    "Arthur Silva <arthurprs@gmail.com>",
+    "ticki <Ticki@users.noreply.github.com>",
+]
+include = [
+    "src/*.rs",
+    "src/frame/**/*",
+    "src/block/**/*",
+    "README.md",
+]
 description = "Fastest LZ4 implementation in Rust, no unsafe by default."
 homepage = "https://github.com/pseitz/lz4_flex"
 readme = "README.md"
-keywords = ["compression", "lz4", "compress", "decompression", "decompress"]
+keywords = [
+    "compression",
+    "lz4",
+    "compress",
+    "decompression",
+    "decompress",
+]
 license = "MIT"
 repository = "https://github.com/pseitz/lz4_flex"
+
 [profile.bench]
 opt-level = 3
 lto = true
@@ -30,37 +46,49 @@ codegen-units = 1
 opt-level = 3
 lto = true
 codegen-units = 1
+debug = true
 panic = "unwind"
 
 [[bench]]
 name = "crit_bench"
 path = "benches/crit_bench.rs"
 harness = false
+
 [dependencies.twox-hash]
-version = "1"
+version = "1.6.2"
+optional = true
 default-features = false
+
 [dev-dependencies.criterion]
-version = "0.3.4"
+version = "0.3.5"
 
 [dev-dependencies.lz4-compress]
 version = "0.1.1"
 
 [dev-dependencies.lzzzz]
-version = "0.8"
+version = "1.0.2"
 
 [dev-dependencies.more-asserts]
-version = "0.2.1"
+version = "0.2.2"
 
 [dev-dependencies.serde_json]
-version = "1.0"
+version = "1.0.79"
 
 [dev-dependencies.snap]
-version = "1.0"
+version = "1.0.5"
 
 [features]
 checked-decode = []
-default = ["std", "safe-encode", "safe-decode", "frame"]
-frame = ["std"]
+default = [
+    "std",
+    "safe-encode",
+    "safe-decode",
+    "frame",
+]
+frame = [
+    "std",
+    "dep:twox-hash",
+]
 safe-decode = []
 safe-encode = []
 std = []
