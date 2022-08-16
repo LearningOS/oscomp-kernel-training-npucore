@@ -8,6 +8,7 @@ use crate::mm::{
 use crate::task::{current_task, current_user_token};
 use crate::timer::TimeSpec;
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::mem::size_of;
 use log::{debug, error, info, trace, warn};
@@ -956,9 +957,13 @@ pub fn sys_utimensat(
     const UTIME_OMIT: usize = 0x3ffffffe;
 
     let token = current_user_token();
-    let path = match translated_str(token, pathname) {
-        Ok(path) => path,
-        Err(errno) => return errno,
+    let path = if !pathname.is_null() {
+        match translated_str(token, pathname) {
+            Ok(path) => path,
+            Err(errno) => return errno,
+        }
+    } else {
+        String::new()
     };
     let flags = match UtimensatFlags::from_bits(flags) {
         Some(flags) => flags,
