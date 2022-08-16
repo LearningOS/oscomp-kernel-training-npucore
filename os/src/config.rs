@@ -8,7 +8,7 @@ pub const USER_HEAP_SIZE: usize = PAGE_SIZE * 20;
 
 pub const KERNEL_STACK_SIZE: usize = PAGE_SIZE * 2;
 #[cfg(not(feature = "board_fu740"))]
-pub const KERNEL_HEAP_SIZE: usize = PAGE_SIZE * 0x220;
+pub const KERNEL_HEAP_SIZE: usize = PAGE_SIZE * 0x240;
 #[cfg(feature = "board_fu740")]
 pub const KERNEL_HEAP_SIZE: usize = PAGE_SIZE * 0x2000;
 pub const MMAP_BASE: usize = 0x6000_0000;
