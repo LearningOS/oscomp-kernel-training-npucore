@@ -10,7 +10,6 @@ pub mod swap;
 
 pub use self::dev::{hwclock::*, null::*, pipe::*, socket::*, tty::*, zero::*};
 use core::{
-    ops::{Index, IndexMut},
     slice::{Iter, IterMut},
 };
 
@@ -39,10 +38,6 @@ lazy_static! {
             .open(".", OpenFlags::O_RDONLY | OpenFlags::O_DIRECTORY, true)
             .unwrap()
     ));
-}
-
-pub fn is_relative(path: &str) -> bool {
-    !path.starts_with('/') && path != "" && path != "."
 }
 
 #[derive(Clone)]
@@ -117,7 +112,7 @@ impl FileDescriptor {
         if path == "" {
             return Ok(self.clone());
         }
-        if self.file.is_file() && is_relative(path) {
+        if self.file.is_file() && !path.starts_with('/') {
             return Err(ENOTDIR);
         }
         let inode = self.file.get_dirtree_node();
@@ -133,7 +128,7 @@ impl FileDescriptor {
         Ok(Self::new(cloexec, false, file))
     }
     pub fn mkdir(&self, path: &str) -> Result<(), isize> {
-        if self.file.is_file() && is_relative(path) {
+        if self.file.is_file() && !path.starts_with('/') {
             return Err(ENOTDIR);
         }
         let inode = self.file.get_dirtree_node();
@@ -144,7 +139,7 @@ impl FileDescriptor {
         inode.mkdir(path)
     }
     pub fn delete(&self, path: &str, delete_directory: bool) -> Result<(), isize> {
-        if self.file.is_file() && is_relative(path) {
+        if self.file.is_file() && !path.starts_with('/') {
             return Err(ENOTDIR);
         }
         let inode = self.file.get_dirtree_node();
@@ -160,10 +155,10 @@ impl FileDescriptor {
         new_fd: &Self,
         new_path: &str,
     ) -> Result<(), isize> {
-        if old_fd.file.is_file() && is_relative(old_path) {
+        if old_fd.file.is_file() && !old_path.starts_with('/') {
             return Err(ENOTDIR);
         }
-        if new_fd.file.is_file() && is_relative(new_path) {
+        if new_fd.file.is_file() && !new_path.starts_with('/') {
             return Err(ENOTDIR);
         }
         let old_inode = old_fd.file.get_dirtree_node();
