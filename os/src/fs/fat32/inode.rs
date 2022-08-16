@@ -249,23 +249,28 @@ impl File for OSInode {
             dirnode_ptr: self.dirnode_ptr.clone(),
         })
     }
-    fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
+    fn open_subfile(&self) -> Result<Vec<(String, Arc<dyn File>)>, isize> {
         let inode_lock = self.inner.write();
-        if let Ok(Some((_, short_ent, offset))) =
-            self.inner.find_local_lock(&inode_lock, name.to_string())
-        {
-            Ok(Arc::new(Self {
+        let get_dyn_file = |short_ent, offset| -> Arc<dyn File> {
+            Arc::new(Self {
                 readable: true,
                 writable: true,
                 special_use: false,
                 append: false,
-                inner: Inode::from_ent(&self.inner, &short_ent, offset),
+                inner: Inode::from_ent(&self.inner, short_ent, offset),
                 offset: Mutex::new(0),
                 dirnode_ptr: Arc::new(Mutex::new(Weak::new())),
-            }))
-        } else {
-            Err(ENOENT)
-        }
+            })
+        };
+        Ok(self
+            .inner
+            .get_all_files_lock(&inode_lock)
+            .iter()
+            .map(|(name, short_ent, offset)|{
+                (name.clone(),get_dyn_file(short_ent, *offset))
+            })
+            .collect()
+        )
     }
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
         let inode_lock = self.inner.write();

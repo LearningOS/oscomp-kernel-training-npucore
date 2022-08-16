@@ -31,12 +31,16 @@ lazy_static! {
         BLOCK_DEVICE.clone(),
         Arc::new(Mutex::new(BlockCacheManager::new()))
     );
-    pub static ref ROOT: Arc<DirectoryTreeNode> = DirectoryTreeNode::new(
-        "".to_string(),
-        Arc::new(FileSystem::new(FS::Fat32)),
-        OSInode::new(InodeImpl::root_inode(&FILE_SYSTEM)),
-        None
-    );
+    pub static ref ROOT: Arc<DirectoryTreeNode> = {
+        let inode = DirectoryTreeNode::new(
+            "".to_string(),
+            Arc::new(FileSystem::new(FS::Fat32)),
+            OSInode::new(InodeImpl::root_inode(&FILE_SYSTEM)),
+            Weak::new()
+        );
+        inode.add_special_use();
+        inode
+    };
     static ref DIRECTORY_VEC: Mutex<(Vec<Weak<DirectoryTreeNode>>, usize)> = Mutex::new((Vec::new(), 0));
 }
 
@@ -74,7 +78,7 @@ pub struct DirectoryTreeNode {
     file: Arc<dyn File>,
     selfptr: Mutex<Weak<Self>>,
     father: Mutex<Weak<Self>>,
-    children: RwLock<BTreeMap<String, Arc<Self>>>,
+    children: RwLock<Option<BTreeMap<String, Arc<Self>>>>,
 }
 
 impl Drop for DirectoryTreeNode {
@@ -88,16 +92,16 @@ impl DirectoryTreeNode {
         name: String,
         filesystem: Arc<FileSystem>,
         file: Arc<dyn File>,
-        father: Option<&Arc<Self>>,
+        father: Weak<Self>,
     ) -> Arc<Self> {
         let node = Arc::new(DirectoryTreeNode {
-            spe_usage: Mutex::new(if father.is_none() { 1 } else { 0 }),
+            spe_usage: Mutex::new(0),
             name,
             filesystem,
             file,
             selfptr: Mutex::new(Weak::new()),
-            father: Mutex::new(father.map_or_else(|| Weak::new(), |x| Arc::downgrade(x))),
-            children: RwLock::new(BTreeMap::new()),
+            father: Mutex::new(father),
+            children: RwLock::new(None),
         });
         *node.selfptr.lock() = Arc::downgrade(&node);
         node.file.info_dirtree_node(Arc::downgrade(&node));
@@ -152,31 +156,46 @@ impl DirectoryTreeNode {
             v
         })
     }
+    fn cache_all_subfile(
+        &self,
+        lock: &mut RwLockWriteGuard<Option<BTreeMap<String, Arc<Self>>>>,
+    ) -> Result<(), isize> {
+        if lock.is_some() {
+            return Ok(())
+        }
+        if !self.file.is_dir() {
+            return Err(ENOTDIR);
+        }
+        let vec = match self.file.open_subfile() {
+            Ok(vec) => vec,
+            Err(errno) => return Err(errno),
+        };
+        let mut map = BTreeMap::new();
+        for (name, file) in vec {
+            let key = name.clone();
+            let value = Self::new(
+                key.clone(),
+                self.filesystem.clone(),
+                file.clone(),
+                Arc::downgrade(&self.get_arc())
+            );
+            map.insert(key, value);
+        }
+        **lock = Some(map);
+        Ok(())
+    }
     fn try_to_open_subfile(
         &self,
         name: &str,
-        lock: &mut RwLockWriteGuard<BTreeMap<String, Arc<Self>>>,
+        lock: &mut RwLockWriteGuard<Option<BTreeMap<String, Arc<Self>>>>,
     ) -> Result<Arc<Self>, isize> {
-        if lock.len() == 0 && !self.file.is_dir() {
-            return Err(ENOTDIR);
-        }
-        match lock.get(&name.to_string()) {
-            Some(inode) => Ok(inode.clone()),
-            None => match self.file.open_subfile(name) {
-                Ok(new_file) => {
-                    let key = name.to_string();
-                    let value = Self::new(
-                        key.clone(),
-                        self.filesystem.clone(),
-                        new_file,
-                        Some(&self.get_arc()),
-                    );
-                    let res_inode = value.clone();
-                    lock.insert(key, value);
-                    Ok(res_inode)
-                }
-                Err(errno) => Err(errno),
-            },
+        match self.cache_all_subfile(lock) {
+            Ok(_) => {},
+            Err(errno) => return Err(errno),
+        };
+        match lock.as_ref().unwrap().get(&name.to_string()) {
+            Some(child) => Ok(child.clone()),
+            None => Err(ENOENT),
         }
     }
     pub fn cd_comp(&self, components: &Vec<&str>) -> Result<Arc<Self>, isize> {
@@ -194,20 +213,14 @@ impl DirectoryTreeNode {
                 }
                 continue;
             }
-            let lock = current_inode.children.upgradeable_read();
-            if let Some(child) = lock.get(*component) {
-                let child_inode = child.clone();
-                drop(child);
-                drop(lock);
-                current_inode = child_inode;
-            } else {
-                let mut lock = lock.upgrade();
-                let child_inode = match current_inode.try_to_open_subfile(component, &mut lock) {
-                    Ok(inode) => inode,
-                    Err(errno) => return Err(errno),
-                };
-                drop(lock);
-                current_inode = child_inode;
+            let mut lock = current_inode.children.write();
+            match current_inode.try_to_open_subfile(component, &mut lock) {
+                Ok(child_inode) => {
+                    let child_inode = child_inode.clone();
+                    drop(lock);
+                    current_inode = child_inode.clone()
+                },
+                Err(errno) => return Err(errno),
             }
         }
         Ok(current_inode)
@@ -222,9 +235,9 @@ impl DirectoryTreeNode {
         inode.cd_comp(&components)
     }
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {
-        if name == "" || !self.file.is_dir() {
-            panic!();
-        }
+        // if name == "" || !self.file.is_dir() {
+        //     debug_assert!(false);
+        // }
         self.file.create(name, file_type)
     }
     pub fn open(
@@ -296,10 +309,10 @@ impl DirectoryTreeNode {
                         key.clone(),
                         inode.filesystem.clone(),
                         new_file,
-                        Some(&inode.get_arc()),
+                        Arc::downgrade(&inode.get_arc()),
                     );
                     let new_inode = value.clone();
-                    lock.insert(key, value);
+                    lock.as_mut().unwrap().insert(key, value);
                     new_inode
                 }
                 Err(errno) => {
@@ -371,10 +384,10 @@ impl DirectoryTreeNode {
                         key.clone(),
                         inode.filesystem.clone(),
                         new_file,
-                        Some(&inode.get_arc()),
+                        Arc::downgrade(&inode.get_arc()),
                     );
                     let new_inode = value.clone();
-                    lock.insert(key, value);
+                    lock.as_mut().unwrap().insert(key, value);
                     new_inode
                 }
                 Err(errno) => {
@@ -424,7 +437,7 @@ impl DirectoryTreeNode {
                 match inode.file.unlink(true) {
                     Ok(_) => {
                         let key = last_comp.to_string();
-                        lock.remove(&key);
+                        lock.as_mut().unwrap().remove(&key);
                     }
                     Err(errno) => return Err(errno),
                 }
@@ -460,7 +473,7 @@ impl DirectoryTreeNode {
             Ok(inode) => inode,
             Err(errno) => return Err(errno),
         };
-        type ChildLockType<'a> = RwLockWriteGuard<'a, BTreeMap<String, Arc<DirectoryTreeNode>>>;
+        type ChildLockType<'a> = RwLockWriteGuard<'a, Option<BTreeMap<String, Arc<DirectoryTreeNode>>>>;
 
         let old_lock: Arc<Mutex<ChildLockType<'_>>>;
         let new_lock: Arc<Mutex<ChildLockType<'_>>>;
@@ -506,7 +519,7 @@ impl DirectoryTreeNode {
                 // delete
                 match new_par_inode.file.unlink(true) {
                     Ok(_) => {
-                        new_lock.lock().remove(&new_key);
+                        new_lock.lock().as_mut().unwrap().remove(&new_key);
                     }
                     Err(errno) => return Err(errno),
                 }
@@ -515,7 +528,7 @@ impl DirectoryTreeNode {
             Err(errno) => return Err(errno),
         }
 
-        let value = old_lock.lock().remove(&old_key).unwrap();
+        let value = old_lock.lock().as_mut().unwrap().remove(&old_key).unwrap();
         match old_inode.file.unlink(false) {
             Ok(_) => {}
             Err(errno) => return Err(errno),
@@ -529,7 +542,7 @@ impl DirectoryTreeNode {
             FS::Null => return Err(EACCES),
         }
         *value.father.lock() = Arc::downgrade(&new_par_inode.get_arc());
-        new_lock.lock().insert(new_key, value);
+        new_lock.lock().as_mut().unwrap().insert(new_key, value);
 
         Ok(())
     }
@@ -581,24 +594,24 @@ fn init_device_directory() {
         "null".to_string(),
         Arc::new(FileSystem::new(FS::Null)),
         Arc::new(Null {}),
-        Some(&dev_inode.get_arc()),
+        Arc::downgrade(&dev_inode.get_arc()),
     );
     let zero_dev = DirectoryTreeNode::new(
         "zero".to_string(),
         Arc::new(FileSystem::new(FS::Null)),
         Arc::new(Zero {}),
-        Some(&dev_inode.get_arc()),
+        Arc::downgrade(&dev_inode.get_arc()),
     );
     let tty_dev = DirectoryTreeNode::new(
         "tty".to_string(),
         Arc::new(FileSystem::new(FS::Null)),
         Arc::new(Teletype::new()),
-        Some(&dev_inode.get_arc()),
+        Arc::downgrade(&dev_inode.get_arc()),
     );
     let mut lock = dev_inode.children.write();
-    lock.insert("null".to_string(), null_dev);
-    lock.insert("zero".to_string(), zero_dev);
-    lock.insert("tty".to_string(), tty_dev);
+    lock.as_mut().unwrap().insert("null".to_string(), null_dev);
+    lock.as_mut().unwrap().insert("zero".to_string(), zero_dev);
+    lock.as_mut().unwrap().insert("tty".to_string(), tty_dev);
     drop(lock);
 
     let misc_inode = match dev_inode.cd_path("./misc") {
@@ -609,10 +622,11 @@ fn init_device_directory() {
         "rtc".to_string(),
         Arc::new(FileSystem::new(FS::Null)),
         Arc::new(Hwclock {}),
-        Some(&misc_inode.get_arc()),
+        Arc::downgrade(&misc_inode.get_arc()),
     );
     let mut lock = misc_inode.children.write();
-    lock.insert("rtc".to_string(), hwclock_dev);
+    misc_inode.cache_all_subfile(&mut lock);
+    lock.as_mut().unwrap().insert("rtc".to_string(), hwclock_dev);
     drop(lock);
 }
 fn init_tmp_directory() {
