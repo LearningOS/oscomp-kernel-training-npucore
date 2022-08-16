@@ -214,22 +214,23 @@ use crate::{
 
 pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
     let mut show_info = false;
-    if option_env!("LOG").is_some() && ![
-        //black list
-        SYSCALL_YIELD,
-        // SYSCALL_READ,
-        SYSCALL_WRITE,
-        SYSCALL_GETDENTS64,
-        SYSCALL_READV,
-        SYSCALL_WRITEV,
-        SYSCALL_PSELECT6,
-        SYSCALL_SIGACTION,
-        SYSCALL_SIGPROCMASK,
-        // SYSCALL_WAIT4,
-        // SYSCALL_GETPPID,
-        SYSCALL_CLOCK_GETTIME,
-    ]
-    .contains(&syscall_id)
+    if option_env!("LOG").is_some()
+        && ![
+            //black list
+            SYSCALL_YIELD,
+            // SYSCALL_READ,
+            SYSCALL_WRITE,
+            SYSCALL_GETDENTS64,
+            SYSCALL_READV,
+            SYSCALL_WRITEV,
+            SYSCALL_PSELECT6,
+            SYSCALL_SIGACTION,
+            SYSCALL_SIGPROCMASK,
+            // SYSCALL_WAIT4,
+            // SYSCALL_GETPPID,
+            SYSCALL_CLOCK_GETTIME,
+        ]
+        .contains(&syscall_id)
     {
         show_info = true;
         info!(
@@ -442,8 +443,11 @@ pub fn syscall(syscall_id: usize, args: [usize; 6]) -> isize {
             for i in 0..args.len() {
                 error!("args[{}]: {:X}", i, args[i]);
             }
-            info!("Exiting.");
-            sys_exit(1)
+            crate::task::current_task()
+                .unwrap()
+                .acquire_inner_lock()
+                .add_signal(crate::task::Signals::SIGSYS);
+            errno::ENOSYS
         }
     };
 
