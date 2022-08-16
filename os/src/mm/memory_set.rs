@@ -7,6 +7,7 @@ use crate::config::*;
 use crate::fs::file_trait::File;
 use crate::fs::swap::{SwapTracker, SWAP_DEVICE};
 use crate::fs::SeekWhence;
+use crate::mm::frame_allocator::frame_alloc_uninit;
 use crate::syscall::errno::*;
 use crate::task::{
     current_task, trap_cx_bottom_from_tid, ustack_bottom_from_tid, AuxvEntry, AuxvType, ELFInfo,
@@ -137,27 +138,64 @@ impl MemorySet {
         }
     }
     /// Push a not-yet-mapped map_area into current MemorySet and copy the data into it if any, allocating the needed memory for the map.
-    fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) -> Result<(), ()> {
-        if let Err(_) = map_area.map(&mut self.page_table) {
-            return Err(());
-        }
-        if let Some(data) = data {
-            map_area.copy_data(&mut self.page_table, data, 0);
+    fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) -> Result<(), MemoryError> {
+        match data {
+            Some(data) => {
+                let mut start = 0;
+                let len = data.len();
+                for vpn in map_area.inner.vpn_range {
+                    let ppn = map_area.map_one(&mut self.page_table, vpn)?;
+                    let end = start + PAGE_SIZE;
+                    let src = &data[start..len.min(end)];
+                    ppn.get_bytes_array()[..src.len()].copy_from_slice(src);
+                    start = end;
+                }
+            }
+            None => {
+                for vpn in map_area.inner.vpn_range {
+                    map_area.map_one(&mut self.page_table, vpn)?;
+                }
+            }
         }
         self.areas.push(map_area);
         Ok(())
     }
+    /// other parts will be zeroed
     fn push_with_offset(
         &mut self,
         mut map_area: MapArea,
         offset: usize,
-        data: Option<&[u8]>,
-    ) -> Result<(), ()> {
-        if let Err(_) = map_area.map(&mut self.page_table) {
-            return Err(());
-        }
-        if let Some(data) = data {
-            map_area.copy_data(&mut self.page_table, data, offset);
+        data: &[u8],
+    ) -> Result<(), MemoryError> {
+        let len = data.len();
+        let mut vpn_iter = map_area.inner.vpn_range.into_iter();
+        if let Some(vpn) = vpn_iter.next() {
+            // special treatment for first page
+            let first_ppn = map_area.map_one(&mut self.page_table, vpn)?;
+            let first_dst = first_ppn.get_bytes_array();
+            first_dst[..offset].fill(0);
+            let first_src = &data[..len.min(PAGE_SIZE - offset)];
+            first_dst[offset..offset + first_src.len()].copy_from_slice(first_src);
+
+            let mut start = PAGE_SIZE - offset;
+            for vpn in vpn_iter {
+                let ppn = map_area.map_one(&mut self.page_table, vpn)?;
+                let dst = ppn.get_bytes_array();
+                let end = start + PAGE_SIZE;
+                if start < len {
+                    if len >= end {
+                        let src = &data[start..end];
+                        dst[..src.len()].copy_from_slice(src);
+                    } else {
+                        let src = &data[start..len];
+                        dst[..src.len()].copy_from_slice(src);
+                        dst[src.len()..].fill(0);
+                    }
+                } else {
+                    dst.fill(0);
+                }
+                start = end;
+            }
         }
         self.areas.push(map_area);
         Ok(())
@@ -294,7 +332,7 @@ impl MemorySet {
                         }
                         Frame::Unallocated => {
                             info!("[do_page_fault] addr: {:?}, solution: lazy alloc", addr);
-                            area.map_one_unchecked(&mut self.page_table, vpn)
+                            area.map_one_zeroed_unchecked(&mut self.page_table, vpn)
                         }
                     };
                     Ok(allocated_ppn.offset(addr.page_offset()))
@@ -513,10 +551,8 @@ impl MemorySet {
                         if let Err(_) = self.push_with_offset(
                             map_area,
                             start_va_page_offset,
-                            Some(
-                                &elf.input
-                                    [ph.offset() as usize..(ph.offset() + ph.file_size()) as usize],
-                            ),
+                            &elf.input
+                                [ph.offset() as usize..(ph.offset() + ph.file_size()) as usize],
                         ) {
                             panic!("[map_elf] Target addr already mapped.")
                         };
@@ -608,18 +644,21 @@ impl MemorySet {
         // copy trap context area
         let trap_cx_area = user_space.areas.last().unwrap();
         let area = MapArea::from_another(trap_cx_area);
-        memory_set.push(area, None).unwrap();
-
         let vpn = trap_cx_area.inner.vpn_range.get_start();
-        let src_pa: PhysAddr = user_space.translate(vpn).unwrap().ppn().into();
-        let dst_pa: PhysAddr = memory_set.translate(vpn).unwrap().ppn().into();
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                src_pa.0 as *const TrapContext,
-                dst_pa.0 as *mut TrapContext,
-                1,
+        memory_set
+            .push(
+                area,
+                Some(
+                    user_space
+                        .translate(vpn)
+                        .unwrap()
+                        .ppn()
+                        .start_addr()
+                        .get_bytes_ref::<TrapContext>(),
+                ),
             )
-        };
+            .unwrap();
+
         debug!(
             "[fork] copy trap_cx area: {:?}",
             trap_cx_area.inner.vpn_range
@@ -1493,12 +1532,6 @@ impl MapArea {
             map_file,
         }
     }
-    /// Return the reference count to the currently using file if exists.
-    pub fn file_ref(&self) -> Option<usize> {
-        let ret = self.map_file.as_ref().map(|x| Arc::strong_count(x));
-        info!("[file_ref] {}", ret.unwrap());
-        ret
-    }
     /// Copier, but the physical pages are not allocated,
     /// thus leaving `data_frames` empty.
     pub fn from_another(another: &MapArea) -> Self {
@@ -1570,11 +1603,23 @@ impl MapArea {
                 ppn = PhysPageNum(vpn.0);
             }
             MapType::Framed => {
-                let frame = frame_alloc().unwrap();
+                let frame = unsafe { frame_alloc_uninit().unwrap() };
                 ppn = frame.ppn;
                 self.inner.alloc_in_memory(vpn, frame);
             }
         }
+        let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+        page_table.map(vpn, ppn, pte_flags);
+        ppn
+    }
+    pub fn map_one_zeroed_unchecked(
+        &mut self,
+        page_table: &mut PageTable,
+        vpn: VirtPageNum,
+    ) -> PhysPageNum {
+        let frame = frame_alloc().unwrap();
+        let ppn = frame.ppn;
+        self.inner.alloc_in_memory(vpn, frame);
         let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
         page_table.map(vpn, ppn, pte_flags);
         ppn
@@ -1599,13 +1644,6 @@ impl MapArea {
             _ => {}
         }
         page_table.unmap(vpn);
-        Ok(())
-    }
-    /// Map & allocate all virtual pages in current area to physical pages in the page table.
-    pub fn map(&mut self, page_table: &mut PageTable) -> Result<(), MemoryError> {
-        for vpn in self.inner.vpn_range {
-            self.map_one(page_table, vpn)?;
-        }
         Ok(())
     }
     /// Map the same area in `self` from `dst_page_table` to `src_page_table`, sharing the same physical address.
@@ -1691,32 +1729,6 @@ impl MapArea {
             Ok(())
         }
     }
-    /// data: start-aligned but maybe with shorter length
-    /// assume that all frames were cleared before
-    pub fn copy_data(&mut self, page_table: &mut PageTable, data: &[u8], offset: usize) {
-        assert_eq!(self.map_type, MapType::Framed);
-        let mut start: usize = 0;
-        let mut page_offset: usize = offset;
-        let mut current_vpn = self.inner.vpn_range.get_start();
-        let len = data.len();
-        loop {
-            let src = &data[start..len.min(start + PAGE_SIZE - page_offset)];
-            let dst = &mut page_table
-                .translate(current_vpn)
-                .unwrap()
-                .ppn()
-                .get_bytes_array()[page_offset..(page_offset + src.len())];
-            dst.copy_from_slice(src);
-
-            start += PAGE_SIZE - page_offset;
-
-            page_offset = 0;
-            if start >= len {
-                break;
-            }
-            current_vpn.step();
-        }
-    }
     pub fn copy_on_write(
         &mut self,
         page_table: &mut PageTable,
@@ -1738,7 +1750,7 @@ impl MapArea {
             let old_ppn = old_frame.ppn;
             page_table.unmap(vpn);
             // alloc new frame
-            let new_frame = frame_alloc().unwrap();
+            let new_frame = unsafe { frame_alloc_uninit().unwrap() };
             let new_ppn = new_frame.ppn;
             self.inner.alloc_in_memory(vpn, new_frame);
             let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();

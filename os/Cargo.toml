@@ -27,9 +27,10 @@ downcast-rs = { version="1.2.0", default-features = false }
 lz4_flex = { version="0.9", default-features = false }
 
 [features]
+zero_init = []
 board_qemu = []
 board_k210 = ["k210-pac", "k210-hal", "k210-soc"]
-board_fu740 = ["fu740-pac", "fu740-hal"]
+board_fu740 = ["fu740-pac", "fu740-hal", "zero_init"]
 log_off = ["log/max_level_off"]
 
 [profile.dev]

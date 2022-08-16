@@ -222,7 +222,7 @@ impl Cache for PageCache {
 
 impl PageCache {
     pub fn new() -> Self {
-        let tracker = frame_alloc().unwrap();
+        let tracker = unsafe { crate::mm::frame_alloc_uninit().unwrap() };
         let page_ptr = (tracker.ppn.0 << PAGE_SIZE_BITS) as *mut [u8; PAGE_SIZE];
         let page_ptr = unsafe { page_ptr.as_mut().unwrap() };
         Self {
@@ -279,6 +279,7 @@ impl PageCache {
             )
         };
         block_device.read_block(start_block_id, buf);
+        self.page_ptr[block_ids.len() * BUFFER_SIZE..].fill(0);
         KERNEL_SPACE
             .lock()
             .clear_dirty_bit(self.tracker.ppn.0.into())

@@ -21,7 +21,7 @@ pub const MEMORY_END: usize = 0x809e_0000;
 #[cfg(feature = "board_k210")]
 pub const MEMORY_END: usize = 0x8080_0000;
 #[cfg(feature = "board_fu740")]
-pub const MEMORY_END: usize = 0x8800_0000;
+pub const MEMORY_END: usize = 0x9000_0000;
 pub const PAGE_SIZE: usize = 0x1000;
 pub const PAGE_SIZE_BITS: usize = 0xc;
 

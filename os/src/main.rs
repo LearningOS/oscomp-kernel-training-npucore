@@ -37,11 +37,17 @@ mod trap;
 
 core::arch::global_asm!(include_str!("entry.asm"));
 
-fn clear_bss() {
+fn mem_clear() {
     extern "C" {
         fn sbss();
         fn ebss();
     }
+    #[cfg(feature = "zero_init")]
+    unsafe {
+        core::slice::from_raw_parts_mut(sbss as usize as *mut u8, crate::config::MEMORY_END - sbss as usize)
+            .fill(0);
+    }
+    #[cfg(not(feature = "zero_init"))]
     unsafe {
         core::slice::from_raw_parts_mut(sbss as usize as *mut u8, ebss as usize - sbss as usize)
             .fill(0);
@@ -50,7 +56,7 @@ fn clear_bss() {
 
 #[no_mangle]
 pub fn rust_main() -> ! {
-    clear_bss();
+    mem_clear();
     console::log_init();
     println!("[kernel] Hello, world!");
     mm::init();
