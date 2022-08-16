@@ -6,6 +6,7 @@ pub mod file_trait;
 mod filesystem;
 mod layout;
 pub mod poll;
+#[cfg(feature = "swap")]
 pub mod swap;
 
 pub use self::dev::{hwclock::*, null::*, pipe::*, socket::*, tty::*, zero::*};
