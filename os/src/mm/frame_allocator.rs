@@ -21,9 +21,7 @@ impl FrameTracker {
         }
         Self { ppn }
     }
-    pub fn new_initialized(ppn: PhysPageNum, f: impl FnOnce(&'static mut [u64])) -> Self {
-        let dwords_array = ppn.get_dwords_array();
-        f(dwords_array);
+    pub unsafe fn new_uninit(ppn: PhysPageNum) -> Self {
         Self { ppn }
     }
 }
@@ -43,7 +41,8 @@ impl Drop for FrameTracker {
 
 trait FrameAllocator {
     fn new() -> Self;
-    fn alloc(&mut self) -> Option<PhysPageNum>;
+    fn alloc(&mut self) -> Option<FrameTracker>;
+    unsafe fn alloc_uninit(&mut self) -> Option<FrameTracker>;
     fn dealloc(&mut self, ppn: PhysPageNum);
 }
 
@@ -57,7 +56,9 @@ impl StackFrameAllocator {
     pub fn init(&mut self, l: PhysPageNum, r: PhysPageNum) {
         self.current = l.0;
         self.end = r.0;
-        println!("last {} Physical Frames.", self.end - self.current);
+        let last_frames = self.end - self.current;
+        self.recycled.reserve(last_frames);
+        println!("last {} Physical Frames.", last_frames);
     }
     pub fn unallocated_frames(&self) -> usize {
         self.recycled.len() + self.end - self.current
@@ -74,18 +75,48 @@ impl FrameAllocator for StackFrameAllocator {
             recycled: Vec::new(),
         }
     }
-    fn alloc(&mut self) -> Option<PhysPageNum> {
+    #[cfg(not(feature = "zero_init"))]
+    fn alloc(&mut self) -> Option<FrameTracker> {
         if let Some(ppn) = self.recycled.pop() {
-            let __ppn: PhysPageNum = ppn.into();
-            log::trace!("[frame_alloc] {:?}", __ppn);
-            Some(ppn.into())
+            let frame_tracker = FrameTracker::new(ppn.into());
+            log::trace!("[frame_alloc] {:?}", frame_tracker);
+            Some(frame_tracker)
         } else if self.current == self.end {
             None
         } else {
             self.current += 1;
-            let __ppn: PhysPageNum = (self.current - 1).into();
-            log::trace!("[frame_alloc] {:?}", __ppn);
-            Some((self.current - 1).into())
+            let frame_tracker = FrameTracker::new((self.current - 1).into());
+            log::trace!("[frame_alloc] {:?}", frame_tracker);
+            Some(frame_tracker)
+        }
+    }
+    #[cfg(feature = "zero_init")]
+    fn alloc(&mut self) -> Option<FrameTracker> {
+        if let Some(ppn) = self.recycled.pop() {
+            let frame_tracker = FrameTracker::new(ppn.into());
+            log::trace!("[frame_alloc] {:?}", frame_tracker);
+            Some(frame_tracker)
+        } else if self.current == self.end {
+            None
+        } else {
+            self.current += 1;
+            let frame_tracker = unsafe { FrameTracker::new_uninit((self.current - 1).into()) };
+            log::trace!("[frame_alloc] {:?}", frame_tracker);
+            Some(frame_tracker)
+        }
+    }
+    unsafe fn alloc_uninit(&mut self) -> Option<FrameTracker> {
+        if let Some(ppn) = self.recycled.pop() {
+            let frame_tracker = FrameTracker::new_uninit(ppn.into());
+            log::trace!("[frame_alloc_uninit] {:?}", frame_tracker);
+            Some(frame_tracker)
+        } else if self.current == self.end {
+            None
+        } else {
+            self.current += 1;
+            let frame_tracker = FrameTracker::new_uninit((self.current - 1).into());
+            log::trace!("[frame_alloc_uninit] {:?}", frame_tracker);
+            Some(frame_tracker)
         }
     }
     /// Deallocate a physical page
@@ -152,21 +183,36 @@ pub fn frame_reserve(num: usize) {
 }
 
 pub fn frame_alloc() -> Option<Arc<FrameTracker>> {
-    let ret = FRAME_ALLOCATOR
-        .write()
-        .alloc()
-        .map(|ppn| Arc::new(FrameTracker::new(ppn)));
-    if ret.is_some() {
-        ret
-    } else {
-        crate::show_frame_consumption! {
-            "GC";
-            oom_handler(1).unwrap();
-        };
-        FRAME_ALLOCATOR
-            .write()
-            .alloc()
-            .map(|ppn| Arc::new(FrameTracker::new(ppn)))
+    let result = FRAME_ALLOCATOR.write().alloc();
+    match result {
+        Some(frame_tracker) => Some(Arc::new(frame_tracker)),
+        None => {
+            crate::show_frame_consumption! {
+                "GC";
+                oom_handler(1).unwrap();
+            };
+            FRAME_ALLOCATOR
+                .write()
+                .alloc()
+                .map(|frame_tracker| Arc::new(frame_tracker))
+        }
+    }
+}
+
+pub unsafe fn frame_alloc_uninit() -> Option<Arc<FrameTracker>> {
+    let result = FRAME_ALLOCATOR.write().alloc_uninit();
+    match result {
+        Some(frame_tracker) => Some(Arc::new(frame_tracker)),
+        None => {
+            crate::show_frame_consumption! {
+                "GC";
+                oom_handler(1).unwrap();
+            };
+            FRAME_ALLOCATOR
+                .write()
+                .alloc_uninit()
+                .map(|frame_tracker| Arc::new(frame_tracker))
+        }
     }
 }
 

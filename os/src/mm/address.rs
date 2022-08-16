@@ -165,6 +165,12 @@ impl PhysAddr {
     pub fn get_mut<T>(&self) -> &'static mut T {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
     }
+    pub fn get_bytes_ref<T>(&self) -> &'static [u8] {
+        unsafe { core::slice::from_raw_parts(self.0 as *const u8, core::mem::size_of::<T>()) }
+    }
+    pub fn get_bytes_mut<T>(&self) -> &'static [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.0 as *mut u8, core::mem::size_of::<T>()) }
+    }
 }
 impl PhysPageNum {
     pub fn start_addr(&self) -> PhysAddr {
