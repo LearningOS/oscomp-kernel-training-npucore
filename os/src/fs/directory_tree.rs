@@ -42,6 +42,7 @@ lazy_static! {
         inode
     };
     static ref DIRECTORY_VEC: Mutex<(Vec<Weak<DirectoryTreeNode>>, usize)> = Mutex::new((Vec::new(), 0));
+    static ref PATH_CACHE: Mutex<(String, Weak<DirectoryTreeNode>)> = Mutex::new(("".to_string(), Weak::new()));
 }
 
 fn insert_directory_vec(inode: Weak<DirectoryTreeNode>) {
@@ -247,6 +248,7 @@ impl DirectoryTreeNode {
         special_use: bool,
     ) -> Result<Arc<dyn File>, isize> {
         log::debug!("[open]: cwd: {}, path: {}", self.get_cwd(), path);
+        
         const BUSYBOX_PATH: &str = "/busybox";
         const REDIRECT_TO_BUSYBOX: [&str; 3] = ["/touch", "/rm", "/ls"];
         let path = if REDIRECT_TO_BUSYBOX.contains(&path) {
@@ -265,11 +267,6 @@ impl DirectoryTreeNode {
         } else {
             path
         };
-        // let path = if path == "./dlopen_dso.so" {
-        //     "libdlopen_dso.so"
-        // } else {
-        //     path
-        // };
         let path = if path == "/usr/lib/tls_get_new-dtv_dso.so" {
             "./libtls_get_new-dtv_dso.so"
         } else {
@@ -280,47 +277,53 @@ impl DirectoryTreeNode {
         } else {
             &self
         };
-
-        let mut components = Self::parse_dir_path(path);
-        let last_comp = components.pop();
-        let inode = match inode.cd_comp(&components) {
-            Ok(inode) => inode,
-            Err(errno) => return Err(errno),
-        };
-        let inode = if let Some(last_comp) = last_comp {
-            let mut lock = inode.children.write();
-            match inode.try_to_open_subfile(last_comp, &mut lock) {
-                Ok(inode) => {
-                    if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
-                        return Err(EEXIST);
+        
+        let mut path_cache_lock = PATH_CACHE.lock();
+        let inode = if path.starts_with('/') && path == path_cache_lock.0 && path_cache_lock.1.upgrade().is_some() {
+            path_cache_lock.1.upgrade().unwrap()
+        }
+        else {
+            let mut components = Self::parse_dir_path(path);
+            let last_comp = components.pop();
+            let inode = match inode.cd_comp(&components) {
+                Ok(inode) => inode,
+                Err(errno) => return Err(errno),
+            };
+            if let Some(last_comp) = last_comp {
+                let mut lock = inode.children.write();
+                match inode.try_to_open_subfile(last_comp, &mut lock) {
+                    Ok(inode) => {
+                        if flags.contains(OpenFlags::O_CREAT | OpenFlags::O_EXCL) {
+                            return Err(EEXIST);
+                        }
+                        inode
                     }
-                    inode
-                }
-                Err(ENOENT) => {
-                    if !flags.contains(OpenFlags::O_CREAT) {
-                        return Err(ENOENT);
+                    Err(ENOENT) => {
+                        if !flags.contains(OpenFlags::O_CREAT) {
+                            return Err(ENOENT);
+                        }
+                        let new_file = match inode.create(last_comp, DiskInodeType::File) {
+                            Ok(file) => file,
+                            Err(errno) => return Err(errno),
+                        };
+                        let key = (*last_comp).to_string();
+                        let value = Self::new(
+                            key.clone(),
+                            inode.filesystem.clone(),
+                            new_file,
+                            Arc::downgrade(&inode.get_arc()),
+                        );
+                        let new_inode = value.clone();
+                        lock.as_mut().unwrap().insert(key, value);
+                        new_inode
                     }
-                    let new_file = match inode.create(last_comp, DiskInodeType::File) {
-                        Ok(file) => file,
-                        Err(errno) => return Err(errno),
-                    };
-                    let key = (*last_comp).to_string();
-                    let value = Self::new(
-                        key.clone(),
-                        inode.filesystem.clone(),
-                        new_file,
-                        Arc::downgrade(&inode.get_arc()),
-                    );
-                    let new_inode = value.clone();
-                    lock.as_mut().unwrap().insert(key, value);
-                    new_inode
+                    Err(errno) => {
+                        return Err(errno);
+                    }
                 }
-                Err(errno) => {
-                    return Err(errno);
-                }
+            } else {
+                inode
             }
-        } else {
-            inode
         };
 
         if flags.contains(OpenFlags::O_TRUNC) {
@@ -349,6 +352,10 @@ impl DirectoryTreeNode {
 
         if special_use {
             *inode.spe_usage.lock() += 1;
+        }
+
+        if path.starts_with('/') && path != path_cache_lock.0 {
+            *path_cache_lock = (path.to_string(), Arc::downgrade(&inode.get_arc()));
         }
 
         Ok(inode.file.open(flags, special_use))
