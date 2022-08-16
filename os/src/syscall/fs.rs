@@ -1,4 +1,4 @@
-use crate::fs::poll::{ppoll, pselect, FdSet};
+use crate::fs::poll::{ppoll, pselect, FdSet, PollFd};
 use crate::fs::*;
 use crate::mm::{
     copy_from_user, copy_from_user_array, copy_to_user, copy_to_user_array, copy_to_user_string,
@@ -765,11 +765,11 @@ pub fn sys_ioctl(fd: usize, cmd: u32, arg: usize) -> isize {
     file_descriptor.ioctl(cmd, arg)
 }
 
-pub fn sys_ppoll(poll_fd: usize, nfds: usize, time_spec: usize, sigmask: usize) -> isize {
+pub fn sys_ppoll(fds: usize, nfds: usize, tmo_p: usize, sigmask: usize) -> isize {
     ppoll(
-        poll_fd,
+        fds as *mut PollFd,
         nfds,
-        time_spec,
+        tmo_p as *const TimeSpec,
         sigmask as *const crate::task::Signals,
     )
 }
