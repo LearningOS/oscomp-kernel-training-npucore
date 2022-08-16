@@ -1438,6 +1438,29 @@ impl Inode {
         )
     }
 
+    pub fn get_all_files_lock(
+        &self,
+        inode_lock: &RwLockWriteGuard<InodeLock>,
+    ) -> Vec<(String, FATShortDirEnt, u32)> {
+        let mut vec = Vec::new();
+        let mut walker = self
+            .dir_iter(inode_lock, None, DirIterMode::Used, FORWARD)
+            .walk();
+        loop {
+            let ele = walker.next();
+            match ele {
+                Some((name, short_ent)) => {
+                    if name == "." || name == ".." {
+                        continue;
+                    }
+                    vec.push((name, short_ent, walker.iter.get_offset().unwrap()))
+                },
+                None => break,
+            }
+        }
+        vec
+    }
+
     /// Get a dirent information from the `self` at `offset`
     /// Return `None` if `self` is not a directory.
     /// # Arguments

@@ -2,6 +2,7 @@ use crate::{
     mm::UserBuffer,
     syscall::{errno::ENOTTY},
 };
+use __alloc::string::String;
 use alloc::{
     sync::{Arc, Weak},
     vec::Vec,
@@ -39,7 +40,7 @@ pub trait File: DowncastSync {
     fn get_dirtree_node(&self) -> Option<Arc<DirectoryTreeNode>>;
     /// open
     fn open(&self, flags: OpenFlags, special_use: bool) -> Arc<dyn File>;
-    fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize>;
+    fn open_subfile(&self) -> Result<Vec<(String, Arc<dyn File>)>, isize>;
     /// create
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize>;
     fn link_child(&self, name: &str, child: &Self) -> Result<(), isize>

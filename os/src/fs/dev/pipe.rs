@@ -380,8 +380,8 @@ impl File for Pipe {
         todo!()
     }
 
-    fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
-        todo!()
+    fn open_subfile(&self) -> Result<alloc::vec::Vec<(alloc::string::String, alloc::sync::Arc<dyn File>)>, isize> {
+        Err(ENOTDIR)
     }
 
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {

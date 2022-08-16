@@ -87,7 +87,7 @@ impl File for Zero {
         Arc::new(Zero {})
     }
 
-    fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
+    fn open_subfile(&self) -> Result<alloc::vec::Vec<(alloc::string::String, alloc::sync::Arc<dyn File>)>, isize> {
         Err(ENOTDIR)
     }
 

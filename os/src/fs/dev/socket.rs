@@ -1,6 +1,6 @@
 use alloc::sync::{Arc, Weak};
 
-use crate::fs::{file_trait::File, DiskInodeType};
+use crate::{fs::{file_trait::File, DiskInodeType}, syscall::errno::ENOTDIR};
 
 struct Socket;
 
@@ -70,8 +70,8 @@ impl File for Socket {
         todo!()
     }
 
-    fn open_subfile(&self, name: &str) -> Result<Arc<dyn File>, isize> {
-        todo!()
+    fn open_subfile(&self) -> Result<alloc::vec::Vec<(alloc::string::String, alloc::sync::Arc<dyn File>)>, isize> {
+        Err(ENOTDIR)
     }
 
     fn create(&self, name: &str, file_type: DiskInodeType) -> Result<Arc<dyn File>, isize> {

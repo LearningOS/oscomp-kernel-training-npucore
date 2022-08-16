@@ -1,6 +1,6 @@
 use crate::{
     fs::{file_trait::File, DiskInodeType},
-    syscall::errno::SUCCESS,
+    syscall::errno::{SUCCESS, ENOTDIR},
 };
 
 pub struct Hwclock;
@@ -70,9 +70,9 @@ impl File for Hwclock {
     fn open(&self, flags: crate::fs::OpenFlags, special_use: bool) -> alloc::sync::Arc<dyn File> {
         alloc::sync::Arc::new(Hwclock {})
     }
-
-    fn open_subfile(&self, name: &str) -> Result<alloc::sync::Arc<dyn File>, isize> {
-        todo!()
+    
+    fn open_subfile(&self) -> Result<alloc::vec::Vec<(alloc::string::String, alloc::sync::Arc<dyn File>)>, isize> {
+        Err(ENOTDIR)
     }
 
     fn create(
@@ -145,4 +145,5 @@ impl File for Hwclock {
     fn ioctl(&self, _cmd: u32, _argp: usize) -> isize {
         SUCCESS
     }
+
 }
