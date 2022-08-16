@@ -7,10 +7,12 @@ use crate::syscall::errno::*;
 use crate::syscall::fs::Fcntl_Command;
 use crate::task::{current_task, suspend_current_and_run_next};
 use crate::{fs::file_trait::File, mm::UserBuffer};
+use alloc::boxed::Box;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use num_enum::FromPrimitive;
 use spin::Mutex;
+use core::ptr::copy_nonoverlapping;
 
 pub struct Pipe {
     readable: bool,
@@ -48,7 +50,7 @@ enum RingBufferStatus {
 }
 
 pub struct PipeRingBuffer {
-    arr: Vec<u8>,
+    arr: Box<[u8; RING_DEFAULT_BUFFER_SIZE]>,
     head: usize,
     tail: usize,
     status: RingBufferStatus,
@@ -58,12 +60,12 @@ pub struct PipeRingBuffer {
 
 impl PipeRingBuffer {
     fn new() -> Self {
-        let mut vec = Vec::<u8>::with_capacity(RING_DEFAULT_BUFFER_SIZE);
-        unsafe {
-            vec.set_len(RING_DEFAULT_BUFFER_SIZE);
-        }
+        // let mut vec = Vec::<u8>::with_capacity(RING_DEFAULT_BUFFER_SIZE);
+        // unsafe {
+        //     vec.set_len(RING_DEFAULT_BUFFER_SIZE);
+        // }
         Self {
-            arr: vec,
+            arr: Box::new([0u8; RING_DEFAULT_BUFFER_SIZE]),
             head: 0,
             tail: 0,
             status: RingBufferStatus::EMPTY,
@@ -85,44 +87,40 @@ impl PipeRingBuffer {
             }
         }
     }
+    #[inline]
     fn buffer_read(&mut self, buf: &mut [u8]) -> usize {
         // get range
         let begin = self.head;
-        let mut end = if self.tail <= self.head {
-            self.arr.len()
+        let end = if self.tail <= self.head {
+            RING_DEFAULT_BUFFER_SIZE
         } else {
             self.tail
         };
-        if end - begin > buf.len() {
-            end = begin + buf.len();
-        }
         // copy
-        let read_bytes = end - begin;
-        let src_slice = &self.arr[begin..end];
-        let dst_slice = &mut buf[..read_bytes];
-        dst_slice.copy_from_slice(src_slice);
+        let read_bytes = buf.len().min(end - begin);
+        unsafe {
+            copy_nonoverlapping(self.arr.as_ptr().add(begin), buf.as_mut_ptr(), read_bytes);
+        };
         // update head
-        self.head = if end == self.arr.len() { 0 } else { end };
+        self.head = if begin + read_bytes == RING_DEFAULT_BUFFER_SIZE { 0 } else { begin + read_bytes };
         read_bytes
     }
+    #[inline]
     fn buffer_write(&mut self, buf: &[u8]) -> usize {
         // get range
         let begin = self.tail;
-        let mut end = if self.tail < self.head {
+        let end = if self.tail < self.head {
             self.head
         } else {
-            self.arr.len()
+            RING_DEFAULT_BUFFER_SIZE
         };
-        if end - begin > buf.len() {
-            end = begin + buf.len();
-        }
         // write
-        let write_bytes = end - begin;
-        let src_slice = &buf[..write_bytes];
-        let dst_slice = &mut self.arr[begin..end];
-        dst_slice.copy_from_slice(src_slice);
+        let write_bytes = buf.len().min(end - begin);
+        unsafe {
+            copy_nonoverlapping(buf.as_ptr(), self.arr.as_mut_ptr().add(begin), write_bytes);
+        };
         // update tail
-        self.tail = if end == self.arr.len() { 0 } else { end };
+        self.tail = if begin + write_bytes == RING_DEFAULT_BUFFER_SIZE { 0 } else { begin + write_bytes };
         write_bytes
     }
     fn set_write_end(&mut self, write_end: &Arc<Pipe>) {
@@ -169,9 +167,6 @@ impl File for Pipe {
             todo!()
         }
         let mut read_size = 0usize;
-        if buf.len() == 0 {
-            return read_size;
-        }
         loop {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
@@ -190,8 +185,6 @@ impl File for Pipe {
                 continue;
             }
             // We guarantee that this operation will read at least one byte
-            // So we modify status first
-            ring.status = RingBufferStatus::NORMAL;
             let mut buf_start = 0;
             while buf_start < buf.len() {
                 let read_bytes = ring.buffer_read(&mut buf[buf_start..]);
@@ -199,9 +192,13 @@ impl File for Pipe {
                 read_size += read_bytes;
                 if ring.head == ring.tail {
                     ring.status = RingBufferStatus::EMPTY;
+                    read_size += buf_start;
                     return read_size;
                 }
             }
+            read_size += buf_start;
+
+            ring.status = RingBufferStatus::NORMAL;
             return read_size;
         }
     }
@@ -211,9 +208,6 @@ impl File for Pipe {
             todo!()
         }
         let mut write_size = 0usize;
-        if buf.len() == 0 {
-            return write_size;
-        }
         loop {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
@@ -233,7 +227,6 @@ impl File for Pipe {
             }
             // We guarantee that this operation will write at least one byte
             // So we modify status first
-            ring.status = RingBufferStatus::NORMAL;
             let mut buf_start = 0;
             while buf_start < buf.len() {
                 let write_bytes = ring.buffer_write(&buf[buf_start..]);
@@ -241,9 +234,13 @@ impl File for Pipe {
                 write_size += write_bytes;
                 if ring.head == ring.tail {
                     ring.status = RingBufferStatus::FULL;
+                    write_size += buf_start;
                     return write_size;
                 }
             }
+            write_size += buf_start;
+
+            ring.status = RingBufferStatus::NORMAL;
             return write_size;
         }
     }
@@ -263,9 +260,6 @@ impl File for Pipe {
             return ESPIPE as usize;
         }
         let mut read_size = 0usize;
-        if buf.len() == 0 {
-            return read_size;
-        }
         loop {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
@@ -285,19 +279,20 @@ impl File for Pipe {
             }
             // We guarantee that this operation will read at least one byte
             // So we modify status first
-            ring.status = RingBufferStatus::NORMAL;
             for buf in buf.buffers {
                 let mut buf_start = 0;
                 while buf_start < buf.len() {
                     let read_bytes = ring.buffer_read(&mut buf[buf_start..]);
                     buf_start += read_bytes;
-                    read_size += read_bytes;
                     if ring.head == ring.tail {
                         ring.status = RingBufferStatus::EMPTY;
+                        read_size += buf_start;
                         return read_size;
                     }
                 }
+                read_size += buf_start;
             }
+            ring.status = RingBufferStatus::NORMAL;
             return read_size;
         }
     }
@@ -307,9 +302,6 @@ impl File for Pipe {
             return ESPIPE as usize;
         }
         let mut write_size = 0usize;
-        if buf.len() == 0 {
-            return write_size;
-        }
         loop {
             let task = current_task().unwrap();
             let inner = task.acquire_inner_lock();
@@ -329,19 +321,20 @@ impl File for Pipe {
             }
             // We guarantee that this operation will write at least one byte
             // So we modify status first
-            ring.status = RingBufferStatus::NORMAL;
             for buf in buf.buffers {
                 let mut buf_start = 0;
                 while buf_start < buf.len() {
                     let write_bytes = ring.buffer_write(&buf[buf_start..]);
                     buf_start += write_bytes;
-                    write_size += write_bytes;
                     if ring.head == ring.tail {
                         ring.status = RingBufferStatus::FULL;
+                        write_size += buf_start;
                         return write_size;
                     }
                 }
+                write_size += buf_start;
             }
+            ring.status = RingBufferStatus::NORMAL;
             return write_size;
         }
     }
@@ -448,41 +441,42 @@ impl File for Pipe {
     }
 
     fn fcntl(&self, cmd: u32, arg: u32) -> isize {
-        match Fcntl_Command::from_primitive(cmd) {
-            Fcntl_Command::GETPIPE_SZ => self.buffer.lock().arr.len() as isize,
-            Fcntl_Command::SETPIPE_SZ => {
-                let new_size = (arg as usize).max(PAGE_SIZE);
-                let mut ring = self.buffer.lock();
-                let mut old_used_size = ring.get_used_size();
-                if new_size < old_used_size {
-                    return EBUSY;
-                }
-                let mut new_buffer = Vec::<u8>::with_capacity(new_size);
-                while old_used_size > 0 {
-                    let index = ring.head;
-                    new_buffer.push(ring.arr[index]);
-                    ring.head += 1;
-                    if ring.head == ring.arr.len() {
-                        ring.head = 0;
-                    }
-                    old_used_size -= 1;
-                }
-                ring.head = 0;
-                ring.tail = new_buffer.len();
-                if ring.tail == 0 {
-                    ring.status = RingBufferStatus::EMPTY;
-                } else if ring.tail != new_size {
-                    ring.status = RingBufferStatus::NORMAL;
-                } else {
-                    ring.status = RingBufferStatus::FULL;
-                }
-                unsafe {
-                    new_buffer.set_len(new_size);
-                }
-                ring.arr = new_buffer;
-                SUCCESS
-            }
-            _ => EINVAL,
-        }
+        // match Fcntl_Command::from_primitive(cmd) {
+        //     Fcntl_Command::GETPIPE_SZ => self.buffer.lock().arr.len() as isize,
+        //     Fcntl_Command::SETPIPE_SZ => {
+        //         let new_size = (arg as usize).max(PAGE_SIZE);
+        //         let mut ring = self.buffer.lock();
+        //         let mut old_used_size = ring.get_used_size();
+        //         if new_size < old_used_size {
+        //             return EBUSY;
+        //         }
+        //         let mut new_buffer = Vec::<u8>::with_capacity(new_size);
+        //         while old_used_size > 0 {
+        //             let index = ring.head;
+        //             new_buffer.push(ring.arr[index]);
+        //             ring.head += 1;
+        //             if ring.head == ring.arr.len() {
+        //                 ring.head = 0;
+        //             }
+        //             old_used_size -= 1;
+        //         }
+        //         ring.head = 0;
+        //         ring.tail = new_buffer.len();
+        //         if ring.tail == 0 {
+        //             ring.status = RingBufferStatus::EMPTY;
+        //         } else if ring.tail != new_size {
+        //             ring.status = RingBufferStatus::NORMAL;
+        //         } else {
+        //             ring.status = RingBufferStatus::FULL;
+        //         }
+        //         unsafe {
+        //             new_buffer.set_len(new_size);
+        //         }
+        //         ring.arr = new_buffer;
+        //         SUCCESS
+        //     }
+        //     _ => EINVAL,
+        // }
+        todo!()
     }
 }
