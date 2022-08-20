@@ -98,7 +98,7 @@ impl EasyFileSystem {
         let alloc_num = blocks.div_ceil(sec_per_clus);
         let clus = self.fat.alloc(&self.block_device, alloc_num, None);
         debug_assert_eq!(clus.len(), alloc_num);
-        let mut block_ids = Vec::<usize>::new();
+        let mut block_ids = Vec::<usize>::with_capacity(alloc_num * sec_per_clus);
         for clus_id in clus {
             let first_sec = self.first_sector_of_cluster(clus_id) as usize;
             for offset in 0..sec_per_clus {

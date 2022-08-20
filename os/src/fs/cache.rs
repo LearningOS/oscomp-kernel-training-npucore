@@ -41,7 +41,7 @@ pub struct BufferCache {
 
 impl Cache for BufferCache {
     fn read<T, V>(&self, offset: usize, f: impl FnOnce(&T) -> V) -> V {
-        assert!(offset.saturating_add(core::mem::size_of::<T>()) <= BUFFER_SIZE);
+        debug_assert!(offset.saturating_add(core::mem::size_of::<T>()) <= BUFFER_SIZE);
         f(unsafe {
             self.buffer
                 .as_ptr()
@@ -53,7 +53,7 @@ impl Cache for BufferCache {
     }
 
     fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V {
-        assert!(offset.saturating_add(core::mem::size_of::<T>()) <= BUFFER_SIZE);
+        debug_assert!(offset.saturating_add(core::mem::size_of::<T>()) <= BUFFER_SIZE);
         f(unsafe {
             self.buffer
                 .as_mut_ptr()
@@ -184,7 +184,7 @@ pub struct PageCache {
 
 impl Cache for PageCache {
     fn read<T, V>(&self, offset: usize, f: impl FnOnce(&T) -> V) -> V {
-        assert!(offset.saturating_add(core::mem::size_of::<T>()) <= PAGE_SIZE);
+        debug_assert!(offset.saturating_add(core::mem::size_of::<T>()) <= PAGE_SIZE);
         f(unsafe {
             self.page_ptr
                 .as_ptr()
@@ -196,7 +196,7 @@ impl Cache for PageCache {
     }
 
     fn modify<T, V>(&mut self, offset: usize, f: impl FnOnce(&mut T) -> V) -> V {
-        assert!(offset.saturating_add(core::mem::size_of::<T>()) <= PAGE_SIZE);
+        debug_assert!(offset.saturating_add(core::mem::size_of::<T>()) <= PAGE_SIZE);
         f(unsafe {
             self.page_ptr
                 .as_mut_ptr()

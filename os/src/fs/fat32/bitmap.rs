@@ -61,7 +61,7 @@ impl Fat {
         mut current_clus_num: u32,
         block_device: &Arc<dyn BlockDevice>,
     ) -> Vec<u32> {
-        let mut v = Vec::new();
+        let mut v = Vec::with_capacity(8);
         loop {
             v.push(current_clus_num);
             current_clus_num = self.get_next_clus_num(current_clus_num, &block_device);
@@ -156,7 +156,7 @@ impl Fat {
         alloc_num: usize,
         mut last: Option<u32>,
     ) -> Vec<u32> {
-        let mut allocated_cluster = Vec::new();
+        let mut allocated_cluster = Vec::with_capacity(alloc_num);
         // A lock is required to guarantee mutual exclusion between processes.
         let mut hlock = self.hint.lock();
         for _ in 0..alloc_num {
@@ -169,6 +169,7 @@ impl Fat {
             }
             allocated_cluster.push(last.unwrap());
         }
+        self.set_next_clus(block_device, last, EOC);
         allocated_cluster
     }
 
@@ -195,7 +196,6 @@ impl Fat {
         // Get a free cluster from `vacant_clus`
         if let Some(free_clus_id) = self.vacant_clus.lock().pop_back() {
             self.set_next_clus(block_device, last, free_clus_id);
-            self.set_next_clus(block_device, Some(free_clus_id), EOC);
             return Some(free_clus_id);
         }
 
@@ -209,7 +209,6 @@ impl Fat {
         **hlock = (free_clus_id + 1) as usize % self.tot_ent;
 
         self.set_next_clus(block_device, last, free_clus_id);
-        self.set_next_clus(block_device, Some(free_clus_id), EOC);
         Some(free_clus_id)
     }
 
