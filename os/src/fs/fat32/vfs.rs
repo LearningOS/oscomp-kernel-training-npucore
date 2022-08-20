@@ -99,10 +99,10 @@ impl Drop for Inode {
     /// Before deleting the inode, the file information should be written back to the parent directory
     fn drop(&mut self) {
         if *self.deleted.lock() {
-            let inode_lock = self.write();
             // Clear size
-            let old_size = self.get_file_size();
-            self.modify_size_lock(&inode_lock, -(old_size as isize), false);
+            let mut lock = self.file_content.write();
+            let length = lock.clus_list.len();
+            self.dealloc_clus(&mut lock, length);
         } else {
             if self.parent_dir.lock().is_none() {
                 return;
@@ -352,7 +352,7 @@ impl Inode {
     fn dealloc_clus(&self, lock: &mut RwLockWriteGuard<FileContent>, dealloc_num: usize) {
         let clus_list = &mut lock.clus_list;
         let dealloc_num = dealloc_num.min(clus_list.len());
-        let mut dealloc_list = Vec::<u32>::new();
+        let mut dealloc_list = Vec::<u32>::with_capacity(dealloc_num);
         for _ in 0..dealloc_num {
             dealloc_list.push(clus_list.pop().unwrap());
         }
@@ -897,7 +897,7 @@ impl Inode {
     ) -> Result<(FATShortDirEnt, Vec<FATLongDirEnt>), ()> {
         debug_assert!(self.is_dir());
         let short_ent: FATShortDirEnt;
-        let mut long_ents = Vec::<FATLongDirEnt>::new();
+        let mut long_ents = Vec::<FATLongDirEnt>::with_capacity(5);
 
         let mut iter = self.dir_iter(inode_lock, Some(offset), DirIterMode::Enum, BACKWARD);
 
@@ -1496,7 +1496,7 @@ impl Inode {
         &self,
         inode_lock: &RwLockWriteGuard<InodeLock>,
     ) -> Vec<(String, FATShortDirEnt, u32)> {
-        let mut vec = Vec::new();
+        let mut vec = Vec::with_capacity(8);
         let mut walker = self
             .dir_iter(inode_lock, None, DirIterMode::Used, FORWARD)
             .walk();
