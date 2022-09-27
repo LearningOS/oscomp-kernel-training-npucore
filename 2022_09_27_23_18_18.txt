@@ -1,0 +1,318 @@
+✅ busybox echo #### independent command test pass
+✅ busybox ash -c exit pass
+✅ busybox sh -c exit pass
+✅ busybox basename /aaa/bbb pass
+✅ busybox cal pass
+✅ busybox clear pass
+✅ busybox date pass
+✅ busybox df pass
+✅ busybox dirname /aaa/bbb pass
+✅ busybox dmesg pass
+✅ busybox du pass
+✅ busybox expr 1 + 1 pass
+✅ busybox false pass
+✅ busybox true pass
+✅ busybox which ls pass
+✅ busybox uname pass
+✅ busybox uptime pass
+✅ busybox printf abcn pass
+✅ busybox ps pass
+✅ busybox pwd pass
+✅ busybox free pass
+✅ busybox hwclock pass
+✅ busybox kill 10 pass
+✅ busybox ls pass
+✅ busybox sleep 1 pass
+✅ busybox echo #### file opration test pass
+✅ busybox touch test.txt pass
+✅ busybox echo hello world > test.txt pass
+✅ busybox cat test.txt pass
+✅ busybox cut -c 3 test.txt pass
+✅ busybox od test.txt pass
+✅ busybox head test.txt pass
+✅ busybox tail test.txt pass
+✅ busybox hexdump -C test.txt pass
+✅ busybox md5sum test.txt pass
+✅ busybox echo ccccccc >> test.txt pass
+✅ busybox echo bbbbbbb >> test.txt pass
+✅ busybox echo aaaaaaa >> test.txt pass
+✅ busybox echo 2222222 >> test.txt pass
+✅ busybox echo 1111111 >> test.txt pass
+✅ busybox sort test.txt | ./busybox uniq pass
+✅ busybox stat test.txt pass
+✅ busybox strings test.txt pass
+✅ busybox wc test.txt pass
+✅ busybox [ -f test.txt ] pass
+✅ busybox more test.txt pass
+✅ busybox rm test.txt pass
+✅ busybox mkdir test_dir pass
+✅ busybox mv test_dir test pass
+✅ busybox rmdir test pass
+✅ busybox grep hello busybox_cmd.txt pass
+✅ busybox cp busybox_cmd.txt busybox_cmd.bak pass
+✅ busybox rm busybox_cmd.bak pass
+✅ busybox find -name busybox_cmd.txt pass
+✅ entry-static.exe argv pass
+✅ entry-static.exe basename pass
+✅ entry-static.exe clocale_mbfuncs pass
+✅ entry-static.exe clock_gettime pass
+✅ entry-static.exe crypt pass
+✅ entry-static.exe dirname pass
+✅ entry-static.exe env pass
+✅ entry-static.exe fdopen pass
+✅ entry-static.exe fnmatch pass
+✅ entry-static.exe fscanf pass
+✅ entry-static.exe fwscanf pass
+✅ entry-static.exe iconv_open pass
+✅ entry-static.exe inet_pton pass
+✅ entry-static.exe mbc pass
+✅ entry-static.exe memstream pass
+✅ entry-static.exe pthread_cancel_points pass
+✅ entry-static.exe pthread_cancel pass
+✅ entry-static.exe pthread_cond pass
+✅ entry-static.exe pthread_tsd pass
+✅ entry-static.exe qsort pass
+✅ entry-static.exe random pass
+✅ entry-static.exe search_hsearch pass
+✅ entry-static.exe search_insque pass
+✅ entry-static.exe search_lsearch pass
+✅ entry-static.exe search_tsearch pass
+✅ entry-static.exe setjmp pass
+✅ entry-static.exe snprintf pass
+✅ entry-static.exe socket pass
+✅ entry-static.exe sscanf pass
+✅ entry-static.exe sscanf_long pass
+✅ entry-static.exe stat pass
+✅ entry-static.exe strftime pass
+✅ entry-static.exe string pass
+✅ entry-static.exe string_memcpy pass
+✅ entry-static.exe string_memmem pass
+✅ entry-static.exe string_memset pass
+✅ entry-static.exe string_strchr pass
+✅ entry-static.exe string_strcspn pass
+✅ entry-static.exe string_strstr pass
+✅ entry-static.exe strptime pass
+✅ entry-static.exe strtod pass
+✅ entry-static.exe strtod_simple pass
+✅ entry-static.exe strtof pass
+✅ entry-static.exe strtol pass
+✅ entry-static.exe strtold pass
+✅ entry-static.exe swprintf pass
+✅ entry-static.exe tgmath pass
+✅ entry-static.exe time pass
+✅ entry-static.exe tls_align pass
+✅ entry-static.exe udiv pass
+✅ entry-static.exe ungetc pass
+✅ entry-static.exe utime pass
+✅ entry-static.exe wcsstr pass
+✅ entry-static.exe wcstol pass
+✅ entry-static.exe pleval pass
+✅ entry-static.exe daemon_failure pass
+✅ entry-static.exe dn_expand_empty pass
+✅ entry-static.exe dn_expand_ptr_0 pass
+✅ entry-static.exe fflush_exit pass
+✅ entry-static.exe fgets_eof pass
+✅ entry-static.exe fgetwc_buffering pass
+✅ entry-static.exe fpclassify_invalid_ld80 pass
+✅ entry-static.exe ftello_unflushed_append pass
+✅ entry-static.exe getpwnam_r_crash pass
+✅ entry-static.exe getpwnam_r_errno pass
+✅ entry-static.exe iconv_roundtrips pass
+✅ entry-static.exe inet_ntop_v4mapped pass
+✅ entry-static.exe inet_pton_empty_last_field pass
+✅ entry-static.exe iswspace_null pass
+✅ entry-static.exe lrand48_signextend pass
+✅ entry-static.exe lseek_large pass
+✅ entry-static.exe malloc_0 pass
+✅ entry-static.exe mbsrtowcs_overflow pass
+✅ entry-static.exe memmem_oob_read pass
+✅ entry-static.exe memmem_oob pass
+✅ entry-static.exe mkdtemp_failure pass
+✅ entry-static.exe mkstemp_failure pass
+✅ entry-static.exe printf_1e9_oob pass
+✅ entry-static.exe printf_fmt_g_round pass
+✅ entry-static.exe printf_fmt_g_zeros pass
+✅ entry-static.exe printf_fmt_n pass
+✅ entry-static.exe pthread_robust_detach pass
+✅ entry-static.exe pthread_cancel_sem_wait pass
+✅ entry-static.exe pthread_cond_smasher pass
+✅ entry-static.exe pthread_condattr_setclock pass
+✅ entry-static.exe pthread_exit_cancel pass
+✅ entry-static.exe pthread_once_deadlock pass
+✅ entry-static.exe pthread_rwlock_ebusy pass
+✅ entry-static.exe putenv_doublefree pass
+✅ entry-static.exe regex_backref_0 pass
+✅ entry-static.exe regex_bracket_icase pass
+✅ entry-static.exe regex_ere_backref pass
+✅ entry-static.exe regex_escaped_high_byte pass
+✅ entry-static.exe regex_negated_range pass
+✅ entry-static.exe regexec_nosub pass
+✅ entry-static.exe rewind_clear_error pass
+✅ entry-static.exe rlimit_open_files pass
+✅ entry-static.exe scanf_bytes_consumed pass
+✅ entry-static.exe scanf_match_literal_eof pass
+✅ entry-static.exe scanf_nullbyte_char pass
+✅ entry-static.exe setvbuf_unget pass
+✅ entry-static.exe sigprocmask_internal pass
+✅ entry-static.exe sscanf_eof pass
+✅ entry-static.exe statvfs pass
+✅ entry-static.exe strverscmp pass
+✅ entry-static.exe syscall_sign_extend pass
+✅ entry-static.exe uselocale_0 pass
+✅ entry-static.exe wcsncpy_read_overflow pass
+✅ entry-static.exe wcsstr_false_negative pass
+✅ entry-dynamic.exe argv pass
+✅ entry-dynamic.exe basename pass
+✅ entry-dynamic.exe clocale_mbfuncs pass
+✅ entry-dynamic.exe clock_gettime pass
+✅ entry-dynamic.exe crypt pass
+✅ entry-dynamic.exe dirname pass
+✅ entry-dynamic.exe dlopen pass
+✅ entry-dynamic.exe env pass
+✅ entry-dynamic.exe fdopen pass
+✅ entry-dynamic.exe fnmatch pass
+✅ entry-dynamic.exe fscanf pass
+✅ entry-dynamic.exe fwscanf pass
+✅ entry-dynamic.exe iconv_open pass
+✅ entry-dynamic.exe inet_pton pass
+✅ entry-dynamic.exe mbc pass
+✅ entry-dynamic.exe memstream pass
+✅ entry-dynamic.exe pthread_cancel_points pass
+✅ entry-dynamic.exe pthread_cancel pass
+✅ entry-dynamic.exe pthread_cond pass
+✅ entry-dynamic.exe pthread_tsd pass
+✅ entry-dynamic.exe qsort pass
+✅ entry-dynamic.exe random pass
+✅ entry-dynamic.exe search_hsearch pass
+✅ entry-dynamic.exe search_insque pass
+✅ entry-dynamic.exe search_lsearch pass
+✅ entry-dynamic.exe search_tsearch pass
+✅ entry-dynamic.exe sem_init pass
+✅ entry-dynamic.exe setjmp pass
+✅ entry-dynamic.exe snprintf pass
+✅ entry-dynamic.exe socket pass
+✅ entry-dynamic.exe sscanf pass
+✅ entry-dynamic.exe sscanf_long pass
+✅ entry-dynamic.exe stat pass
+✅ entry-dynamic.exe strftime pass
+✅ entry-dynamic.exe string pass
+✅ entry-dynamic.exe string_memcpy pass
+✅ entry-dynamic.exe string_memmem pass
+✅ entry-dynamic.exe string_memset pass
+✅ entry-dynamic.exe string_strchr pass
+✅ entry-dynamic.exe string_strcspn pass
+✅ entry-dynamic.exe string_strstr pass
+✅ entry-dynamic.exe strptime pass
+✅ entry-dynamic.exe strtod pass
+✅ entry-dynamic.exe strtod_simple pass
+✅ entry-dynamic.exe strtof pass
+✅ entry-dynamic.exe strtol pass
+✅ entry-dynamic.exe strtold pass
+✅ entry-dynamic.exe swprintf pass
+✅ entry-dynamic.exe tgmath pass
+✅ entry-dynamic.exe time pass
+✅ entry-dynamic.exe tls_init pass
+✅ entry-dynamic.exe tls_local_exec pass
+✅ entry-dynamic.exe udiv pass
+✅ entry-dynamic.exe ungetc pass
+✅ entry-dynamic.exe utime pass
+✅ entry-dynamic.exe wcsstr pass
+✅ entry-dynamic.exe wcstol pass
+✅ entry-dynamic.exe daemon_failure pass
+✅ entry-dynamic.exe dn_expand_empty pass
+✅ entry-dynamic.exe dn_expand_ptr_0 pass
+✅ entry-dynamic.exe fflush_exit pass
+✅ entry-dynamic.exe fgets_eof pass
+✅ entry-dynamic.exe fgetwc_buffering pass
+✅ entry-dynamic.exe fpclassify_invalid_ld80 pass
+✅ entry-dynamic.exe ftello_unflushed_append pass
+✅ entry-dynamic.exe getpwnam_r_crash pass
+✅ entry-dynamic.exe getpwnam_r_errno pass
+✅ entry-dynamic.exe iconv_roundtrips pass
+✅ entry-dynamic.exe inet_ntop_v4mapped pass
+✅ entry-dynamic.exe inet_pton_empty_last_field pass
+✅ entry-dynamic.exe iswspace_null pass
+✅ entry-dynamic.exe lrand48_signextend pass
+✅ entry-dynamic.exe lseek_large pass
+✅ entry-dynamic.exe malloc_0 pass
+✅ entry-dynamic.exe mbsrtowcs_overflow pass
+✅ entry-dynamic.exe memmem_oob_read pass
+✅ entry-dynamic.exe memmem_oob pass
+✅ entry-dynamic.exe mkdtemp_failure pass
+✅ entry-dynamic.exe mkstemp_failure pass
+✅ entry-dynamic.exe printf_1e9_oob pass
+✅ entry-dynamic.exe printf_fmt_g_round pass
+✅ entry-dynamic.exe printf_fmt_g_zeros pass
+✅ entry-dynamic.exe printf_fmt_n pass
+✅ entry-dynamic.exe pthread_robust_detach pass
+✅ entry-dynamic.exe pthread_cond_smasher pass
+✅ entry-dynamic.exe pthread_condattr_setclock pass
+✅ entry-dynamic.exe pthread_exit_cancel pass
+✅ entry-dynamic.exe pthread_once_deadlock pass
+✅ entry-dynamic.exe pthread_rwlock_ebusy pass
+✅ entry-dynamic.exe putenv_doublefree pass
+✅ entry-dynamic.exe regex_backref_0 pass
+✅ entry-dynamic.exe regex_bracket_icase pass
+✅ entry-dynamic.exe regex_ere_backref pass
+✅ entry-dynamic.exe regex_escaped_high_byte pass
+✅ entry-dynamic.exe regex_negated_range pass
+✅ entry-dynamic.exe regexec_nosub pass
+✅ entry-dynamic.exe rewind_clear_error pass
+✅ entry-dynamic.exe rlimit_open_files pass
+✅ entry-dynamic.exe scanf_bytes_consumed pass
+✅ entry-dynamic.exe scanf_match_literal_eof pass
+✅ entry-dynamic.exe scanf_nullbyte_char pass
+✅ entry-dynamic.exe setvbuf_unget pass
+✅ entry-dynamic.exe sigprocmask_internal pass
+✅ entry-dynamic.exe sscanf_eof pass
+✅ entry-dynamic.exe statvfs pass
+✅ entry-dynamic.exe strverscmp pass
+✅ entry-dynamic.exe syscall_sign_extend pass
+✅ entry-dynamic.exe tls_get_new_dtv pass
+✅ entry-dynamic.exe uselocale_0 pass
+✅ entry-dynamic.exe wcsncpy_read_overflow pass
+✅ entry-dynamic.exe wcsstr_false_negative pass
+✅ Simple syscall pass
+✅ Simple read pass
+✅ Simple write pass
+✅ Simple stat pass
+✅ Simple fstat pass
+✅ Simple open/close pass
+✅ Select on 100 fd's pass
+✅ Signal handler installation pass
+✅ Signal handler overhead pass
+❌ Protection fault points 0/1
+❌ Pipe latency points 0/1
+❌ Process fork+exit points 0/1
+❌ Process fork+execve points 0/1
+❌ Process fork+/bin/sh -c points 0/1
+❌ File /var/tmp/XXX write bandwidth points 0/1
+❌ Pagefaults on /var/tmp/XXX points 0/1
+❌ lat_mmap -P 1 512k /var/tmp/XXX points 0/1
+❌ lat_fs 0k points 0/1
+❌ lat_fs 1k points 0/1
+❌ lat_fs 4k points 0/1
+❌ lat_fs 10k points 0/1
+❌ Pipe bandwidth points 0/1
+❌ bw_file_rd -P 1 512k io_only /var/tmp/XXX points 0/1
+❌ bw_file_rd -P 1 512k open2close /var/tmp/XXX points 0/1
+❌ bw_mmap_rd -P 1 512k mmap_only /var/tmp/XXX points 0/1
+❌ bw_mmap_rd -P 1 512k open2close /var/tmp/XXX points 0/1
+✅ lat_ctx 2 pass
+❌ lat_ctx 4 points 0/1
+❌ lat_ctx 8 points 0/1
+❌ lat_ctx 16 points 0/1
+❌ lat_ctx 32 points 0/1
+❌ lat_ctx 64 points 0/1
+❌ lat_ctx 96 points 0/1
+✅ lua date.lua pass
+✅ lua file_io.lua pass
+✅ lua max_min.lua pass
+✅ lua random.lua pass
+✅ lua remove.lua pass
+✅ lua round_num.lua pass
+✅ lua sin30.lua pass
+✅ lua sort.lua pass
+✅ lua strings.lua pass
+
+Points: 293/316
