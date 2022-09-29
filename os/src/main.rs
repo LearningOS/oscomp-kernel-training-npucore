@@ -73,5 +73,5 @@ pub fn rust_main() -> ! {
     fs::flush_preload();
     task::add_initproc();
     task::run_tasks();
-    panic!("unreachable  in rust_main!");
+    panic!("unreachable in rust_main!");
 }
